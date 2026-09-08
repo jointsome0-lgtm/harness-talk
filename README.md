@@ -7,10 +7,8 @@ Python 3.11 or newer. Storage and Claude notifications use the standard library.
 ## Install and share a database
 
 ```sh
-git clone https://github.com/jointsome0-lgtm/harness-talk.git
-cd harness-talk
 python3 -m venv .venv
-.venv/bin/pip install .
+.venv/bin/pip install 'harness-talk==0.1.1'
 export PATH="$PWD/.venv/bin:$PATH"
 export HTALK_DB=/absolute/shared/writable/directory/mail.sqlite3
 ```
@@ -90,6 +88,13 @@ No Boardmail dependency, remote-host transport, automatic model launches, pollin
 
 ## Verify
 
+From a source checkout:
+
 ```sh
+python3 -m pip install .
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
+
+## Contributions and releases
+
+Open an [issue](https://github.com/jointsome0-lgtm/harness-talk/issues) for bugs, feature requests, adapter needs, or proposed fixes. We do not accept external pull requests. Personal forks and modifications are welcome under the [MIT License](LICENSE). See [CONTRIBUTING.md](CONTRIBUTING.md) and the [release procedure](docs/releasing.md).

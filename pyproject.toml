@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,13 @@ version = "0.1.1"
 description = "Durable local request/reply conversations between agent sessions"
 requires-python = ">=3.11"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = ["websockets>=15,<18"]
+
+[project.urls]
+Source = "https://github.com/jointsome0-lgtm/harness-talk"
+Issues = "https://github.com/jointsome0-lgtm/harness-talk/issues"
 
 [project.scripts]
 htalk = "harness_talk.cli:main"
