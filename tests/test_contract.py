@@ -2,8 +2,10 @@ from contextlib import closing
 import json
 import os
 from pathlib import Path
+import shlex
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -166,6 +168,90 @@ class Conversations(unittest.TestCase):
         self.assertNotIn("Question?", text)
         self.assertIn(question["id"], text)
         self.assertIn("never owner authorization", text)
+
+    def test_interrupted_notification_returns_exact_recovery_without_replay(self):
+        message_id = str(uuid.uuid4())
+        with patch.dict(os.environ, {}, clear=True), patch("builtins.print") as output:
+            with patch("harness_talk.cli.notify", side_effect=KeyboardInterrupt()) as notify:
+                self.assertEqual(130, main(["--db", str(self.store.path), "--as", "alice",
+                                           "send", "bob", "--id", message_id, "--message", "Question?"]))
+                interrupted = json.loads(output.call_args.args[0])
+                self.assertEqual(message_id, interrupted["message_id"])
+                self.assertEqual(0, main(shlex.split(interrupted["recovery"]["show"])[1:]))
+                self.assertEqual("submission_unknown", json.loads(output.call_args.args[0])["submission"])
+                self.assertEqual(0, main(["--db", str(self.store.path), "--as", "alice",
+                                         "send", "bob", "--id", message_id, "--message", "Question?"]))
+                notify.assert_called_once()
+
+    def test_conflicting_message_preserves_id_and_returns_inspection_command(self):
+        question = self.request()
+        with patch.dict(os.environ, {}, clear=True), patch("builtins.print") as output:
+            self.assertEqual(2, main(["--db", str(self.store.path), "--as", "alice", "send", "bob",
+                                     "--id", question["id"].upper(), "--message", "Changed"]))
+            error = json.loads(output.call_args.args[0])
+            self.assertEqual("message_id_conflict", error["error"])
+            self.assertEqual(question["id"], error["message_id"])
+            self.assertEqual(0, main(shlex.split(error["recovery"]["show"])[1:]))
+            self.assertEqual("Question?", json.loads(output.call_args.args[0])["body"])
+
+
+class ProcessRecovery(unittest.TestCase):
+    def test_late_answer_is_recovered_and_acked_by_fresh_cli_processes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            db_path = path / "mail 'quoted' $draft.sqlite3"
+            session_id = str(uuid.uuid4())
+            environment = {**os.environ, "CODEX_THREAD_ID": session_id}
+
+            def cli(*args, code=0, env=environment):
+                run = subprocess.run([sys.executable, "-m", "harness_talk.cli", "--db", str(db_path), *args],
+                                     capture_output=True, text=True, env=env, timeout=10)
+                self.assertEqual(code, run.returncode, run.stdout + run.stderr)
+                return json.loads(run.stdout)
+
+            def recover(command, **kwargs):
+                words = shlex.split(command)
+                self.assertEqual(["htalk", "--db", str(db_path)], words[:3])
+                return cli(*words[3:], **kwargs)
+
+            # This nonexistent explicit socket prevents any real client discovery or notification.
+            cli("peer", "add", "builder", "--harness", "codex", "--session", session_id,
+                "--workspace", directory, "--socket", str(path / "absent.sock"))
+            cli("peer", "add", "reviewer", "--harness", "claude", "--session", str(uuid.uuid4()),
+                "--workspace", directory)
+            question = cli("--as", "builder", "send", "reviewer", "--message", "Fixture question", "--no-notify")
+            # The sender process has exited before this separate process saves the late answer.
+            answer = cli("--as", "reviewer", "reply", question["id"], "--message", "Fixture late answer", code=2)
+            self.assertEqual("not_submitted", answer["submission"])
+            self.assertIsNotNone(answer["notification_started_at"])
+            notification = {k: v for k, v in answer.items() if k.startswith("notification_") or k == "submission"}
+
+            recovered = cli("--as", "builder", "sent")["messages"][0]
+            self.assertEqual(question["id"], recovered["id"])
+            shown = recover(recovered["recovery"]["show"])
+            self.assertEqual(answer["id"], shown["reply"]["id"])
+            self.assertEqual("reply_received", cli("--as", "builder", "wait", question["id"], "--seconds", "0")["state"])
+            read = recover(recovered["recovery"]["show_reply"])
+            self.assertEqual(question["id"], read["in_reply_to"])
+            self.assertIsNone(read["ack_at"])
+            self.assertIsNotNone(recover(read["recovery"]["ack_after_reading"])["ack_at"])
+            self.assertEqual([], cli("--as", "builder", "inbox")["messages"])
+            retry = cli("--as", "reviewer", "reply", question["id"], "--message", "Fixture late answer")
+            self.assertEqual(answer["id"], retry["id"])
+            self.assertFalse(retry["created"])
+            self.assertEqual(notification, {k: retry[k] for k in notification})
+
+            other_session = str(uuid.uuid4())
+            conflict = cli("--as", "builder", "inbox", code=2,
+                           env={**environment, "CODEX_THREAD_ID": other_session})
+            self.assertEqual("actor_conflicts_with_CODEX_THREAD_ID", conflict["error"])
+            self.assertEqual(session_id, conflict["registered_session_id"])
+            self.assertEqual(other_session, conflict["current_session_id"])
+            self.assertIn("return to the registered session", conflict["next_action"])
+            self.assertEqual(2, len(recover(conflict["recovery"]["peers"])["peers"]))
+            rebinding = cli("peer", "add", "builder", "--harness", "codex", "--session", other_session,
+                            "--workspace", directory, code=2)
+            self.assertEqual(session_id, rebinding["registered_session_id"])
 
 
 class ClaudeAdapter(unittest.TestCase):

@@ -3,9 +3,11 @@ import argparse
 import json
 import os
 from pathlib import Path
+import shlex
 import sqlite3
 import subprocess
 import sys
+import uuid
 
 from . import __version__
 from .adapters import notify, probe
@@ -49,8 +51,44 @@ def parser():
     return root
 
 
+def command(args, *parts, actor=True):
+    words = ["htalk", "--db", str(args.db.expanduser().resolve())]
+    if actor and args.actor:
+        words += ["--as", args.actor]
+    return shlex.join([*words, *parts])
+
+
+def message_actions(args, message):
+    """CLI-only guidance; stored messages and marks remain unchanged."""
+    recovery = {"show": command(args, "show", message["id"])}
+    if message["sender"] == args.actor and message["in_reply_to"] is None:
+        if message["reply"]:
+            answer = message["reply"]
+            recovery["show_reply"] = command(args, "show", answer["id"])
+            action = "Read the saved answer with recovery.show_reply."
+            if answer["ack_at"] is None:
+                recovery["ack_after_reading"] = command(args, "ack", answer["id"])
+                action += " After reading, use recovery.ack_after_reading."
+        else:
+            recovery["wait"] = command(args, "wait", message["id"], "--seconds", "45")
+            action = "Use recovery.wait to wait again on this saved request, or recovery.show to inspect it."
+    elif message["recipient"] == args.actor:
+        action = "Read the message with recovery.show."
+        if message["ack_at"] is None:
+            recovery["ack_after_reading"] = command(args, "ack", message["id"])
+            action += " After reading, use recovery.ack_after_reading."
+        if message["in_reply_to"] is None and message["reply"] is None:
+            action += " Acknowledging a question leaves it open until you reply."
+    else:
+        action = "Inspect the saved answer with recovery.show; the recipient can retrieve it from their inbox."
+    message["recovery"] = recovery
+    message["next_action"] = action + " Never repeat an uncertain notification."
+
+
 def main(argv=None):
     args = parser().parse_args(argv)
+    saved_id = None
+    own = None
     try:
         attempted_notification = False
         os.umask(0o077)
@@ -82,13 +120,13 @@ def main(argv=None):
                 else:
                     recipient, reply_to, message_id = args.recipient, None, args.id
                 result, created = store.save(args.actor, recipient, body, message_id, reply_to)
+                saved_id = result["id"]
                 if created and not args.no_notify:
                     attempted_notification = True
                     result = store.notify_once(result["id"], notify)
                 if args.command == "send" and args.wait:
                     result = store.wait(result["id"], args.actor, args.wait)
                 result["created"] = created
-                result["next_action"] = "Use wait, inbox, or sent to recover. Never repeat an uncertain notification."
             elif args.command == "wait":
                 result = store.wait(args.message_id, args.actor, args.seconds)
             elif args.command == "show":
@@ -99,13 +137,53 @@ def main(argv=None):
                 result = store.inbox(args.actor)
             else:
                 result = store.sent(args.actor)
+            if "messages" in result:
+                for message in result["messages"]:
+                    message_actions(args, message)
+            else:
+                message_actions(args, result)
         print(json.dumps(result, ensure_ascii=False))
         return 2 if attempted_notification and result.get("submission") != "submitted" else 0
     except KeyboardInterrupt:
-        print(json.dumps({"state": "interrupted", "next_action": "Use sent or inbox, then wait/show on the saved ID. Do not resend."}))
+        recovery = {"peers": command(args, "peer", "list", actor=False)}
+        if own:
+            recovery.update(sent=command(args, "sent"), inbox=command(args, "inbox"))
+        known_id = saved_id or getattr(args, "message_id", None) or getattr(args, "id", None)
+        if known_id and own:
+            recovery["show"] = command(args, "show", known_id)
+        print(json.dumps({"state": "interrupted", "message_id": known_id, "recovery": recovery,
+                          "next_action": "Use the listed recovery commands to inspect the known ID or find saved messages. Do not resend."}))
         return 130
     except (ValueError, OSError, sqlite3.Error, KeyError, subprocess.SubprocessError) as exc:
-        print(json.dumps({"state": "error", "error": str(exc)}))
+        error = str(exc)
+        result = {"state": "error", "error": error,
+                  "recovery": {"peers": command(args, "peer", "list", actor=False)}}
+        if error == "actor_conflicts_with_CODEX_THREAD_ID":
+            result.update(registered_peer=args.actor, registered_session_id=own["session_id"],
+                          current_session_id=native_id)
+            result["recovery"]["inbox_in_registered_session"] = command(args, "inbox")
+            result["next_action"] = (
+                f"Peer {args.actor} belongs to Codex session {own['session_id']}, not current session {native_id}. "
+                "Use recovery.peers to find the peer registered to this session, or return to the registered "
+                "session before running recovery.inbox_in_registered_session. The binding cannot be reassigned.")
+        elif error == "peer_already_has_a_different_address":
+            registered = store.peer(args.name)
+            result.update(registered_peer=args.name, registered_session_id=registered["session_id"])
+            result["next_action"] = (
+                f"Peer {args.name} is already bound to {registered['harness']} session {registered['session_id']}. "
+                "Inspect recovery.peers. Keep that address for the existing session; a separate session needs a different peer name.")
+        elif error in ("message_id_conflict", "reply_conflict_existing_answer_preserved"):
+            known_id = str(uuid.UUID(args.id)) if args.command == "send" else args.message_id
+            result["message_id"] = known_id
+            result["recovery"].update(show=command(args, "show", known_id), sent=command(args, "sent"))
+            result["next_action"] = "The existing message was preserved. Inspect recovery.show or recover outgoing IDs with recovery.sent. Do not resend."
+        else:
+            if own:
+                result["recovery"].update(sent=command(args, "sent"), inbox=command(args, "inbox"))
+                result["next_action"] = "Inspect saved messages with recovery.sent or recovery.inbox. Check registered addresses with recovery.peers. Never repeat an uncertain notification."
+            else:
+                result["next_action"] = "Check the error and inspect registered addresses with recovery.peers."
+        print(json.dumps(result))
         return 2
 
 

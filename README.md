@@ -62,6 +62,21 @@ A reply is a separate message addressed back to the request's sender. Read the a
 
 For retryable automation, generate a UUID before calling `send`, pass `--id UUID`, and retain it. An identical retry returns the saved message without another notification. A reused UUID with different contents is rejected. Without a retained ID, use `sent` after an interrupted send rather than sending again.
 
+Message output includes a `recovery` object with executable commands containing the database path, peer name and full message IDs. A pending request offers `show` and `wait`. A received answer offers `show_reply` and `ack_after_reading`; run the acknowledgment only after reading. `inbox` and `sent` include these commands on each message. They remain usable when a notification failed or the sender process has ended. Interrupted output includes the known saved ID when available and commands to recover outgoing and incoming IDs.
+
+If a Codex session UUID conflicts with a registered peer, the error names both sessions. Its `recovery.peers` command lists the immutable addresses. Select a peer registered to the current session, or return to the named original session before using its inbox. Register a different peer name for a separate session; an existing peer cannot be reassigned.
+
+For evidence in a reply, use an ordinary message file:
+
+```text
+Result: The recovery regression passed.
+Artifact: /absolute/shared/path/test-output.txt
+Commit: <full commit SHA>
+Validation: <command run and observed result>
+```
+
+Send it with `htalk reply REQUEST_UUID --message-file result.txt`. This records the sender's report; the recipient still needs to inspect the artifact before treating it as verified evidence.
+
 ## Observable states
 
 Every message has a durable `id`, monotonic arrival `seq`, sender, recipient, optional `in_reply_to`, body and timestamps. Notification has its own `submission`, detail and attempt timestamps:
