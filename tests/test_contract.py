@@ -294,6 +294,27 @@ class ProcessRecovery(unittest.TestCase):
 
 
 class ClaudeAdapter(unittest.TestCase):
+    def test_registered_symlink_workspace_matches_native_metadata_and_rejects_retargeting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            project = path / "project"
+            project.mkdir()
+            alias = path / "alias"
+            alias.symlink_to(project, target_is_directory=True)
+            peer = Store(path / "mail.sqlite3").add_peer("receiver", "claude", str(uuid.uuid4()), alias)
+            row = {"sessionId": peer["session_id"], "cwd": str(alias), "pid": 123}
+            metadata = path / ".claude/sessions/123.json"
+            metadata.parent.mkdir(parents=True)
+            metadata.write_text(json.dumps({**row, "messagingSocketPath": "/fake.sock"}))
+            with patch.object(adapters.Path, "home", return_value=path), \
+                    patch.object(adapters.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, json.dumps([row]))), \
+                    patch.object(adapters, "owned_socket", return_value="/fake.sock"):
+                self.assertEqual("/fake.sock", adapters.claude_socket(peer))
+                alias.unlink()
+                alias.symlink_to(path, target_is_directory=True)
+                with self.assertRaisesRegex(ValueError, "recipient_unavailable"):
+                    adapters.claude_socket(peer)
+
     def test_discovery_failure_and_uncertain_write_are_distinct(self):
         peer = {"name": "receiver", "harness": "claude", "session_id": "test"}
         message = {"id": "message", "sender": "sender"}
@@ -396,6 +417,21 @@ class NativeCodexAdapter(unittest.TestCase):
         self.assertEqual(self.peer["session_id"], result["session_id"])
         self.assertEqual("unknown", result["runtime_status"])
         self.assertEqual("codex_cli_queue", result["transport"])
+
+    def test_codex_saved_and_live_addresses_accept_only_the_registered_symlink_target(self):
+        alias = self.home / "alias"
+        alias.symlink_to(self.home, target_is_directory=True)
+        with closing(sqlite3.connect(self.state)) as db, db:
+            db.execute("UPDATE threads SET cwd=?", (str(alias),))
+        rpc = unittest.mock.Mock()
+        rpc.call.return_value = {"thread": {"id": self.peer["session_id"], "cwd": str(alias), "status": {"type": "idle"}}}
+        self.assertEqual(self.peer["session_id"], adapters.probe(self.peer)["session_id"])
+        self.assertEqual(self.peer["session_id"], adapters.check_codex(rpc, self.peer)["session_id"])
+        alias.unlink()
+        alias.symlink_to(self.home / "other", target_is_directory=True)
+        for check in (lambda: adapters.probe(self.peer), lambda: adapters.check_codex(rpc, self.peer)):
+            with self.assertRaisesRegex(ValueError, "recipient_identity_changed"):
+                check()
 
     def test_native_queue_uses_exact_uuid_and_usual_settings(self):
         queue_id = str(uuid.uuid4())

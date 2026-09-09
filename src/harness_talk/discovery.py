@@ -10,7 +10,7 @@ import stat
 import time
 import uuid
 
-from .adapters import codex_home, codex_rpc, codex_state_path, owned_socket
+from .adapters import codex_home, codex_rpc, codex_state_path, owned_socket, same_workspace
 
 
 def address(session_id, workspace):
@@ -95,7 +95,12 @@ def discover_codex_writers(lock_table=Path("/proc/locks")):
                         continue
                     if row[2] != 0 or row[3] != "cli":
                         continue
-                    session_id, workspace = address(row[0], row[1])
+                    try:
+                        session_id, workspace = address(row[0], row[1])
+                    except (ValueError, TypeError, AttributeError):
+                        source.update(status="partial", detail="Some held writers have an invalid saved address.",
+                                      rejected=source.get("rejected", 0) + 1)
+                        continue
                     sessions.append({"harness": "codex", "session_id": session_id, "workspace": workspace,
                                      "runtime_status": "writer_active", "runtime_reason": "kernel_writer_lock",
                                      "source": "codex_writer_locks", "pid": pid, "socket": None})
@@ -187,7 +192,7 @@ def discover(harness=None, workspace=None, codex_sockets=None, opencode_urls=Non
         sessions.extend(result["sessions"])
         sources.extend(result["sources"])
     if workspace is not None:
-        sessions = [row for row in sessions if row["workspace"] == workspace]
+        sessions = [row for row in sessions if same_workspace(row["workspace"], workspace)]
     sessions.sort(key=lambda row: (row["harness"], row["workspace"], row["session_id"]))
     return {"sessions": sessions, "sources": sources,
             "next_action": "Choose an exact session address and register it with peer add. Discovery does not register or notify anyone.",

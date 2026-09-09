@@ -23,15 +23,24 @@ def owned_socket(path):
     return str(path)
 
 
+def same_workspace(directory, workspace):
+    """Compare native paths with the canonical address saved by registration."""
+    try:
+        return (isinstance(directory, str) and Path(directory).is_absolute()
+                and str(Path(directory).resolve()) == workspace)
+    except (OSError, RuntimeError):
+        return False
+
+
 def claude_socket(peer):
     listed = subprocess.run(["claude", "agents", "--json"], capture_output=True,
                             text=True, check=True, timeout=15)
     rows = [row for row in json.loads(listed.stdout)
-            if row.get("sessionId") == peer["session_id"] and row.get("cwd") == peer["workspace"]]
+            if row.get("sessionId") == peer["session_id"] and same_workspace(row.get("cwd"), peer["workspace"])]
     if len(rows) != 1 or type(rows[0].get("pid")) is not int:
         raise ValueError("recipient_unavailable")
     metadata = json.loads((Path.home() / ".claude/sessions" / f"{rows[0]['pid']}.json").read_text())
-    if metadata.get("sessionId") != peer["session_id"] or metadata.get("cwd") != peer["workspace"]:
+    if metadata.get("sessionId") != peer["session_id"] or not same_workspace(metadata.get("cwd"), peer["workspace"]):
         raise ValueError("recipient_identity_changed")
     return owned_socket(metadata["messagingSocketPath"])
 
@@ -80,7 +89,7 @@ def codex_rpc(peer):
 
 def check_codex(rpc, peer):
     thread = rpc.call("thread/read", {"threadId": peer["session_id"], "includeTurns": False})["thread"]
-    if thread.get("id") != peer["session_id"] or thread.get("cwd") != peer["workspace"]:
+    if thread.get("id") != peer["session_id"] or not same_workspace(thread.get("cwd"), peer["workspace"]):
         raise ValueError("recipient_identity_changed")
     if thread.get("status", {}).get("type") not in ("idle", "active"):
         raise ValueError("recipient_not_loaded")
@@ -114,7 +123,7 @@ def codex_saved_identity(peer):
                          (peer["session_id"],)).fetchone()
     if row is None:
         raise ValueError("recipient_not_in_codex_state")
-    if row[0] != peer["session_id"] or row[1] != peer["workspace"]:
+    if row[0] != peer["session_id"] or not same_workspace(row[1], peer["workspace"]):
         raise ValueError("recipient_identity_changed")
     if row[2] != 0 or row[3] != "cli":
         raise ValueError("recipient_is_not_an_unarchived_codex_cli_session")

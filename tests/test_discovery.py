@@ -146,6 +146,27 @@ class Discovery(unittest.TestCase):
         self.assertEqual([candidate], result["sessions"])
         self.assertEqual(["ok", "unavailable"], [source["status"] for source in result["sources"]])
 
+    def test_bad_saved_writer_does_not_hide_a_later_valid_address(self):
+        directory = self.path / "thread-writer-locks"
+        directory.mkdir()
+        bad = str(uuid.uuid4())
+        lines = []
+        for ident in (bad, self.ident):
+            path = directory / f"{ident}.lock"
+            path.touch()
+            info = path.stat()
+            lines.append(f"1: FLOCK ADVISORY WRITE 123 {os.major(info.st_dev):x}:{os.minor(info.st_dev):x}:{info.st_ino} 0 EOF")
+        locks = self.path / "locks"
+        locks.write_text("\n".join(lines))
+        with closing(sqlite3.connect(self.path / "state_5.sqlite")) as db, db:
+            db.execute("CREATE TABLE threads (id TEXT, cwd TEXT, archived INTEGER, source TEXT)")
+            db.executemany("INSERT INTO threads VALUES (?, ?, 0, 'cli')", [(bad, None), (self.ident, str(self.path))])
+        with patch.dict(os.environ, {"CODEX_HOME": str(self.path), "CODEX_SQLITE_HOME": str(self.path)}):
+            result = discovery.discover_codex_writers(locks)
+        self.assertEqual([self.ident], [row["session_id"] for row in result["sessions"]])
+        self.assertEqual("partial", result["sources"][0]["status"])
+        self.assertEqual(1, result["sources"][0]["rejected"])
+
     def test_cli_discovery_filters_without_creating_the_database(self):
         other = {"harness": "codex", "session_id": str(uuid.uuid4()), "workspace": "/other"}
         wanted = {**other, "session_id": self.ident, "workspace": str(self.path), "runtime_status": "idle"}
@@ -157,6 +178,26 @@ class Discovery(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual([wanted], json.loads(output.getvalue())["sessions"])
         self.assertFalse(db.parent.exists())
+
+    def test_workspace_filter_accepts_a_native_symlink_path(self):
+        actual = self.path / "project"
+        actual.mkdir()
+        alias = self.path / "alias"
+        alias.symlink_to(actual, target_is_directory=True)
+        candidate = {"harness": "codex", "session_id": self.ident, "workspace": str(alias)}
+        with patch.object(discovery, "discover_codex", return_value={
+                "sessions": [candidate], "sources": [{"status": "ok"}]}):
+            for requested in (actual, alias):
+                result = discovery.discover("codex", str(requested), codex_sockets=["/unused"])
+                self.assertEqual([candidate], result["sessions"])
+
+    def test_cli_rejects_endpoint_options_for_an_excluded_harness(self):
+        for option, harness in (("--codex-socket", "claude"), ("--opencode-url", "codex")):
+            with patch("builtins.print") as output, patch("harness_talk.cli.discover") as scan:
+                code = main(["peer", "discover", "--harness", harness, option, "unused"])
+            self.assertEqual(2, code)
+            self.assertIn("requires", json.loads(output.call_args.args[0])["error"])
+            scan.assert_not_called()
 
     def test_cli_unavailable_source_has_diagnostics_and_nonzero_exit(self):
         output = io.StringIO()

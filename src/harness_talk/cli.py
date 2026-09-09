@@ -100,6 +100,10 @@ def main(argv=None):
         attempted_notification = False
         os.umask(0o077)
         if args.command == "peer" and args.peer_command == "discover":
+            if args.codex_socket and args.harness not in (None, "codex"):
+                raise ValueError("codex_socket_requires_codex_discovery")
+            if args.opencode_url and args.harness not in (None, "opencode"):
+                raise ValueError("opencode_url_requires_opencode_discovery")
             result = discover(args.harness, args.workspace, args.codex_socket, args.opencode_url)
             print(json.dumps(result, ensure_ascii=False))
             return 2 if all(source["status"] == "unavailable" for source in result["sources"]) else 0

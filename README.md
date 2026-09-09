@@ -34,6 +34,8 @@ htalk peer discover --harness opencode --opencode-url http://127.0.0.1:4096 \
 
 `sessions` contains exact IDs, workspaces, runtime evidence and connection details. Discovery never registers a peer, sends a message, or starts a client. `peer list` continues to show only registered addresses.
 
+Workspace filters and recipient checks compare resolved paths, so a native session opened through a symbolic link matches its registered directory. Endpoint options must agree with `--harness` when it is supplied.
+
 | Source | What its runtime status means |
 | --- | --- |
 | Claude `agents --json` | `running` requires a live native record and matching session, workspace and owned socket. It does not say whether the model is busy. |
