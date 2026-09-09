@@ -177,11 +177,21 @@ class Conversations(unittest.TestCase):
                                            "send", "bob", "--id", message_id, "--message", "Question?"]))
                 interrupted = json.loads(output.call_args.args[0])
                 self.assertEqual(message_id, interrupted["message_id"])
+                self.assertEqual("saved", interrupted["persistence"])
                 self.assertEqual(0, main(shlex.split(interrupted["recovery"]["show"])[1:]))
                 self.assertEqual("submission_unknown", json.loads(output.call_args.args[0])["submission"])
                 self.assertEqual(0, main(["--db", str(self.store.path), "--as", "alice",
                                          "send", "bob", "--id", message_id, "--message", "Question?"]))
                 notify.assert_called_once()
+            unsaved_id = str(uuid.uuid4())
+            with patch("harness_talk.cli.Store.save", side_effect=KeyboardInterrupt()):
+                self.assertEqual(130, main(["--db", str(self.store.path), "--as", "alice", "send", "bob",
+                                           "--id", unsaved_id.upper(), "--message", "Interrupted before save"]))
+            interrupted = json.loads(output.call_args.args[0])
+            self.assertEqual(unsaved_id, interrupted["message_id"])
+            self.assertEqual("unknown", interrupted["persistence"])
+            self.assertEqual(2, main(shlex.split(interrupted["recovery"]["show"])[1:]))
+            self.assertEqual("unknown_message", json.loads(output.call_args.args[0])["error"])
 
     def test_conflicting_message_preserves_id_and_returns_inspection_command(self):
         question = self.request()
@@ -193,6 +203,14 @@ class Conversations(unittest.TestCase):
             self.assertEqual(question["id"], error["message_id"])
             self.assertEqual(0, main(shlex.split(error["recovery"]["show"])[1:]))
             self.assertEqual("Question?", json.loads(output.call_args.args[0])["body"])
+            unrelated, _ = self.store.save("eve", "bob", "A different conversation")
+            self.assertEqual(2, main(["--db", str(self.store.path), "--as", "alice", "send", "bob",
+                                     "--id", unrelated["id"], "--message", "Changed"]))
+            error = json.loads(output.call_args.args[0])
+            self.assertNotIn("show", error["recovery"])
+            self.assertIn("not readable by this peer", error["next_action"])
+            self.assertEqual(0, main(shlex.split(error["recovery"]["sent"])[1:]))
+            self.assertNotIn(unrelated["id"], [row["id"] for row in json.loads(output.call_args.args[0])["messages"]])
 
 
 class ProcessRecovery(unittest.TestCase):
@@ -211,7 +229,7 @@ class ProcessRecovery(unittest.TestCase):
 
             def recover(command, **kwargs):
                 words = shlex.split(command)
-                self.assertEqual(["htalk", "--db", str(db_path)], words[:3])
+                self.assertEqual(["htalk", "--db", str(db_path.resolve())], words[:3])
                 return cli(*words[3:], **kwargs)
 
             # This nonexistent explicit socket prevents any real client discovery or notification.
@@ -252,6 +270,11 @@ class ProcessRecovery(unittest.TestCase):
             rebinding = cli("peer", "add", "builder", "--harness", "codex", "--session", other_session,
                             "--workspace", directory, code=2)
             self.assertEqual(session_id, rebinding["registered_session_id"])
+            renamed = cli("peer", "add", "builder2", "--harness", "codex", "--session", session_id,
+                          "--workspace", directory, code=2)
+            self.assertEqual("session_already_has_a_peer_name", renamed["error"])
+            self.assertEqual("builder", renamed["registered_peer"])
+            self.assertEqual(session_id, renamed["registered_session_id"])
 
 
 class ClaudeAdapter(unittest.TestCase):

@@ -149,9 +149,14 @@ def main(argv=None):
         if own:
             recovery.update(sent=command(args, "sent"), inbox=command(args, "inbox"))
         known_id = saved_id or getattr(args, "message_id", None) or getattr(args, "id", None)
+        try:
+            known_id = str(uuid.UUID(known_id)) if known_id else None
+        except (ValueError, TypeError, AttributeError):
+            known_id = None
         if known_id and own:
             recovery["show"] = command(args, "show", known_id)
         print(json.dumps({"state": "interrupted", "message_id": known_id, "recovery": recovery,
+                          "persistence": "saved" if saved_id else "unknown",
                           "next_action": "Use the listed recovery commands to inspect the known ID or find saved messages. Do not resend."}))
         return 130
     except (ValueError, OSError, sqlite3.Error, KeyError, subprocess.SubprocessError) as exc:
@@ -172,11 +177,24 @@ def main(argv=None):
             result["next_action"] = (
                 f"Peer {args.name} is already bound to {registered['harness']} session {registered['session_id']}. "
                 "Inspect recovery.peers. Keep that address for the existing session; a separate session needs a different peer name.")
+        elif error == "session_already_has_a_peer_name":
+            registered = next(peer for peer in store.peers()
+                              if peer["harness"] == args.harness and peer["session_id"] == str(uuid.UUID(args.session)))
+            result.update(registered_peer=registered["name"], registered_session_id=registered["session_id"])
+            result["next_action"] = (
+                f"Session {registered['session_id']} already uses peer {registered['name']}. "
+                "Use that name from its registered session. Inspect recovery.peers for the existing immutable addresses.")
         elif error in ("message_id_conflict", "reply_conflict_existing_answer_preserved"):
             known_id = str(uuid.UUID(args.id)) if args.command == "send" else args.message_id
             result["message_id"] = known_id
-            result["recovery"].update(show=command(args, "show", known_id), sent=command(args, "sent"))
-            result["next_action"] = "The existing message was preserved. Inspect recovery.show or recover outgoing IDs with recovery.sent. Do not resend."
+            result["recovery"]["sent"] = command(args, "sent")
+            try:
+                store.get(known_id, args.actor)
+            except ValueError:
+                result["next_action"] = "This ID is already in use and is not readable by this peer. Recover your own outgoing IDs with recovery.sent. Do not resend."
+            else:
+                result["recovery"]["show"] = command(args, "show", known_id)
+                result["next_action"] = "The existing message was preserved. Inspect recovery.show or recover outgoing IDs with recovery.sent. Do not resend."
         else:
             if own:
                 result["recovery"].update(sent=command(args, "sent"), inbox=command(args, "inbox"))
