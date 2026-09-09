@@ -63,9 +63,9 @@ class Rpc:
 
 @contextmanager
 def codex_rpc(peer):
+    path = owned_socket(peer["socket"])
     from websockets.sync.client import unix_connect
     from websockets.exceptions import WebSocketException
-    path = owned_socket(peer["socket"])
     try:
         with unix_connect(path, open_timeout=5, close_timeout=1, ping_interval=None,
                           compression=None, max_size=4 * 1024 * 1024) as connection:
