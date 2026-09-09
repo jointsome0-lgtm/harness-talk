@@ -211,6 +211,41 @@ class OpenCodeTests(unittest.TestCase):
         self.assertTrue(detail.startswith("opencode_"))
         self.assertNotIn("Traceback", detail)
 
+    def test_malformed_server_records_preserve_valid_sessions_before_and_after(self):
+        self.server.state["sessions"] = {
+            "ses_first": session("ses_first", str(self.path)),
+            "bad_id": session("bad_id", str(self.path)),
+            "ses_bad_directory": session("ses_bad_directory", None),
+            "ses_bad_time": session("ses_bad_time", str(self.path), time=[]),
+            "ses_bad_status": session("ses_bad_status", str(self.path)),
+            "ses_last": session("ses_last", str(self.path))}
+        self.server.state["status"] = {"ses_bad_status": {"type": "unrecognized"}}
+        found, source = opencode.server_sessions(self.url)
+        self.assertEqual(["ses_first", "ses_last"], [row["session_id"] for row in found])
+        self.assertEqual(("partial", 4, "opencode_invalid_session_records"),
+                         (source["status"], source["rejected"], source["detail"]))
+        self.assertEqual(self.posts(), [])
+
+    def test_malformed_saved_rows_preserve_valid_addresses_and_limit_diagnostics(self):
+        saved = self.path / "opencode.db"
+        with closing(sqlite3.connect(saved)) as db, db:
+            db.execute("CREATE TABLE session (id TEXT, parent_id TEXT, directory TEXT NOT NULL, time_updated INTEGER, time_archived INTEGER)")
+            db.executemany("INSERT INTO session VALUES (?, NULL, ?, ?, NULL)", [
+                ("ses_first", str(self.path), 5000), ("bad_id", str(self.path), 4000),
+                ("ses_empty", "", 3000), ("ses_last", str(self.path), 2000),
+                ("ses_older", str(self.path), 1000)])
+        before = saved.read_bytes()
+        found, source = opencode.saved_sessions(saved)
+        self.assertEqual(["ses_first", "ses_last", "ses_older"], [row["session_id"] for row in found])
+        self.assertEqual(("partial", 2, "opencode_invalid_saved_metadata"),
+                         (source["status"], source["rejected"], source["detail"]))
+        with patch.object(opencode, "SAVED_LIMIT", 4):
+            found, source = opencode.saved_sessions(saved)
+        self.assertEqual(["ses_first", "ses_last"], [row["session_id"] for row in found])
+        self.assertEqual(("partial", 2, "opencode_saved_session_limit_reached"),
+                         (source["status"], source["rejected"], source["detail"]))
+        self.assertEqual(before, saved.read_bytes())
+
     def test_discovery_is_read_only_and_separates_liveness(self):
         self.server.state["sessions"].update({
             "ses_child": session("ses_child", str(self.path), parentID="ses_synthetic"),

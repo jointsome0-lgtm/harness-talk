@@ -218,17 +218,21 @@ def server_sessions(url, workspace=None):
         if not isinstance(listed, list):
             raise OpenCodeError("opencode_invalid_response")
         for item in listed:
-            if not isinstance(item, dict) or not isinstance(item.get("time"), dict):
-                raise OpenCodeError("opencode_invalid_response")
-            if item.get("parentID") or item["time"].get("archived") is not None:
-                continue
-            directory = item.get("directory")
-            if not isinstance(directory, str) or not directory:
-                raise OpenCodeError("opencode_invalid_response")
-            updated = item["time"].get("updated")
-            found.append(candidate(valid_session_id(item.get("id")), directory, runtime_status(statuses, item["id"]),
-                                   "server_status", "opencode_server", server.url,
-                                   int(updated // 1000) if type(updated) is int else None))
+            try:
+                if not isinstance(item, dict) or not isinstance(item.get("time"), dict):
+                    raise OpenCodeError("opencode_invalid_response")
+                if item.get("parentID") or item["time"].get("archived") is not None:
+                    continue
+                directory = item.get("directory")
+                if not isinstance(directory, str) or not directory:
+                    raise OpenCodeError("opencode_invalid_response")
+                updated = item["time"].get("updated")
+                found.append(candidate(valid_session_id(item.get("id")), directory, runtime_status(statuses, item["id"]),
+                                       "server_status", "opencode_server", server.url,
+                                       int(updated // 1000) if type(updated) is int else None))
+            except (ValueError, TypeError, KeyError):
+                source.update(status="partial", detail="opencode_invalid_session_records",
+                              rejected=source.get("rejected", 0) + 1)
     except (OSError, ValueError, TypeError, KeyError) as exc:
         fixed = isinstance(exc, (OpenCodeError, Uncertain)) or str(exc) in ("invalid_opencode_url", "opencode_url_must_be_loopback")
         source.update(status="unavailable", error=str(exc) if fixed else "opencode_" + type(exc).__name__)
@@ -253,10 +257,14 @@ def saved_sessions(path):
             rows = rows[:SAVED_LIMIT]
             source.update(status="partial", detail="opencode_saved_session_limit_reached")
         for session_id, directory, updated in rows:
-            if not isinstance(directory, str) or not directory:
-                raise ValueError("opencode_invalid_saved_metadata")
-            found.append(candidate(valid_session_id(session_id), directory, "unknown", "saved_metadata_only",
-                                   "opencode_saved", None, int(updated // 1000) if type(updated) is int else None))
+            try:
+                if not isinstance(directory, str) or not directory:
+                    raise ValueError("opencode_invalid_saved_metadata")
+                found.append(candidate(valid_session_id(session_id), directory, "unknown", "saved_metadata_only",
+                                       "opencode_saved", None, int(updated // 1000) if type(updated) is int else None))
+            except (ValueError, TypeError):
+                source.update(status="partial", detail=source["detail"] or "opencode_invalid_saved_metadata",
+                              rejected=source.get("rejected", 0) + 1)
     except (sqlite3.Error, OSError, ValueError, TypeError) as exc:
         source.update(status="unavailable", detail=None,
                       error="opencode_saved_" + type(exc).__name__ if isinstance(exc, (sqlite3.Error, OSError)) else str(exc))
