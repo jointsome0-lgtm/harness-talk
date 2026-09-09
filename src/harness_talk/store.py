@@ -8,6 +8,8 @@ import sqlite3
 import time
 import uuid
 
+from .opencode import valid_session_id as valid_opencode_session_id, valid_url as valid_opencode_url
+
 
 def default_db():
     if os.environ.get("HTALK_DB"):
@@ -55,6 +57,9 @@ class Store:
                 );
                 PRAGMA user_version=1;
             """)
+            # Additive: 0.2.0 databases gain a nullable server URL column for OpenCode peers.
+            if "url" not in {row[1] for row in db.execute("PRAGMA table_info(peers)")}:
+                db.execute("ALTER TABLE peers ADD COLUMN url TEXT")
 
     def connect(self):
         db = sqlite3.connect(self.path, timeout=5)
@@ -62,12 +67,19 @@ class Store:
         db.execute("PRAGMA foreign_keys=ON")
         return db
 
-    def add_peer(self, name, harness, session_id, workspace, socket=None):
+    def add_peer(self, name, harness, session_id, workspace, socket=None, url=None):
         if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,63}", name):
             raise ValueError("invalid_peer_name")
-        if harness not in ("codex", "claude"):
+        if harness not in ("codex", "claude", "opencode"):
             raise ValueError("unsupported_harness")
-        session_id = str(uuid.UUID(session_id))
+        # OpenCode identifiers are opaque; the other harnesses use UUIDs.
+        session_id = valid_opencode_session_id(session_id) if harness == "opencode" else str(uuid.UUID(session_id))
+        if harness == "opencode":
+            if socket is not None:
+                raise ValueError("opencode_uses_a_server_url_not_a_socket")
+            url = valid_opencode_url(url)
+        elif url is not None:
+            raise ValueError("url_is_only_for_opencode")
         workspace = str(Path(workspace).expanduser().resolve(strict=True))
         if not Path(workspace).is_dir():
             raise ValueError("workspace_must_be_a_directory")
@@ -75,7 +87,7 @@ class Store:
             socket = str(Path(socket).expanduser().resolve())
         if harness == "claude" and socket is not None:
             raise ValueError("claude_socket_is_discovered_from_live_identity")
-        values = (name, harness, session_id, workspace, socket)
+        values = (name, harness, session_id, workspace, socket, url)
         with closing(self.connect()) as db, db:
             db.execute("BEGIN IMMEDIATE")
             existing = db.execute("SELECT * FROM peers WHERE name=?", (name,)).fetchone()
@@ -86,7 +98,7 @@ class Store:
                 if db.execute("SELECT 1 FROM peers WHERE harness=? AND session_id=?",
                               (harness, session_id)).fetchone():
                     raise ValueError("session_already_has_a_peer_name")
-                db.execute("INSERT INTO peers VALUES (?, ?, ?, ?, ?)", values)
+                db.execute("INSERT INTO peers VALUES (?, ?, ?, ?, ?, ?)", values)
         return self.peer(name)
 
     def peer(self, name):

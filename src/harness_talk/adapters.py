@@ -139,6 +139,9 @@ def notify_codex_cli(peer, body):
 
 
 def probe(peer):
+    if peer["harness"] == "opencode":
+        from .opencode import probe as probe_opencode
+        return probe_opencode(peer)
     if peer["harness"] == "claude":
         return {"harness": "claude", "session_id": peer["session_id"],
                 "workspace": peer["workspace"], "socket": claude_socket(peer)}
@@ -158,6 +161,9 @@ def notification(peer, message, db_path):
 
 def notify(peer, message, db_path):
     body = notification(peer, message, db_path)
+    if peer["harness"] == "opencode":
+        from .opencode import notify as notify_opencode
+        return notify_opencode(peer, body)
     if peer["harness"] == "claude":
         try:
             path = claude_socket(peer)
