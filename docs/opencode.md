@@ -1,6 +1,8 @@
 # OpenCode sessions
 
-Verified on 2026-09-10 with htalk 0.2.0 sources against a local headless OpenCode `1.18.30` server started without a model. The routes below were read from that server's OpenAPI document (`GET /doc`) and the [official server documentation](https://opencode.ai/docs/server/); their live behaviour for health, session lookup, status, authentication and unknown-session rejection was observed directly. Delivery to a real model-backed session has not been exercised here.
+Verified on 2026-09-10 with htalk `0.3.0.dev0` and a local headless OpenCode `1.18.30` server. A public synthetic exchange used `opencode/muse-spark-1.3-contributor-free`: OpenCode read and acknowledged the request through htalk, replied, initiated a reverse request, and read and acknowledged the driver's answer. Both notifications were accepted once; the native trace recorded both completed turns and the matching htalk commands. The other peer was a local test driver, so this checks OpenCode's participation rather than another harness's wakeup behavior.
+
+The routes below were read from that server's OpenAPI document at `GET /doc` and the [official server documentation](https://opencode.ai/docs/server/). Health, session lookup, status, authentication and unknown-session rejection were also checked directly without a model.
 
 ## Transport
 

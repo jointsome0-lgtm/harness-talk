@@ -88,9 +88,12 @@ def check_codex(rpc, peer):
             "status": thread["status"]["type"]}
 
 
-def codex_saved_identity(peer):
-    """Read the installed CLI's saved address, without starting any client."""
-    home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser().resolve()
+def codex_home():
+    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser().resolve()
+
+
+def codex_state_path():
+    home = codex_home()
     config_path = home / "config.toml"
     config = tomllib.loads(config_path.read_text()) if config_path.exists() else {}
     configured_home = config.get("sqlite_home")
@@ -100,7 +103,12 @@ def codex_saved_identity(peer):
             state_home = home / state_home
     else:
         state_home = Path(os.environ.get("CODEX_SQLITE_HOME", "").strip() or home).expanduser()
-    path = (state_home / "state_5.sqlite").resolve()
+    return (state_home / "state_5.sqlite").resolve()
+
+
+def codex_saved_identity(peer):
+    """Read the installed CLI's saved address, without starting any client."""
+    path = codex_state_path()
     with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=3)) as db:
         row = db.execute("SELECT id, cwd, archived, source FROM threads WHERE id=?",
                          (peer["session_id"],)).fetchone()

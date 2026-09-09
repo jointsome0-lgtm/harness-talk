@@ -213,6 +213,22 @@ class Conversations(unittest.TestCase):
             self.assertNotIn(unrelated["id"], [row["id"] for row in json.loads(output.call_args.args[0])["messages"]])
 
 
+    def test_cli_opencode_address_and_duplicate_recovery_use_opaque_session_ids(self):
+        address = ["--harness", "opencode", "--session", "ses_cli_example",
+                   "--workspace", str(self.path), "--url", "http://127.0.0.1:4567"]
+        with patch("builtins.print") as output, patch("harness_talk.cli.notify") as notify:
+            self.assertEqual(0, main(["--db", str(self.store.path), "peer", "add", "receiver", *address]))
+            peer = json.loads(output.call_args.args[0])
+            self.assertEqual("ses_cli_example", peer["session_id"])
+            self.assertEqual("http://127.0.0.1:4567", peer["url"])
+            self.assertEqual(2, main(["--db", str(self.store.path), "peer", "add", "renamed", *address]))
+            error = json.loads(output.call_args.args[0])
+            self.assertEqual("session_already_has_a_peer_name", error["error"])
+            self.assertEqual("receiver", error["registered_peer"])
+            self.assertEqual("ses_cli_example", error["registered_session_id"])
+            notify.assert_not_called()
+
+
 class ProcessRecovery(unittest.TestCase):
     def test_late_answer_is_recovered_and_acked_by_fresh_cli_processes(self):
         with tempfile.TemporaryDirectory() as directory:

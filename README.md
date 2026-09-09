@@ -1,14 +1,16 @@
 # harness-talk
 
-`htalk` saves local messages between concrete Codex and Claude Code sessions. Either side can ask, reply, wait now, or retrieve later. Messages live in one SQLite database; notifications merely point the recipient to its inbox.
+`htalk` discovers local Codex, Claude Code and OpenCode session addresses and saves messages between registered peers. Either side can ask, reply, wait now, or retrieve later. Messages live in one SQLite database; notifications point the recipient to its inbox.
 
-Python 3.11 or newer. Storage and Claude notifications use the standard library. Ordinary Codex notifications use `codex queue`; the optional standalone app-server mode uses the `websockets` library. This first version targets Linux and the client versions in [adapter notes](docs/adapters.md).
+Python 3.11 or newer. Storage, Claude notifications and OpenCode HTTP requests use the standard library. Ordinary Codex notifications use `codex queue`; app-server sockets use the `websockets` library. This version targets Linux and the client versions in [adapter notes](docs/adapters.md) and [OpenCode notes](docs/opencode.md).
 
 ## Install and share a database
 
+From a source checkout, including the upcoming 0.3 discovery and OpenCode features:
+
 ```sh
 python3 -m venv .venv
-.venv/bin/pip install 'harness-talk==0.2.0'
+.venv/bin/pip install .
 export PATH="$PWD/.venv/bin:$PATH"
 export HTALK_DB=/absolute/shared/writable/directory/mail.sqlite3
 ```
@@ -17,15 +19,44 @@ Install in a location both sessions can execute, and choose a database directory
 
 `--db PATH` overrides `HTALK_DB`. The default is `$XDG_DATA_HOME/harness-talk/mail.sqlite3`, or `~/.local/share/harness-talk/mail.sqlite3`. A project checkout is never the default storage location.
 
+Upgrade every participant before opening an existing shared database with 0.3. The first storage command upgrades it to schema 2, preserving peers, messages and acknowledgments. Older htalk versions reject the upgraded database. Discovery does not open or upgrade the htalk database.
+
+## Find session addresses
+
+```sh
+htalk peer discover
+htalk peer discover --harness claude
+htalk peer discover --harness codex --workspace /absolute/project
+htalk peer discover --codex-socket /absolute/codex.sock
+htalk peer discover --harness opencode --opencode-url http://127.0.0.1:4096 \
+  --workspace /absolute/project
+```
+
+`sessions` contains exact IDs, workspaces, runtime evidence and connection details. Discovery never registers a peer, sends a message, or starts a client. `peer list` continues to show only registered addresses.
+
+| Source | What its runtime status means |
+| --- | --- |
+| Claude `agents --json` | `running` requires a live native record and matching session, workspace and owned socket. It does not say whether the model is busy. |
+| Codex app-server | `idle` or `active` comes from the server's loaded threads. `systemError` reports a loaded thread with a runtime problem. |
+| Codex writer locks | `writer_active` means a native CLI thread holds its writer lock in the Linux kernel. It does not establish a running model turn or queue consumption. |
+| OpenCode server | `idle`, `busy` or `retry` is the addressed server's state. An idle session need not have an attached TUI. |
+| OpenCode saved metadata | `unknown` means only that an unarchived session was saved. Supply its running server URL before sending. |
+
+Codex checks its default app-server socket and native writer locks. `--codex-socket` selects explicit servers instead. Writer discovery reads `/proc/locks` and exact SQLite address rows; it never takes a lock. Stale lock files alone are not evidence of a live session. OpenCode checks `http://127.0.0.1:4096` by default and reads recent saved session addresses. Repeat either endpoint option to inspect several servers.
+
+`sources` reports `ok`, `partial` or `unavailable` for each source. Empty results cover only the listed sources and the current execution environment. Sandboxes, process namespaces, stopped servers and custom client homes can limit discovery. Inspect the source diagnostics before concluding that no session exists. Addresses are a snapshot; `peer check` and notification preflight verify them again.
+
 ## Address the participants
 
-Use the actual UUID and workspace for each existing session. Ordinary Codex TUI sessions need no socket argument. For an explicitly managed standalone app-server session, retain `--socket PATH`. Do not substitute the owner's conversation for a test receiver.
+Use the exact session ID and workspace returned by discovery or the native client. Codex and Claude IDs are UUIDs; OpenCode IDs start with `ses`. Ordinary Codex TUI sessions need no socket argument. For a discovered app-server address, retain its `--socket PATH`.
 
 ```sh
 htalk peer add builder --harness codex --session CODEX_UUID \
   --workspace /absolute/builder
 htalk peer add reviewer --harness claude --session CLAUDE_UUID \
   --workspace /absolute/reviewer
+htalk peer add helper --harness opencode --session ses_EXACT_ID \
+  --workspace /absolute/helper --url http://127.0.0.1:4096
 htalk peer check reviewer
 htalk peer check builder
 htalk peer list
@@ -85,21 +116,21 @@ Every message has a durable `id`, monotonic arrival `seq`, sender, recipient, op
 | --- | --- |
 | `not_submitted` | Notification was disabled, never attempted, or identity validation failed before transport. |
 | `submission_unknown` | Notification was claimed for one attempt, but its final outcome is uncertain. |
-| `submitted` | Claude socket bytes were written, or the Codex CLI/API acknowledged a queue entry. |
+| `submitted` | Claude socket bytes were written, Codex acknowledged a queue entry, or OpenCode accepted `prompt_async`. |
 
 None proves model receipt. `ack_at` records the recipient's explicit acknowledgment. A stored answer gives the request `state: reply_received`, independently of notification outcome. Waiting only polls the database for 0–45 seconds and can be resumed after timeout or interruption. It does not resend, invoke models, or acknowledge answers.
 
 The database is committed before client I/O. An interruption during notification leaves an uncertain result. There is no notification retry command and no automatic replay, including on identical `send --id` or `reply` retries. Recovery is through the durable inbox.
 
-Commands print JSON. Exit 0 means the local operation succeeded; exit 2 means invalid input or a notification attempted by this invocation without a confirmed submission. Retrieval, acknowledgment, and identical retries return 0 even when the original notification failed. The message may already be saved on exit 2: inspect its ID and `submission`. Explicit `--no-notify` succeeds with exit 0. Ctrl-C returns 130 and recovery guidance.
+Commands print JSON. Exit 0 means the local operation succeeded; exit 2 means invalid input, all discovery sources unavailable, or a notification attempted by this invocation without a confirmed submission. Retrieval, acknowledgment, and identical retries return 0 even when the original notification failed. The message may already be saved on exit 2: inspect its ID and `submission`. Explicit `--no-notify` succeeds with exit 0. Ctrl-C returns 130 and recovery guidance.
 
 ## Trust and limits
 
-This is a shared local tool for mutually trusted processes under one OS account. Names and `--as` are routing assertions, not authenticated identities. For a Codex actor, the CLI rejects a conflicting `CODEX_THREAD_ID` when available. Claude launchers can inherit that variable, so it is ignored for Claude actors. Live client evidence verifies the addressed recipient, not who invoked the shell command. Anyone with database access can read or change it directly.
+This is a shared local tool for mutually trusted processes under one OS account. Names and `--as` are routing assertions, not authenticated identities. For a Codex actor, the CLI rejects a conflicting `CODEX_THREAD_ID` when available. Other launchers can inherit that variable, so it is ignored for Claude and OpenCode actors. Live client evidence verifies the addressed recipient, not who invoked the shell command. Anyone with database access can read or change it directly.
 
 Peer contents never grant owner authorization. Notifications contain an inbox command and message ID, without interpolating the message body into client input. Follow each session's existing instructions when deciding whether to act on a peer request. `htalk` neither changes those instructions nor grants filesystem access.
 
-No Boardmail dependency, remote-host transport, automatic model launches, polling daemon, scheduled calls, or account setup. Client compatibility and wakeup behavior are deliberately narrow; see [adapter notes](docs/adapters.md).
+htalk does not launch clients, create sessions, run a polling daemon, or set up accounts. An accepted OpenCode notification can start a model turn in the existing addressed session, using that session's settings. There is no Boardmail dependency or remote-host transport. See [adapter notes](docs/adapters.md) and [OpenCode notes](docs/opencode.md) for connection and wakeup behavior.
 
 ## Verify
 
