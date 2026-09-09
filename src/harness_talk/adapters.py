@@ -23,15 +23,24 @@ def owned_socket(path):
     return str(path)
 
 
+def same_workspace(directory, workspace):
+    """Compare native paths with the canonical address saved by registration."""
+    try:
+        return (isinstance(directory, str) and Path(directory).is_absolute()
+                and str(Path(directory).resolve()) == workspace)
+    except (OSError, RuntimeError):
+        return False
+
+
 def claude_socket(peer):
     listed = subprocess.run(["claude", "agents", "--json"], capture_output=True,
                             text=True, check=True, timeout=15)
     rows = [row for row in json.loads(listed.stdout)
-            if row.get("sessionId") == peer["session_id"] and row.get("cwd") == peer["workspace"]]
+            if row.get("sessionId") == peer["session_id"] and same_workspace(row.get("cwd"), peer["workspace"])]
     if len(rows) != 1 or type(rows[0].get("pid")) is not int:
         raise ValueError("recipient_unavailable")
     metadata = json.loads((Path.home() / ".claude/sessions" / f"{rows[0]['pid']}.json").read_text())
-    if metadata.get("sessionId") != peer["session_id"] or metadata.get("cwd") != peer["workspace"]:
+    if metadata.get("sessionId") != peer["session_id"] or not same_workspace(metadata.get("cwd"), peer["workspace"]):
         raise ValueError("recipient_identity_changed")
     return owned_socket(metadata["messagingSocketPath"])
 
@@ -80,7 +89,7 @@ def codex_rpc(peer):
 
 def check_codex(rpc, peer):
     thread = rpc.call("thread/read", {"threadId": peer["session_id"], "includeTurns": False})["thread"]
-    if thread.get("id") != peer["session_id"] or thread.get("cwd") != peer["workspace"]:
+    if thread.get("id") != peer["session_id"] or not same_workspace(thread.get("cwd"), peer["workspace"]):
         raise ValueError("recipient_identity_changed")
     if thread.get("status", {}).get("type") not in ("idle", "active"):
         raise ValueError("recipient_not_loaded")
@@ -88,9 +97,12 @@ def check_codex(rpc, peer):
             "status": thread["status"]["type"]}
 
 
-def codex_saved_identity(peer):
-    """Read the installed CLI's saved address, without starting any client."""
-    home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser().resolve()
+def codex_home():
+    return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex").expanduser().resolve()
+
+
+def codex_state_path():
+    home = codex_home()
     config_path = home / "config.toml"
     config = tomllib.loads(config_path.read_text()) if config_path.exists() else {}
     configured_home = config.get("sqlite_home")
@@ -100,13 +112,18 @@ def codex_saved_identity(peer):
             state_home = home / state_home
     else:
         state_home = Path(os.environ.get("CODEX_SQLITE_HOME", "").strip() or home).expanduser()
-    path = (state_home / "state_5.sqlite").resolve()
+    return (state_home / "state_5.sqlite").resolve()
+
+
+def codex_saved_identity(peer):
+    """Read the installed CLI's saved address, without starting any client."""
+    path = codex_state_path()
     with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=3)) as db:
         row = db.execute("SELECT id, cwd, archived, source FROM threads WHERE id=?",
                          (peer["session_id"],)).fetchone()
     if row is None:
         raise ValueError("recipient_not_in_codex_state")
-    if row[0] != peer["session_id"] or row[1] != peer["workspace"]:
+    if row[0] != peer["session_id"] or not same_workspace(row[1], peer["workspace"]):
         raise ValueError("recipient_identity_changed")
     if row[2] != 0 or row[3] != "cli":
         raise ValueError("recipient_is_not_an_unarchived_codex_cli_session")
@@ -139,6 +156,9 @@ def notify_codex_cli(peer, body):
 
 
 def probe(peer):
+    if peer["harness"] == "opencode":
+        from .opencode import probe as probe_opencode
+        return probe_opencode(peer)
     if peer["harness"] == "claude":
         return {"harness": "claude", "session_id": peer["session_id"],
                 "workspace": peer["workspace"], "socket": claude_socket(peer)}
@@ -158,6 +178,9 @@ def notification(peer, message, db_path):
 
 def notify(peer, message, db_path):
     body = notification(peer, message, db_path)
+    if peer["harness"] == "opencode":
+        from .opencode import notify as notify_opencode
+        return notify_opencode(peer, body)
     if peer["harness"] == "claude":
         try:
             path = claude_socket(peer)

@@ -20,6 +20,14 @@ For previously configured standalone app-server sessions, the explicit `--socket
 
 The official [App Server documentation](https://learn.chatgpt.com/docs/app-server) describes the Unix WebSocket and metadata-only `thread/read`. The installed CLI's generated schema supplies the experimental queue shape. The [CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli) describes queued input. The retained standalone mode is why `websockets` remains a runtime dependency. Only the inspected client version is claimed as tested.
 
+### Discovery
+
+`peer discover` connects to `$CODEX_HOME/app-server-control/app-server-control.sock`, or the explicitly supplied `--codex-socket` paths. It pages through `thread/loaded/list` and reads metadata with `includeTurns: false`. It never resumes or subscribes to a thread. Sessions unloaded during discovery and internal workers that cannot accept direct input are excluded. Each server is bounded to 200 inspected IDs, 20 pagination cursors and a 15-second scan budget, plus any already-running bounded RPC. Truncation or a failed page produces source diagnostics while preserving verified addresses.
+
+On Linux, default discovery also matches exclusive kernel `FLOCK` records in `/proc/locks` to owned UUID files in `$CODEX_HOME/thread-writer-locks/`. Only matching unarchived `source=cli` rows are read from the same SQLite address metadata used before notification. The result is `writer_active`; it does not distinguish an idle client from a running model turn. A lock file without a held kernel lock is ignored. No lock is acquired, released or deleted. Process environments and conversation bodies are not read.
+
+The lock lifecycle follows Codex's [writer ownership implementation](https://github.com/openai/codex/blob/main/codex-rs/rollout/src/writer_lock.rs) and [live recorder lifecycle](https://github.com/openai/codex/blob/main/codex-rs/thread-store/src/local/live_writer.rs). This is a version-specific Linux fallback, verified on ext4. Process namespaces can hide kernel records, and older clients may not use these files. Source results describe the inspected environment, not every client on the host. A socket-backed address takes precedence when both sources find the same thread and workspace.
+
 ## Claude Code
 
 The adapter runs `claude agents --json` and selects exactly one live record matching both session UUID and workspace. It reads only that PID's `~/.claude/sessions/PID.json` metadata, verifies the UUID and workspace again, and checks the Unix socket's type and owner. It never reads credentials.
@@ -28,10 +36,14 @@ The frame contains `type: user`, session and message UUIDs, an honest `htalk:PEE
 
 This transport is an observed local client interface. It is not documented here as a stable public Claude API. Native inbound controls and filesystem permissions remain in force. If discovery fails, the message remains available in the shared inbox with `not_submitted`. `recipient_unavailable` does not establish that Claude is offline: discovery depends on the invoking command's execution scope. Check the peer in the intended send scope first; a known live session may require normal client permission approval for those specific commands.
 
+## OpenCode
+
+OpenCode uses an explicit loopback HTTP server and opaque session IDs. The server confirms the session and workspace before one `prompt_async` POST. Read [OpenCode setup and compatibility](opencode.md) for authentication, discovery coverage and how an accepted prompt can start a turn in an idle existing session.
+
 ## Adding an adapter
 
 Keep persistence and conversation rules in `Store`. A notification function takes the registered recipient, saved message and database path, then returns `(submission, detail)`. The store claims the one attempt before calling it. A failure after client submission might have begun must return `submission_unknown`; only a failure known to precede transmission may return `not_submitted`. Exceptions leave the claim uncertain.
 
 An adapter must verify available evidence for the exact session address, never broaden delivery to a name match, and never replay an uncertain attempt. Adding a harness also requires registration validation and focused tests. Shared storage, reply correlation, acknowledgments and waiting remain unchanged.
 
-The WebSocket client uses the library's documented [Unix connection helper](https://websockets.readthedocs.io/en/stable/reference/sync/client.html#websockets.sync.client.unix_connect), with bounded connection and RPC timeouts. No TCP endpoint is accepted.
+The Codex WebSocket client uses the library's documented [Unix connection helper](https://websockets.readthedocs.io/en/stable/reference/sync/client.html#websockets.sync.client.unix_connect), with bounded connection and RPC timeouts. Its socket mode accepts Unix sockets only; OpenCode has its separate loopback HTTP transport.

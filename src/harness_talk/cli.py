@@ -11,6 +11,7 @@ import uuid
 
 from . import __version__
 from .adapters import notify, probe
+from .discovery import discover
 from .store import Store, default_db, valid_wait
 
 
@@ -23,11 +24,17 @@ def parser():
     peer = commands.add_parser("peer").add_subparsers(dest="peer_command", required=True)
     add = peer.add_parser("add", help="Save an immutable concrete address. Does not notify or launch it.")
     add.add_argument("name")
-    add.add_argument("--harness", choices=("codex", "claude"), required=True)
+    add.add_argument("--harness", choices=("codex", "claude", "opencode"), required=True)
     add.add_argument("--session", required=True)
     add.add_argument("--workspace", required=True)
     add.add_argument("--socket", help="Optional Codex standalone app-server socket; default uses native codex queue.")
+    add.add_argument("--url", help="Local OpenCode server URL; defaults to http://127.0.0.1:4096.")
     peer.add_parser("list")
+    find = peer.add_parser("discover", help="Find native session addresses without registering or messaging them.")
+    find.add_argument("--harness", choices=("codex", "claude", "opencode"))
+    find.add_argument("--workspace", help="Only return sessions in this exact workspace.")
+    find.add_argument("--codex-socket", action="append", help="Inspect this running app-server socket; repeat for several servers.")
+    find.add_argument("--opencode-url", action="append", help="Inspect this local OpenCode server; repeat for several servers.")
     check = peer.add_parser("check", help="Verify available identity evidence without messaging.")
     check.add_argument("name")
     send = commands.add_parser("send", help="Save a request once; optional active wait.")
@@ -92,6 +99,14 @@ def main(argv=None):
     try:
         attempted_notification = False
         os.umask(0o077)
+        if args.command == "peer" and args.peer_command == "discover":
+            if args.codex_socket and args.harness not in (None, "codex"):
+                raise ValueError("codex_socket_requires_codex_discovery")
+            if args.opencode_url and args.harness not in (None, "opencode"):
+                raise ValueError("opencode_url_requires_opencode_discovery")
+            result = discover(args.harness, args.workspace, args.codex_socket, args.opencode_url)
+            print(json.dumps(result, ensure_ascii=False))
+            return 2 if all(source["status"] == "unavailable" for source in result["sources"]) else 0
         if args.command == "send":
             valid_wait(args.wait)
         if args.command == "wait":
@@ -99,7 +114,7 @@ def main(argv=None):
         store = Store(args.db)
         if args.command == "peer":
             if args.peer_command == "add":
-                result = store.add_peer(args.name, args.harness, args.session, args.workspace, args.socket)
+                result = store.add_peer(args.name, args.harness, args.session, args.workspace, args.socket, url=args.url)
             elif args.peer_command == "check":
                 result = probe(store.peer(args.name))
             else:
@@ -178,8 +193,9 @@ def main(argv=None):
                 f"Peer {args.name} is already bound to {registered['harness']} session {registered['session_id']}. "
                 "Inspect recovery.peers. Keep that address for the existing session; a separate session needs a different peer name.")
         elif error == "session_already_has_a_peer_name":
+            session_id = args.session if args.harness == "opencode" else str(uuid.UUID(args.session))
             registered = next(peer for peer in store.peers()
-                              if peer["harness"] == args.harness and peer["session_id"] == str(uuid.UUID(args.session)))
+                              if peer["harness"] == args.harness and peer["session_id"] == session_id)
             result.update(registered_peer=registered["name"], registered_session_id=registered["session_id"])
             result["next_action"] = (
                 f"Session {registered['session_id']} already uses peer {registered['name']}. "
