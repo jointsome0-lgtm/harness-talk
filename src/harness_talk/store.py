@@ -10,6 +10,8 @@ import uuid
 
 from .opencode import valid_session_id as valid_opencode_session_id, valid_url as valid_opencode_url
 
+SCHEMA_VERSION = 2
+
 
 def default_db():
     if os.environ.get("HTALK_DB"):
@@ -35,16 +37,17 @@ class Store:
         fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
         os.close(fd)
         with closing(self.connect()) as db, db:
+            # One write transaction: concurrent first opens serialize here, so the
+            # schema check, table creation and column addition cannot interleave.
+            db.execute("BEGIN IMMEDIATE")
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version not in (0, 1):
+            if version not in (0, 1, SCHEMA_VERSION):
                 raise ValueError("unsupported_database_version")
-            db.executescript("""
-                CREATE TABLE IF NOT EXISTS peers (
+            db.execute("""CREATE TABLE IF NOT EXISTS peers (
                     name TEXT PRIMARY KEY, harness TEXT NOT NULL,
                     session_id TEXT NOT NULL, workspace TEXT NOT NULL,
-                    socket TEXT, UNIQUE(harness, session_id)
-                );
-                CREATE TABLE IF NOT EXISTS messages (
+                    socket TEXT, url TEXT, UNIQUE(harness, session_id))""")
+            db.execute("""CREATE TABLE IF NOT EXISTS messages (
                     seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
                     sender TEXT NOT NULL REFERENCES peers(name),
                     recipient TEXT NOT NULL REFERENCES peers(name),
@@ -53,13 +56,12 @@ class Store:
                     submission TEXT NOT NULL CHECK(submission IN
                         ('not_submitted', 'submission_unknown', 'submitted')),
                     notification_started_at REAL, notification_finished_at REAL,
-                    notification_detail TEXT
-                );
-                PRAGMA user_version=1;
-            """)
-            # Additive: 0.2.0 databases gain a nullable server URL column for OpenCode peers.
+                    notification_detail TEXT)""")
+            # Version 2 adds the nullable OpenCode server URL. Rows, marks and
+            # addresses are untouched; 0.2 clients reject version 2 explicitly.
             if "url" not in {row[1] for row in db.execute("PRAGMA table_info(peers)")}:
                 db.execute("ALTER TABLE peers ADD COLUMN url TEXT")
+            db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     def connect(self):
         db = sqlite3.connect(self.path, timeout=5)

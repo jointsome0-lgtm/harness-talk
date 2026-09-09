@@ -1,11 +1,13 @@
 """OpenCode sessions through the official local HTTP server API.
 
-Reads use GET only. Delivery is one POST /session/{id}/prompt_async. Nothing here
-creates a session, resumes a turn, or stores a credential.
+Discovery and checks use GET only and never create a session. Delivery is one
+POST /session/{id}/prompt_async, which intentionally starts a turn in the
+existing session. No credential is stored.
 """
 from base64 import b64encode
 from contextlib import closing
 import http.client
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -40,8 +42,13 @@ def valid_url(value):
     if (not parts or parts.scheme not in ("http", "https") or not parts.hostname or parts.username is not None
             or parts.password is not None or parts.query or parts.fragment):
         raise ValueError("invalid_opencode_url")
-    if parts.hostname not in ("localhost", "::1") and not parts.hostname.startswith("127."):
-        raise ValueError("opencode_url_must_be_loopback")
+    if parts.hostname != "localhost":
+        try:
+            loopback = ipaddress.ip_address(parts.hostname).is_loopback
+        except ValueError:
+            loopback = False  # Names such as 127.attacker.example are not addresses.
+        if not loopback:
+            raise ValueError("opencode_url_must_be_loopback")
     parts.port  # A malformed port raises here.
     return parts.scheme + "://" + parts.netloc + parts.path.rstrip("/")
 
@@ -83,11 +90,13 @@ class Server:
             try:
                 connection.request(method, target, body=payload, headers=headers)
                 response = connection.getresponse()
-                status, raw = response.status, response.read(MAX_RESPONSE)
+                status, raw = response.status, response.read(MAX_RESPONSE + 1)
             except (OSError, http.client.HTTPException) as exc:
                 raise Uncertain("opencode_" + type(exc).__name__) from exc
         finally:
             connection.close()
+        if len(raw) > MAX_RESPONSE:
+            raise Uncertain("opencode_response_too_large")
         data = None
         if raw.strip():
             try:
@@ -194,15 +203,18 @@ def candidate(session_id, directory, runtime, reason, source, url, updated):
             "runtime_reason": reason, "source": source, "url": url, "updated_at": updated}
 
 
-def server_sessions(url):
-    """Sessions of the server's current project; GET only."""
-    server = Server(url)
-    source = {"source": "opencode_server", "url": server.url, "status": "ok", "version": None, "error": None}
+def server_sessions(url, workspace=None):
+    """Sessions of the requested project, or the server's own; GET only."""
+    source = {"harness": "opencode", "source": "opencode_server", "url": None, "status": "ok",
+              "version": None, "error": None, "detail": None}
     found = []
     try:
+        server = Server(url)  # Never echo a malformed URL: it may carry userinfo.
+        source["url"] = server.url
         source["version"] = health(server)
-        listed = expect(*server.request("GET", "/session"))
-        statuses = status_map(server)
+        scope = {"directory": workspace} if workspace else None
+        listed = expect(*server.request("GET", "/session", scope))
+        statuses = status_map(server, workspace)
         if not isinstance(listed, list):
             raise OpenCodeError("opencode_invalid_response")
         for item in listed:
@@ -217,45 +229,48 @@ def server_sessions(url):
             found.append(candidate(valid_session_id(item.get("id")), directory, runtime_status(statuses, item["id"]),
                                    "server_status", "opencode_server", server.url,
                                    int(updated // 1000) if type(updated) is int else None))
-    except OpenCodeError as exc:
-        code = str(exc)
-        source.update(status={"opencode_unreachable": "unreachable", "opencode_unauthorized": "unauthorized"}.get(code, "invalid"), error=code)
-        found = []
     except (OSError, ValueError, TypeError, KeyError) as exc:
-        source.update(status="invalid", error=str(exc) if isinstance(exc, Uncertain) else type(exc).__name__)
+        fixed = isinstance(exc, (OpenCodeError, Uncertain)) or str(exc) in ("invalid_opencode_url", "opencode_url_must_be_loopback")
+        source.update(status="unavailable", error=str(exc) if fixed else "opencode_" + type(exc).__name__)
         found = []
     return found, source
 
 
 def saved_sessions(path):
     """Unarchived root sessions from the local SQLite metadata, read-only. Liveness is unknown."""
-    source = {"source": "opencode_saved", "path": str(path), "status": "ok", "error": None}
+    source = {"harness": "opencode", "source": "opencode_saved", "path": str(path), "status": "ok",
+              "error": None, "detail": None}
     found = []
     if not path.is_file():
-        source["status"] = "missing"
+        source.update(status="unavailable", error="opencode_saved_metadata_missing")
         return found, source
     try:
         with closing(sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True, timeout=3)) as db:
             rows = db.execute("""SELECT id, directory, time_updated FROM session
                 WHERE parent_id IS NULL AND time_archived IS NULL
-                ORDER BY time_updated DESC LIMIT ?""", (SAVED_LIMIT,)).fetchall()
+                ORDER BY time_updated DESC LIMIT ?""", (SAVED_LIMIT + 1,)).fetchall()
+        if len(rows) > SAVED_LIMIT:
+            rows = rows[:SAVED_LIMIT]
+            source.update(status="partial", detail="opencode_saved_session_limit_reached")
         for session_id, directory, updated in rows:
             if not isinstance(directory, str) or not directory:
                 raise ValueError("opencode_invalid_saved_metadata")
             found.append(candidate(valid_session_id(session_id), directory, "unknown", "saved_metadata_only",
                                    "opencode_saved", None, int(updated // 1000) if type(updated) is int else None))
     except (sqlite3.Error, OSError, ValueError, TypeError) as exc:
-        source.update(status="error", error=type(exc).__name__ if isinstance(exc, (sqlite3.Error, OSError)) else str(exc))
+        source.update(status="unavailable", detail=None,
+                      error="opencode_saved_" + type(exc).__name__ if isinstance(exc, (sqlite3.Error, OSError)) else str(exc))
         found = []
     return found, source
 
 
-def discover(urls=None, *, database=None):
-    """Read-only discovery: {"sessions": [...], "sources": [...]}. Never creates
-    a session, resumes a turn, or reads message bodies."""
+def discover(urls=None, *, workspace=None, database=None):
+    """Read-only discovery: {"sessions": [...], "sources": [...]}. GET requests
+    and a read-only metadata file only; no session is created and no turn starts.
+    A malformed URL is confined to its own source entry."""
     sessions, sources, seen = [], [], set()
     for url in [DEFAULT_URL] if urls is None else urls:
-        found, source = server_sessions(url)
+        found, source = server_sessions(url, workspace)
         sources.append(source)
         for item in found:
             if item["session_id"] not in seen:

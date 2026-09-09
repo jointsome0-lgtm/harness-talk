@@ -14,7 +14,7 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
 from harness_talk import adapters, opencode
-from harness_talk.store import Store
+from harness_talk.store import SCHEMA_VERSION, Store
 
 
 class FakeOpenCode(BaseHTTPRequestHandler):
@@ -79,6 +79,7 @@ class OpenCodeTests(unittest.TestCase):
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), FakeOpenCode)
         self.server.state = {"requests": [], "status": {}, "sessions": {"ses_synthetic": session("ses_synthetic", str(self.path))}}
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
+        self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
         self.url = "http://127.0.0.1:%d" % self.server.server_address[1]
         self.store = Store(self.path / "mail.sqlite3")
@@ -91,8 +92,12 @@ class OpenCodeTests(unittest.TestCase):
     def test_registration_accepts_opaque_ids_and_migrates_existing_databases(self):
         self.assertEqual((self.peer["url"], self.peer["socket"], self.peer["session_id"]), (self.url, None, "ses_synthetic"))
         self.assertEqual(self.store.add_peer("default", "opencode", "ses_other", str(self.path))["url"], opencode.DEFAULT_URL)
+        for accepted in ("http://localhost:4096", "http://[::1]:4096", "https://127.0.0.1:4096/prefix/"):
+            self.assertEqual(opencode.valid_url(accepted), accepted.rstrip("/"))
         for kwargs, code in (({"session_id": "not-a-session"}, "invalid_opencode_session_id"),
                              ({"url": "http://example.invalid:4096"}, "opencode_url_must_be_loopback"),
+                             ({"url": "http://127.attacker.example:4096"}, "opencode_url_must_be_loopback"),
+                             ({"url": "http://10.0.0.1:4096"}, "opencode_url_must_be_loopback"),
                              ({"url": "http://user:secret@127.0.0.1:4096"}, "invalid_opencode_url"),
                              ({"socket": str(self.path / "x.sock")}, "opencode_uses_a_server_url_not_a_socket")):
             with self.assertRaisesRegex(ValueError, code):
@@ -109,6 +114,41 @@ class OpenCodeTests(unittest.TestCase):
         old = Store(legacy).peer("old")
         self.assertIsNone(old["url"])
         self.assertEqual(old, Store(legacy).add_peer(**{k: old[k] for k in old}))
+        with closing(sqlite3.connect(legacy)) as db:
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
+            db.execute("PRAGMA user_version=3")
+        with self.assertRaisesRegex(ValueError, "unsupported_database_version"):
+            Store(legacy)  # A newer schema is refused, as 0.2 refuses version 2.
+
+    def test_concurrent_first_open_migrates_once_and_keeps_rows(self):
+        legacy = self.path / "shared.sqlite3"
+        with closing(sqlite3.connect(legacy)) as db, db:
+            db.executescript("""CREATE TABLE peers (name TEXT PRIMARY KEY, harness TEXT NOT NULL, session_id TEXT NOT NULL,
+                workspace TEXT NOT NULL, socket TEXT, UNIQUE(harness, session_id));
+                CREATE TABLE messages (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL, sender TEXT NOT NULL,
+                recipient TEXT NOT NULL, in_reply_to TEXT UNIQUE, body TEXT NOT NULL, created_at REAL NOT NULL, ack_at REAL,
+                submission TEXT NOT NULL, notification_started_at REAL, notification_finished_at REAL, notification_detail TEXT);
+                PRAGMA user_version=1;""")
+            db.execute("INSERT INTO peers VALUES ('a', 'claude', 'b6ab4f5e-4c1a-4a35-9b3c-2c0b3f0e6f13', ?, NULL)", (str(self.path),))
+            db.execute("INSERT INTO peers VALUES ('b', 'claude', 'b6ab4f5e-4c1a-4a35-9b3c-2c0b3f0e6f14', ?, NULL)", (str(self.path),))
+            db.execute("INSERT INTO messages (id, sender, recipient, body, created_at, ack_at, submission) VALUES ('m1', 'a', 'b', 'kept', 1.0, 2.0, 'submitted')")
+        errors, barrier = [], threading.Barrier(4)
+        def open_store():
+            try:
+                barrier.wait(5)
+                Store(legacy)
+            except Exception as exc:  # Collected for the assertion below.
+                errors.append(exc)
+        threads = [threading.Thread(target=open_store) for _ in range(4)]
+        for thread in threads: thread.start()
+        for thread in threads: thread.join(10)
+        self.assertEqual(errors, [])
+        with closing(sqlite3.connect(legacy)) as db:
+            self.assertEqual([r[1] for r in db.execute("PRAGMA table_info(peers)")].count("url"), 1)
+            self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
+        store = Store(legacy)
+        self.assertEqual((store.get("m1")["ack_at"], store.get("m1")["submission"], store.peer("a")["url"]), (2.0, "submitted", None))
+        self.assertEqual(sorted(p["name"] for p in store.peers()), ["a", "b"])
 
     def test_probe_checks_exact_session_workspace_status_and_auth(self):
         self.assertEqual((adapters.probe(self.peer)["runtime_status"], adapters.probe(self.peer)["server_version"]), ("idle", "1.18.30"))
@@ -136,6 +176,8 @@ class OpenCodeTests(unittest.TestCase):
         self.assertNotIn("synthetic-secret", json.dumps(result) + json.dumps(self.store.peer("muse")))
         with self.assertRaisesRegex(ValueError, "opencode_unreachable"):
             opencode.probe({**self.peer, "url": "http://127.0.0.1:1"})
+        with patch.object(opencode, "MAX_RESPONSE", 16), self.assertRaisesRegex(OSError, "opencode_response_too_large"):
+            opencode.probe(self.peer)
 
     def test_single_attempt_outcomes_and_no_replay(self):
         question, _ = self.store.save("alice", "muse", "Synthetic question")
@@ -181,20 +223,33 @@ class OpenCodeTests(unittest.TestCase):
             db.executemany("INSERT INTO session VALUES (?,?,?,?,?)", [
                 ("ses_synthetic", None, str(self.path), 1788990000000, None), ("ses_saved", None, "/synthetic/saved", 1788980000000, None),
                 ("ses_archived", None, "/synthetic/x", 5, 6), ("ses_subagent", "ses_saved", "/synthetic/saved", 7, None)])
-        result = opencode.discover([self.url, "http://127.0.0.1:1"], database=saved)
+        bad = ["http://user:sensitive-secret@127.0.0.1:4096", "http://127.attacker.example:4096"]
+        result = opencode.discover([*bad, self.url, "http://127.0.0.1:1"], database=saved, workspace=str(self.path))
+        self.assertEqual([(s["status"], s["error"], s["url"]) for s in result["sources"][:2]],
+                         [("unavailable", "invalid_opencode_url", None), ("unavailable", "opencode_url_must_be_loopback", None)])
+        self.assertNotIn("sensitive-secret", json.dumps(result))
+        self.assertTrue(all(s["harness"] == "opencode" for s in result["sources"]))
+        self.assertTrue(all(q.get("directory") == str(self.path) for _, path, q, _ in self.server.state["requests"] if path in ("/session", "/session/status")))
         found = {s["session_id"]: s for s in result["sessions"]}
         self.assertEqual(set(found), {"ses_synthetic", "ses_busy", "ses_saved"})
         self.assertEqual((found["ses_busy"]["runtime_status"], found["ses_synthetic"]["runtime_status"]), ("busy", "idle"))
         self.assertEqual((found["ses_saved"]["runtime_status"], found["ses_saved"]["runtime_reason"], found["ses_saved"]["url"]),
                          ("unknown", "saved_metadata_only", None))
         self.assertEqual(found["ses_synthetic"]["source"], "opencode_server")
-        self.assertEqual([s["status"] for s in result["sources"]], ["ok", "unreachable", "ok"])
+        self.assertEqual([(s["status"], s["error"]) for s in result["sources"][2:]], [("ok", None), ("unavailable", "opencode_unreachable"), ("ok", None)])
         self.assertEqual(self.posts(), [])
+        with patch.object(opencode, "SAVED_LIMIT", 1):
+            limited = opencode.discover([], database=saved)
+        self.assertEqual((limited["sources"][0]["status"], limited["sources"][0]["detail"], len(limited["sessions"])),
+                         ("partial", "opencode_saved_session_limit_reached", 1))
+        with patch.object(opencode, "MAX_RESPONSE", 16):
+            self.assertEqual(opencode.discover([self.url], database=saved)["sources"][0]["error"], "opencode_response_too_large")
         self.assertNotIn("title", json.dumps(result))
         self.server.state["password"] = "synthetic-secret"
         with patch.dict(os.environ, {}, clear=True):
             result = opencode.discover([self.url], database=self.path / "absent.db")
-        self.assertEqual([(s["status"], s.get("error")) for s in result["sources"]], [("unauthorized", "opencode_unauthorized"), ("missing", None)])
+        self.assertEqual([(s["status"], s["error"]) for s in result["sources"]],
+                         [("unavailable", "opencode_unauthorized"), ("unavailable", "opencode_saved_metadata_missing")])
         self.assertEqual(result["sessions"], [])
         self.assertFalse((self.path / "absent.db").exists())
 
