@@ -8,7 +8,7 @@ Python 3.11 or newer. Storage and Claude notifications use the standard library.
 
 ```sh
 python3 -m venv .venv
-.venv/bin/pip install 'harness-talk==0.1.1'
+.venv/bin/pip install 'harness-talk==0.2.0'
 export PATH="$PWD/.venv/bin:$PATH"
 export HTALK_DB=/absolute/shared/writable/directory/mail.sqlite3
 ```
