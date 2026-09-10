@@ -16,45 +16,67 @@ from .store import Store, default_db, valid_wait
 
 
 def parser():
-    root = argparse.ArgumentParser(description=__doc__)
+    root = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="Use one shared database for all peers (HTALK_DB or --db).\n"
+               "Start with: htalk peer discover\n"
+               "Read messages: htalk --as NAME inbox",
+    )
     root.add_argument("--version", action="version", version=__version__)
-    root.add_argument("--db", type=Path, default=default_db())
-    root.add_argument("--as", dest="actor", default=os.environ.get("HTALK_PEER"), help="Your registered peer name; also HTALK_PEER.")
+    root.add_argument("--db", type=Path, default=default_db(), metavar="PATH",
+                      help="Shared SQLite file. Default: HTALK_DB, then $XDG_DATA_HOME/harness-talk/mail.sqlite3, "
+                           "then ~/.local/share/harness-talk/mail.sqlite3 (current: %(default)s).")
+    root.add_argument("--as", dest="actor", default=os.environ.get("HTALK_PEER"), metavar="NAME",
+                      help="Your registered peer name; overrides HTALK_PEER. Required for message commands.")
     commands = root.add_subparsers(dest="command", required=True)
-    peer = commands.add_parser("peer").add_subparsers(dest="peer_command", required=True)
-    add = peer.add_parser("add", help="Save an immutable concrete address. Does not notify or launch it.")
-    add.add_argument("name")
-    add.add_argument("--harness", choices=("codex", "claude", "opencode"), required=True)
-    add.add_argument("--session", required=True)
-    add.add_argument("--workspace", required=True)
-    add.add_argument("--socket", help="Optional Codex standalone app-server socket; default uses native codex queue.")
-    add.add_argument("--url", help="Local OpenCode server URL; defaults to http://127.0.0.1:4096.")
-    peer.add_parser("list")
-    find = peer.add_parser("discover", help="Find native session addresses without registering or messaging them.")
-    find.add_argument("--harness", choices=("codex", "claude", "opencode"))
-    find.add_argument("--workspace", help="Only return sessions in this exact workspace.")
+    peer = commands.add_parser("peer", help="Discover, register and check session addresses.",
+                               description="Discover sessions and manage registered addresses. These commands do not message peers.").add_subparsers(dest="peer_command", required=True)
+    add = peer.add_parser("add", help="Register an immutable session address.",
+                          description="Save a peer name and exact session address. Existing names cannot be reassigned. Does not notify or launch a client.")
+    add.add_argument("name", help="Local name: 1–64 lowercase letters, digits, _ or -; start with a letter or digit.")
+    add.add_argument("--harness", choices=("codex", "claude", "opencode"), required=True, help="Client that owns the session.")
+    add.add_argument("--session", required=True, help="Exact ID from discovery: Codex/Claude UUID or OpenCode ses... ID.")
+    add.add_argument("--workspace", required=True, help="Session workspace path; must match after resolving paths.")
+    add.add_argument("--socket", help="Codex only: explicit standalone app-server Unix socket. Omit to use native codex queue.")
+    add.add_argument("--url", help="OpenCode only: loopback server URL (default: http://127.0.0.1:4096).")
+    peer.add_parser("list", help="List registered peer addresses.", description="Read registered peer names and their immutable session addresses.")
+    find = peer.add_parser("discover", help="Find native session addresses.",
+                           description="Find native session addresses without registering or messaging them. Source statuses describe discovery coverage; an empty result does not prove that no client is running.")
+    find.add_argument("--harness", choices=("codex", "claude", "opencode"), help="Inspect only this client (default: all three).")
+    find.add_argument("--workspace", help="Only return sessions matching this resolved workspace path.")
     find.add_argument("--codex-socket", action="append", help="Inspect this running app-server socket; repeat for several servers.")
     find.add_argument("--opencode-url", action="append", help="Inspect this local OpenCode server; repeat for several servers.")
-    check = peer.add_parser("check", help="Verify available identity evidence without messaging.")
-    check.add_argument("name")
-    send = commands.add_parser("send", help="Save a request once; optional active wait.")
-    send.add_argument("recipient")
-    send.add_argument("--id", help="Caller-generated UUID for safe retry after interrupted output.")
-    reply = commands.add_parser("reply", help="Answer the exact request. Identical retries do not notify again.")
-    reply.add_argument("message_id")
+    check = peer.add_parser("check", help="Check a registered session's identity without messaging.",
+                            description="Verify available identity evidence for a registered peer. Run in the scope that will send; unavailable evidence does not prove that the client is offline.")
+    check.add_argument("name", help="Registered peer name.")
+    send = commands.add_parser("send", help="Save a request and attempt one notification.",
+                               description="Save a request before attempting one notification. After uncertain delivery, recover with show, wait or sent; do not send it again under a new ID.")
+    send.add_argument("recipient", help="Registered recipient peer name.")
+    send.add_argument("--id", help="Caller-generated UUID, saved before sending. An identical retry returns the saved request without another notification.")
+    reply = commands.add_parser("reply", help="Save an answer to an exact request.",
+                                description="Answer the exact incoming request. An identical retry returns the saved answer without another notification.")
+    reply.add_argument("message_id", help="Incoming request UUID from inbox or show.")
     for cmd in (send, reply):
         text = cmd.add_mutually_exclusive_group(required=True)
-        text.add_argument("--message")
-        text.add_argument("--message-file", type=Path)
-        cmd.add_argument("--no-notify", action="store_true", help="Save for inbox retrieval only.")
-    send.add_argument("--wait", type=float, default=0, help="Wait 0–45 seconds; no model calls or retries.")
-    wait = commands.add_parser("wait", help="Wait again on a saved request, without another send.")
-    wait.add_argument("message_id")
-    wait.add_argument("--seconds", type=float, default=45)
+        text.add_argument("--message", help="Nonblank message body, at most 32,000 UTF-8 bytes.")
+        text.add_argument("--message-file", type=Path, metavar="PATH", help="Read the same message body from a local text file.")
+        cmd.add_argument("--no-notify", action="store_true", help="Save for inbox polling without notifying the client.")
+    send.add_argument("--wait", type=float, default=0, metavar="SECONDS",
+                      help="Wait 0–45 seconds for an answer (default: %(default)s). Waiting polls the database; it does not resend.")
+    wait = commands.add_parser("wait", help="Wait for an answer to a saved request.",
+                               description="Poll a saved outgoing request for its answer. Safe to resume after timeout or interruption; does not resend or acknowledge.")
+    wait.add_argument("message_id", help="Outgoing request UUID from send, sent or show.")
+    wait.add_argument("--seconds", type=float, default=45,
+                      help="Wait 0–45 seconds; 0 checks once (default: %(default)s).")
     for name in ("show", "ack"):
-        commands.add_parser(name).add_argument("message_id")
-    commands.add_parser("inbox", help="Incoming unanswered questions and unacknowledged answers.")
-    commands.add_parser("sent", help="Recover outgoing IDs after interruption, including uncertain notifications.")
+        description = ("Read a saved message and its correlated answer without acknowledging."
+                       if name == "show" else "Record that you read an incoming message. A question stays open until answered.")
+        commands.add_parser(name, help=description, description=description).add_argument(
+            "message_id", help="Message UUID from inbox, sent or another command's result.")
+    commands.add_parser("inbox", help="List incoming work that remains open.",
+                        description="Read incoming unanswered questions and unacknowledged answers. Reading changes no acknowledgments.")
+    commands.add_parser("sent", help="List outgoing messages and recover their IDs.",
+                        description="Recover outgoing IDs after interruption, including messages with uncertain notifications. Does not resend.")
     return root
 
 

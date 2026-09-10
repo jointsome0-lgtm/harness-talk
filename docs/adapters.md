@@ -4,6 +4,20 @@ Verified on 2026-09-08 with htalk 0.1.1: ordinary Codex `0.153.4` and Claude Cod
 
 In the Claude-initiated exchange, Codex could not discover Claude from its ordinary tool execution scope: the reply was saved, but its notification was `not_submitted`. Claude recovered and acknowledged the answer through `--wait`. In the reverse exchange, Codex used its standard approved host command scope for the read-only `peer check` and a single send. Idle Claude consumed the notification and replied; Codex read and acknowledged the answer, then later consumed its queued notice. Three of the four notifications were submitted; none was replayed.
 
+## Discovery results
+
+`peer discover` returns `sessions` with exact IDs, workspaces, runtime evidence and connection details. `sources` reports `ok`, `partial` or `unavailable`. An empty result describes only the inspected environment: sandboxes, process namespaces, stopped servers and custom client homes can limit coverage. Addresses are a snapshot; `peer check` and notification preflight verify them again.
+
+| Source | Runtime evidence |
+| --- | --- |
+| Claude `agents --json` | `running` requires a live native record and matching session, workspace and owned socket. It does not indicate model activity. |
+| Codex app-server | `idle`/`active` describes a loaded thread; `systemError` reports a loaded thread with a runtime problem. |
+| Codex writer locks | `writer_active` means a native CLI holds its kernel writer lock, not that a model turn or queue consumer is active. |
+| OpenCode server | `idle`, `busy` or `retry` is the server's state. An idle session need not have an attached TUI. |
+| OpenCode saved metadata | `unknown` only establishes a saved, unarchived session. Supply its running server URL before sending. |
+
+Use `--workspace` or `--harness` to filter. Repeat `--codex-socket` or `--opencode-url` to inspect explicit servers. The defaults and limits for each client follow below.
+
 ## Codex
 
 Ordinary local TUI sessions use `codex queue --thread EXACT_UUID --message TEXT`. `htalk` passes no model, sandbox, approval, profile, or configuration overrides and never types into tmux.
