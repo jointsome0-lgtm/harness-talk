@@ -19,7 +19,7 @@ A checkout is never the default database location. Before an existing database i
 
 ## Notifications and recovery
 
-The database commits before client I/O. Identity preflight checks the exact recipient, then the store claims at most one notification attempt. A notification contains the inbox command and message ID, not the message body. It preserves the recipient's configured client/model settings and grants no additional permissions.
+After saving a message, the store durably claims its one notification attempt. The adapter then checks the exact recipient before client submission. An interruption during that check can leave `submission_unknown`; it does not permit another attempt. A notification contains the inbox command and message ID, not the message body. It preserves the recipient's configured client/model settings and grants no additional permissions.
 
 Run `peer check` in the scope that will send. `recipient_unavailable` can mean restricted discovery rather than an offline client. Use the client's normal permission approval for a needed host check; do not replay an already-saved notification. An unavailable client can later retrieve the message from `inbox`.
 
