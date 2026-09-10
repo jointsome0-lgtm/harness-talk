@@ -11,12 +11,11 @@ import uuid
 from .opencode import valid_session_id as valid_opencode_session_id, valid_url as valid_opencode_url
 
 SCHEMA_VERSION = 2
-# A waiting requester refreshes its registration every WAIT_HEARTBEAT seconds
-# for at most WAIT_TTL seconds ahead, so a killed waiter expires quickly. A reply
-# skips its client notice only while the registration still has WAIT_MARGIN left.
-WAIT_HEARTBEAT, WAIT_TTL, WAIT_MARGIN = 1.0, 3.0, 1.0
-# Notification outcomes that mean the recipient receives the message another way.
-NOT_NEEDED = ("acknowledged_before_notification", "recipient_waiting_for_this_answer")
+# An answer is skipped only on evidence: the recipient acknowledged it, or the
+# recipient's own wait already returned it. A registered wait is merely a hint
+# that such a receipt may arrive within WAIT_GRACE seconds; it never suppresses.
+WAIT_GRACE = 1.0
+NOT_NEEDED = ("acknowledged_before_notification", "returned_by_recipient_wait")
 
 
 def default_db():
@@ -36,20 +35,24 @@ def valid_wait(seconds):
 
 
 def skip_reason(db, message_id, recipient):
-    """Why a claimed notification is no longer needed, or None. Read-only: an
-    acknowledged message, or an answer whose requester is polling for it now."""
-    row = db.execute("SELECT ack_at, in_reply_to FROM messages WHERE id=? AND recipient=?",
+    """Why a claimed notification is no longer needed, or None. Read-only: the
+    recipient acknowledged the message, or its own wait already returned this answer."""
+    row = db.execute("SELECT ack_at, in_reply_to, wait_returned_at FROM messages WHERE id=? AND recipient=?",
                      (message_id, recipient)).fetchone()
     if row is None:
         raise ValueError("notification_message_not_found")
     if row[0] is not None:
         return "acknowledged_before_notification"
-    if row[1] is not None:
-        latest = db.execute("SELECT MAX(until) FROM waits WHERE message_id=? AND actor=?",
-                            (row[1], recipient)).fetchone()[0]
-        if latest is not None and latest - time.time() >= WAIT_MARGIN:
-            return "recipient_waiting_for_this_answer"
+    if row[1] is not None and row[2] is not None:
+        return "returned_by_recipient_wait"
     return None
+
+
+def wait_deadline(db, message_id, recipient):
+    """Latest registered poll by the recipient on this answer's request, or None."""
+    row = db.execute("""SELECT MAX(w.until) FROM waits w JOIN messages m ON m.in_reply_to = w.message_id
+        WHERE m.id=? AND w.actor=? AND w.actor=m.recipient""", (message_id, recipient)).fetchone()
+    return row[0]
 
 
 class Store:
@@ -85,8 +88,11 @@ class Store:
             # addresses are untouched; 0.2 clients reject version 2 explicitly.
             if "url" not in {row[1] for row in db.execute("PRAGMA table_info(peers)")}:
                 db.execute("ALTER TABLE peers ADD COLUMN url TEXT")
-            # Active polls on a request. Additive: the version stays 2, and a 0.3.0
-            # client ignores the table, so its waits and replies behave as before.
+            # Additive, version unchanged: a 0.3.0 client ignores both, so its waits
+            # and replies behave as before. wait_returned_at records that the
+            # recipient's wait returned an answer; waits lists polls in progress.
+            if "wait_returned_at" not in {row[1] for row in db.execute("PRAGMA table_info(messages)")}:
+                db.execute("ALTER TABLE messages ADD COLUMN wait_returned_at REAL")
             db.execute("""CREATE TABLE IF NOT EXISTS waits (
                     token TEXT PRIMARY KEY, message_id TEXT NOT NULL REFERENCES messages(id),
                     actor TEXT NOT NULL, until REAL NOT NULL)""")
@@ -187,7 +193,7 @@ class Store:
             return self.get(message_id)
         message = self.get(message_id)
         try:
-            reason = self.skip_reason(message)
+            reason = self.skip_after_grace(message)
         except sqlite3.Error:
             reason = None  # The adapter repeats this check before writing.
         try:
@@ -210,18 +216,40 @@ class Store:
         with closing(self.connect()) as db:
             return skip_reason(db, message["id"], message["recipient"])
 
+    def skip_after_grace(self, message):
+        """While the recipient has a poll registered on this answer's request, give
+        that poll up to WAIT_GRACE seconds to return the answer and record it. A
+        stale registration only costs this bounded wait; it never skips by itself."""
+        with closing(self.connect()) as db:
+            deadline = wait_deadline(db, message["id"], message["recipient"])
+        end = time.monotonic() + (0 if deadline is None else max(0, min(WAIT_GRACE, deadline - time.time())))
+        while True:
+            reason = self.skip_reason(message)
+            if reason or time.monotonic() >= end:
+                return reason
+            time.sleep(0.02)
+
     def register_wait(self, token, message_id, actor, until):
         with closing(self.connect()) as db, db:
             db.execute("DELETE FROM waits WHERE until < ?", (time.time() - 60,))
-            db.execute("""INSERT INTO waits VALUES (?, ?, ?, ?)
-                ON CONFLICT(token) DO UPDATE SET until=excluded.until""", (token, message_id, actor, until))
+            db.execute("INSERT INTO waits VALUES (?, ?, ?, ?)", (token, message_id, actor, until))
 
     def forget_wait(self, token):
         try:
             with closing(self.connect()) as db, db:
                 db.execute("DELETE FROM waits WHERE token=?", (token,))
         except sqlite3.Error:
-            pass  # The registration expires within WAIT_TTL anyway.
+            pass  # A leftover row only makes one later reply wait WAIT_GRACE.
+
+    def record_wait_return(self, answer_id, actor):
+        """The recipient's wait is returning this answer: a durable receipt that a
+        not-yet-sent notice is redundant. Not an acknowledgment."""
+        try:
+            with closing(self.connect()) as db, db:
+                db.execute("UPDATE messages SET wait_returned_at=COALESCE(wait_returned_at, ?) WHERE id=? AND recipient=?",
+                           (time.time(), answer_id, actor))
+        except sqlite3.Error:
+            pass  # The answer is still returned; at worst a redundant notice follows.
 
     def dismiss_acknowledged(self, message):
         if message["ack_at"] is not None and self.dismiss_notification is not None:
@@ -273,17 +301,17 @@ class Store:
         request = self.get(message_id, actor)
         if request["sender"] != actor or request["in_reply_to"] is not None:
             raise ValueError("wait_requires_own_request")
-        # Register the poll first: an answer saved from now on is read here, so its
-        # client notice is skipped while this registration is fresh.
-        token, deadline, ends_at, refreshed = str(uuid.uuid4()), time.monotonic() + seconds, time.time() + seconds, None
+        # Register the poll so a reply saved meanwhile waits briefly for this
+        # command to return it; the return itself is recorded on the answer.
+        token, deadline = str(uuid.uuid4()), time.monotonic() + seconds
         try:
+            if seconds:
+                self.register_wait(token, message_id, actor, time.time() + seconds)
             while True:
-                if seconds and (refreshed is None or time.monotonic() - refreshed >= WAIT_HEARTBEAT):
-                    self.register_wait(token, message_id, actor, min(ends_at, time.time() + WAIT_TTL))
-                    refreshed = time.monotonic()
                 result = self.get(message_id, actor)
                 if result["reply"]:
-                    return result
+                    self.record_wait_return(result["reply"]["id"], actor)
+                    return self.get(message_id, actor)
                 if time.monotonic() >= deadline:
                     result["wait_ended"] = "timeout"
                     return result

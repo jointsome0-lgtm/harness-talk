@@ -11,7 +11,7 @@ Choose one writable directory shared by the participants. SQLite writers need di
 3. `$XDG_DATA_HOME/harness-talk/mail.sqlite3`
 4. `~/.local/share/harness-talk/mail.sqlite3`
 
-A checkout is never the default database location. Before an existing database is opened by 0.3, update every participant: the first storage command migrates it to schema 2, preserving peers, messages and acknowledgments. Older clients reject it. The `waits` table is added to schema 2 files without changing the version; a 0.3.0 client ignores it, so its waits and replies keep the earlier notification behavior. Discovery does not open or migrate the database.
+A checkout is never the default database location. Before an existing database is opened by 0.3, update every participant: the first storage command migrates it to schema 2, preserving peers, messages and acknowledgments. Older clients reject it. The `waits` table and the nullable `messages.wait_returned_at` column are added to schema 2 files without changing the version; a 0.3.0 client ignores them, so its waits and replies keep the earlier notification behavior. Discovery does not open or migrate the database.
 
 `peer add` records an immutable name and session address. It does not notify the session. `peer list` shows registered addresses; `peer discover` finds addresses outside the registry. Session IDs are UUIDs for Codex/Claude and opaque `ses...` IDs for OpenCode. Workspace comparisons resolve paths. Endpoint options must agree with the selected client.
 
@@ -35,7 +35,9 @@ None proves model receipt. `ack_at` records explicit acknowledgment. A saved ans
 
 A message acknowledged before the notification claim is not submitted. Every client route rechecks the saved state after its preflight, immediately before the one write: the Claude socket frame, the OpenCode `prompt_async` POST, the native `codex queue` command and the app-server `thread/queue/add` call. An acknowledgment received during preflight prevents transmission and records `not_submitted` with `acknowledged_before_notification`. The message and read mark remain saved; the one-attempt rule still applies.
 
-`wait` and `send --wait` register the poll they are running, in an additive `waits` table, and refresh that registration every second for at most three seconds ahead. An answer saved while its requester is polling for that request is returned by the poll, so its client notice is skipped: `not_submitted` with `recipient_waiting_for_this_answer`, exit 0, and the answer stays in the requester's inbox until acknowledged. The skip applies only while the registration has at least one second left, so a wait about to time out is still notified. A waiter that ends, times out or is interrupted removes its registration; a killed waiter expires within three seconds, during which an answer would be saved without a notice and remains retrievable with `show`, `inbox` or `wait`. Requests are never skipped this way, and `wait --seconds 0` registers nothing.
+`wait` and `send --wait` return an answer by first recording on that answer that the recipient's wait returned it (`wait_returned_at`). This is a receipt of observation, not an acknowledgment: the answer stays in the inbox, `ack_at` is untouched, and questions are not closed. A claimed notification for an answer carrying that receipt is skipped with `not_submitted` and `returned_by_recipient_wait`, exit 0, whether the receipt already exists when the reply is saved or appears during the client preflight before the final check. `show`, `inbox` and `sent` write nothing.
+
+While a wait is running it also registers itself in an additive `waits` table and removes that row when it ends, times out or is interrupted. The registration is only a hint: a reply saved during it gives the poll up to one second to return the answer and write the receipt before notifying. It never suppresses a notice by itself, so a killed waiter costs at most one redundant notice, never a missing wake-up. `wait --seconds 0` registers nothing but still records an answer it returns.
 
 A race after the final check, including a notice already accepted by the client, remains possible. This check cannot recall such a notice or guarantee that it never causes another model turn.
 
@@ -43,7 +45,7 @@ The command's `notification_cleanup` describes this removal attempt. `removed` c
 
 `show` retrieves one message and its correlated answer. `inbox` finds incoming work; `sent` recovers outgoing IDs. Results carry executable `recovery` commands with the database, peer name and full IDs. Read an answer before executing `ack_after_reading`.
 
-`wait REQUEST_UUID --seconds N` polls only the database for 0 to 45 seconds and registers that poll so an answer arriving meanwhile is not also announced to your client. Resume it after timeout or interruption. It never resends or acknowledges. `--no-notify` saves a message for polling only. `--message-file PATH` supplies a multiline body, including paths to artifacts the recipient should inspect.
+`wait REQUEST_UUID --seconds N` polls only the database for 0 to 45 seconds and records an answer it returns so that answer is not also announced to your client. Resume it after timeout or interruption. It never resends or acknowledges. `--no-notify` saves a message for polling only. `--message-file PATH` supplies a multiline body, including paths to artifacts the recipient should inspect.
 
 For repeatable automation, generate and retain a UUID before `send --id UUID`. Identical retries return the saved request; differing contents are rejected. The same applies to an identical `reply` retry. There is no notification replay command. After interrupted output, inspect `recovery`, `message_id` and `persistence`; `unknown` persistence requires checking the database before deciding what happened.
 
@@ -51,7 +53,7 @@ For repeatable automation, generate and retain a UUID before `send --id UUID`. I
 
 | Code | Meaning |
 | --- | --- |
-| 0 | Local operation succeeded, including `--no-notify`, an identical retry, acknowledgment before notification completed, or an answer its requester was polling for. |
+| 0 | Local operation succeeded, including `--no-notify`, an identical retry, acknowledgment before notification completed, or an answer already returned by the requester's wait. |
 | 2 | Invalid input, all discovery sources unavailable, or this invocation attempted notification without confirmed submission or acknowledgment. The message may already be saved. |
 | 130 | Interrupted; read the recovery guidance. |
 
