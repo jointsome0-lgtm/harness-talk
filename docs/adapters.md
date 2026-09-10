@@ -58,6 +58,10 @@ The frame contains `type: user`, session and message UUIDs, an honest `htalk:PEE
 
 This transport is an observed local client interface. It is not documented here as a stable public Claude API. Native inbound controls and filesystem permissions remain in force. If discovery fails, the message remains available in the shared inbox with `not_submitted`. `recipient_unavailable` does not establish that Claude is offline: discovery depends on the invoking command's execution scope. Check the peer in the intended send scope first; a known live session may require normal client permission approval for those specific commands.
 
+After discovery and socket connection, the adapter rereads the message's acknowledgment before writing the frame. If the recipient acknowledged it during preflight, no frame is written. This was checked with ordinary Claude Code `2.1.267` on 2026-09-10 using a controlled preflight delay until after acknowledgment and the current turn's final response. The message remained acknowledged, no notification entered the native queue, and no extra turn appeared during the following minute.
+
+The inspected `2.1.267` ordinary-session socket handler has no message-cancellation action. The SDK's separate `cancel_async_message` protocol does not establish support through this socket. An already accepted Claude notice cannot be withdrawn by htalk; in an earlier native case it arrived after acknowledgment within the current turn. The final database check narrows the race but cannot eliminate delivery that starts after the check and before acknowledgment.
+
 ## OpenCode
 
 OpenCode uses an explicit loopback HTTP server and opaque session IDs. The server confirms the session and workspace before one `prompt_async` POST. Read [OpenCode setup and compatibility](opencode.md) for authentication, discovery coverage and how an accepted prompt can start a turn in an idle existing session.

@@ -15,12 +15,32 @@ from .discovery import discover
 from .store import Store, default_db, valid_wait
 
 
+class Parser(argparse.ArgumentParser):
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("formatter_class", argparse.RawDescriptionHelpFormatter)
+        super().__init__(*args, **kwargs)
+
+
 def parser():
-    root = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Use one shared database for all peers (HTALK_DB or --db).\n"
-               "Start with: htalk peer discover\n"
-               "Read messages: htalk --as NAME inbox",
+    root = Parser(
+        prog="htalk", description=__doc__,
+        epilog="Setup: use one shared database and register both existing sessions.\n"
+               "  htalk peer discover\n"
+               "  htalk peer add --help\n\n"
+               "Exchange, using each session's own registered name:\n"
+               "  htalk --as alice send bob --message 'Please check this.' --wait 45\n"
+               "  htalk --as bob inbox\n"
+               "  htalk --as bob ack REQUEST_ID\n"
+               "  htalk --as bob reply REQUEST_ID --message 'Checked.'\n"
+               "  htalk --as alice wait REQUEST_ID\n"
+               "  htalk --as alice ack REPLY_ID\n"
+               "Read the body before ack. REQUEST_ID and REPLY_ID are message IDs from JSON,\n"
+               "not native session IDs. A reply has its own id and an in_reply_to request ID.\n\n"
+               "Put --db and --as before the command, or set HTALK_DB and HTALK_PEER.\n"
+               "Use htalk COMMAND --help, or htalk peer COMMAND --help, for examples.\n"
+               "Commands return JSON with state, submission and recovery guidance.\n"
+               "Exit 0: completed. Exit 2: invalid input or unconfirmed notification;\n"
+               "the message may be saved. Exit 130: interrupted; inspect recovery.",
     )
     root.add_argument("--version", action="version", version=__version__)
     root.add_argument("--db", type=Path, default=default_db(), metavar="PATH",
@@ -30,31 +50,55 @@ def parser():
                       help="Your registered peer name; overrides HTALK_PEER. Required for message commands.")
     commands = root.add_subparsers(dest="command", required=True)
     peer = commands.add_parser("peer", help="Discover, register and check session addresses.",
-                               description="Discover sessions and manage registered addresses. These commands do not message peers.").add_subparsers(dest="peer_command", required=True)
+                               description="Discover sessions and manage registered addresses. These commands do not message peers.",
+                               epilog="Start with htalk peer discover, then htalk peer add --help.\n"
+                                      "After registering: htalk peer check NAME\n"
+                                      "Use the same --db PATH before peer for both sessions.").add_subparsers(dest="peer_command", required=True)
     add = peer.add_parser("add", help="Register an immutable session address.",
-                          description="Save a peer name and exact session address. Existing names cannot be reassigned. Does not notify or launch a client.")
+                          description="Save a peer name and exact session address. Existing names cannot be reassigned. Does not notify or launch a client.",
+                          epilog="Examples, with the exact session ID and workspace from discovery:\n"
+                                 "  htalk peer add alice --harness codex --session SESSION_UUID --workspace /project\n"
+                                 "  htalk peer add bob --harness claude --session SESSION_UUID --workspace /project\n"
+                                 "  htalk peer add muse --harness opencode --session ses_ID --workspace /project --url http://127.0.0.1:4096\n\n"
+                                 "Register both peers in the same database. Then run htalk peer check NAME.")
     add.add_argument("name", help="Local name: 1–64 lowercase letters, digits, _ or -; start with a letter or digit.")
     add.add_argument("--harness", choices=("codex", "claude", "opencode"), required=True, help="Client that owns the session.")
     add.add_argument("--session", required=True, help="Exact ID from discovery: Codex/Claude UUID or OpenCode ses... ID.")
     add.add_argument("--workspace", required=True, help="Session workspace path; must match after resolving paths.")
     add.add_argument("--socket", help="Codex only: explicit standalone app-server Unix socket. Omit to use native codex queue.")
     add.add_argument("--url", help="OpenCode only: loopback server URL (default: http://127.0.0.1:4096).")
-    peer.add_parser("list", help="List registered peer addresses.", description="Read registered peer names and their immutable session addresses.")
+    peer.add_parser("list", help="List registered peer addresses.", description="Read registered peer names and their immutable session addresses.",
+                    epilog="Example: htalk --db /shared/mail.sqlite3 peer list\n"
+                           "These are saved addresses; use peer check NAME to inspect a recipient now.")
     find = peer.add_parser("discover", help="Find native session addresses.",
-                           description="Find native session addresses without registering or messaging them. Source statuses describe discovery coverage; an empty result does not prove that no client is running.")
+                           description="Find native session addresses without registering or messaging them. Source statuses describe discovery coverage; an empty result does not prove that no client is running.",
+                           epilog="Examples:\n"
+                                  "  htalk peer discover --harness claude --workspace /project\n"
+                                  "  htalk peer discover --harness opencode --opencode-url http://127.0.0.1:4096\n"
+                                  "Use sessions[].session_id and workspace with peer add; inspect sources for gaps.")
     find.add_argument("--harness", choices=("codex", "claude", "opencode"), help="Inspect only this client (default: all three).")
     find.add_argument("--workspace", help="Only return sessions matching this resolved workspace path.")
     find.add_argument("--codex-socket", action="append", help="Inspect this running app-server socket; repeat for several servers.")
     find.add_argument("--opencode-url", action="append", help="Inspect this local OpenCode server; repeat for several servers.")
     check = peer.add_parser("check", help="Check a registered session's identity without messaging.",
-                            description="Verify available identity evidence for a registered peer. Run in the scope that will send; unavailable evidence does not prove that the client is offline.")
+                            description="Verify available identity evidence for a registered peer. Run in the scope that will send; unavailable evidence does not prove that the client is offline.",
+                            epilog="Example: htalk peer check bob\n"
+                                   "Run this before send. A successful check does not prove message receipt.")
     check.add_argument("name", help="Registered peer name.")
     send = commands.add_parser("send", help="Save a request and attempt one notification.",
-                               description="Save a request before attempting one notification. After uncertain delivery, recover with show, wait or sent; do not send it again under a new ID.")
+                               description="Save a request before attempting one notification. After uncertain delivery, recover with show, wait or sent; do not send it again under a new ID.",
+                               epilog="Example, after both peers are registered:\n"
+                                      "  htalk --as alice send bob --message 'Please check this.' --wait 45\n"
+                                      "Save id as REQUEST_ID. If reply is present, read reply.body and ack reply.id.\n"
+                                      "Otherwise continue with htalk --as alice wait REQUEST_ID.\n"
+                                      "Put --db PATH and --as NAME before send, or use HTALK_DB and HTALK_PEER.")
     send.add_argument("recipient", help="Registered recipient peer name.")
     send.add_argument("--id", help="Caller-generated UUID, saved before sending. An identical retry returns the saved request without another notification.")
     reply = commands.add_parser("reply", help="Save an answer to an exact request.",
-                                description="Answer the exact incoming request. An identical retry returns the saved answer without another notification.")
+                                description="Answer the exact incoming request. An identical retry returns the saved answer without another notification.",
+                                epilog="Example: htalk --as bob reply REQUEST_ID --message 'Checked.'\n"
+                                       "REQUEST_ID is the incoming question's id from inbox or show.\n"
+                                       "The saved answer has its own id; the original sender acknowledges that answer.")
     reply.add_argument("message_id", help="Incoming request UUID from inbox or show.")
     for cmd in (send, reply):
         text = cmd.add_mutually_exclusive_group(required=True)
@@ -64,19 +108,37 @@ def parser():
     send.add_argument("--wait", type=float, default=0, metavar="SECONDS",
                       help="Wait 0–45 seconds for an answer (default: %(default)s). Waiting polls the database; it does not resend.")
     wait = commands.add_parser("wait", help="Wait for an answer to a saved request.",
-                               description="Poll a saved outgoing request for its answer. Safe to resume after timeout or interruption; does not resend or acknowledge.")
+                               description="Poll a saved outgoing request for its answer. Safe to resume after timeout or interruption; does not resend or acknowledge.",
+                               epilog="Example: htalk --as alice wait REQUEST_ID --seconds 45\n"
+                                      "On timeout, use this same request ID again. If reply is present, read\n"
+                                      "reply.body, then run htalk --as alice ack REPLY_ID using reply.id.")
     wait.add_argument("message_id", help="Outgoing request UUID from send, sent or show.")
     wait.add_argument("--seconds", type=float, default=45,
                       help="Wait 0–45 seconds; 0 checks once (default: %(default)s).")
     for name in ("show", "ack"):
         description = ("Read a saved message and its correlated answer without acknowledging."
                        if name == "show" else "Record that you read an incoming message and remove its pending Codex notice when possible. A question stays open until answered.")
-        commands.add_parser(name, help=description, description=description).add_argument(
+        example = ("Example: htalk --as alice show MESSAGE_ID\n"
+                   "Only the sender or recipient can show a message. ack_at is its read mark;\n"
+                   "reply is the correlated answer, with its own id and ack_at."
+                   if name == "show" else
+                   "Example: htalk --as alice ack REPLY_ID\n"
+                   "For an answer returned by wait, use reply.id, not the outgoing request's id.\n"
+                   "Repeated ack is safe. Read notification_cleanup separately: ack may succeed\n"
+                   "while cleanup fails. Use recovery.retry_notification_cleanup when returned.\n"
+                   "Claude/OpenCode do not support withdrawing an already queued notice.")
+        commands.add_parser(name, help=description, description=description, epilog=example).add_argument(
             "message_id", help="Message UUID from inbox, sent or another command's result.")
     commands.add_parser("inbox", help="List incoming work that remains open.",
-                        description="Read incoming unanswered questions and unacknowledged answers. Reading changes no acknowledgments.")
+                        description="Read incoming unanswered questions and unacknowledged answers. Reading changes no acknowledgments.",
+                        epilog="Example: htalk --as bob inbox\n"
+                               "Read messages[].body, then ack that message's id. Reply to a question\n"
+                               "using the same id; acknowledging alone leaves the question open.")
     commands.add_parser("sent", help="List outgoing messages and recover their IDs.",
-                        description="Recover outgoing IDs after interruption, including messages with uncertain notifications. Does not resend.")
+                        description="Recover outgoing IDs after interruption, including messages with uncertain notifications. Does not resend.",
+                        epilog="Example: htalk --as alice sent\n"
+                               "Use a saved request's id with show or wait. Inspect reply for its answer.\n"
+                               "A saved message with an uncertain notification must not be resent.")
     return root
 
 
