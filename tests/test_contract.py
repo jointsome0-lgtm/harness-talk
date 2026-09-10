@@ -316,17 +316,39 @@ class ClaudeAdapter(unittest.TestCase):
                     adapters.claude_socket(peer)
 
     def test_discovery_failure_and_uncertain_write_are_distinct(self):
-        peer = {"name": "receiver", "harness": "claude", "session_id": "test"}
-        message = {"id": "message", "sender": "sender"}
-        with patch.object(adapters, "claude_socket", side_effect=ValueError("offline")):
-            self.assertEqual("not_submitted", adapters.notify(peer, message, Path("/tmp/db"))[0])
-        with patch.object(adapters, "claude_socket", return_value="/socket"), patch.object(adapters.socket, "socket") as socket:
-            connection = socket.return_value.__enter__.return_value
-            connection.sendall.side_effect = TimeoutError()
-            self.assertEqual("submission_unknown", adapters.notify(peer, message, Path("/tmp/db"))[0])
-            frame = json.loads(connection.sendall.call_args.args[0])
-            self.assertEqual("htalk:sender", frame["from"])
-            self.assertNotIn("permission", frame)
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "mail.sqlite3")
+            peer = store.add_peer("receiver", "claude", str(uuid.uuid4()), directory)
+            store.add_peer("sender", "claude", str(uuid.uuid4()), directory)
+            message, _ = store.save("sender", "receiver", "Question")
+            with patch.object(adapters, "claude_socket", side_effect=ValueError("offline")):
+                self.assertEqual("not_submitted", adapters.notify(peer, message, store.path)[0])
+            with patch.object(adapters, "claude_socket", return_value="/socket"), patch.object(adapters.socket, "socket") as socket:
+                connection = socket.return_value.__enter__.return_value
+                connection.sendall.side_effect = TimeoutError()
+                self.assertEqual("submission_unknown", adapters.notify(peer, message, store.path)[0])
+                frame = json.loads(connection.sendall.call_args.args[0])
+                self.assertEqual("htalk:sender", frame["from"])
+                self.assertNotIn("permission", frame)
+
+    def test_ack_while_connecting_prevents_stale_notice_without_hiding_message(self):
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "mail.sqlite3")
+            store.add_peer("receiver", "claude", str(uuid.uuid4()), directory)
+            store.add_peer("sender", "claude", str(uuid.uuid4()), directory)
+            message, _ = store.save("sender", "receiver", "Question still needs an answer")
+            with patch.object(adapters, "claude_socket", return_value="/socket"), patch.object(adapters.socket, "socket") as socket:
+                connection = socket.return_value.__enter__.return_value
+                connection.connect.side_effect = lambda *_: Store(store.path).ack(message["id"], "receiver")
+                result = store.notify_once(message["id"], adapters.notify)
+                connection.sendall.assert_not_called()
+            self.assertEqual("not_submitted", result["submission"])
+            self.assertEqual("acknowledged_before_notification", result["notification_detail"])
+            self.assertIsNotNone(result["ack_at"])
+            self.assertEqual([message["id"]], [m["id"] for m in store.inbox("receiver")["messages"]])
+            with patch.object(adapters, "claude_socket") as discover:
+                store.notify_once(message["id"], adapters.notify)
+                discover.assert_not_called()
 
 
 class CodexAdapter(unittest.TestCase):

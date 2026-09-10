@@ -211,6 +211,32 @@ class OpenCodeTests(unittest.TestCase):
         self.assertTrue(detail.startswith("opencode_"))
         self.assertNotIn("Traceback", detail)
 
+    def test_ack_during_server_preflight_prevents_prompt_and_keeps_read_mark(self):
+        question, _ = self.store.save("alice", "muse", "Read before notification")
+        probe = opencode.probe
+
+        def acknowledge(peer):
+            result = probe(peer)
+            Store(self.store.path).ack(question["id"], "muse")
+            return result
+
+        with patch.object(opencode, "probe", side_effect=acknowledge):
+            result = self.store.notify_once(question["id"], adapters.notify)
+        self.assertEqual("not_submitted", result["submission"])
+        self.assertEqual("acknowledged_before_notification", result["notification_detail"])
+        self.assertIsNotNone(result["ack_at"])
+        self.assertEqual([], self.posts())
+        self.store.notify_once(question["id"], adapters.notify)
+        self.assertEqual([], self.posts())
+
+    def test_unread_state_failure_stops_before_prompt_and_does_not_create_database(self):
+        question, _ = self.store.save("alice", "muse", "Question")
+        missing = self.path / "missing.sqlite3"
+        result = adapters.notify(self.peer, question, missing)
+        self.assertEqual("not_submitted", result[0])
+        self.assertEqual([], self.posts())
+        self.assertFalse(missing.exists())
+
     def test_malformed_server_records_preserve_valid_sessions_before_and_after(self):
         self.server.state["sessions"] = {
             "ses_first": session("ses_first", str(self.path)),
