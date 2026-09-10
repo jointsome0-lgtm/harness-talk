@@ -19,7 +19,7 @@ A checkout is never the default database location. Before an existing database i
 
 ## Notifications and recovery
 
-After saving a message, the store durably claims its one notification attempt. The adapter then checks the exact recipient before client submission. An interruption during that check can leave `submission_unknown`; it does not permit another attempt. A notification contains a `show` command for the exact message ID, without the message body. Check the returned `ack_at`: an already acknowledged message does not need processing again because a stale notice arrived. The notification preserves the recipient's configured client/model settings and grants no additional permissions.
+After saving a message, the store durably claims its one notification attempt. The adapter then checks the exact recipient before client submission. An interruption during that check can leave `submission_unknown`; it does not permit another attempt. A notification contains a `show` command for the exact message ID, without the message body. An answer with `ack_at` set, or a request with a saved `reply`, needs no duplicate processing. A request (`in_reply_to` is null) without a reply stays open after acknowledgment and may still need an answer. The notification preserves the recipient's configured client/model settings and grants no additional permissions.
 
 Run `peer check` in the scope that will send. `recipient_unavailable` can mean restricted discovery rather than an offline client. Use the client's normal permission approval for a needed host check; do not replay an already-saved notification. An unavailable client can later retrieve the message from `inbox`.
 
