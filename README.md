@@ -6,7 +6,7 @@ Python 3.11 or newer. Storage, Claude notifications and OpenCode HTTP requests u
 
 ## Install and share a database
 
-From a source checkout, including the upcoming 0.3 discovery and OpenCode features:
+Install the released command with `uv tool install 'harness-talk==0.3.0'`, or use a source checkout:
 
 ```sh
 python3 -m venv .venv
