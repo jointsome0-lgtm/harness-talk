@@ -61,7 +61,7 @@ htalk --as builder show REQUEST_UUID
 htalk --as builder ack REPLY_UUID
 ```
 
-An acknowledgment records reading and removes that message's pending Codex notice when possible. A question stays open until answered. An answer returned by the builder's wait sends no client notice. Sending a notification does not prove that the recipient read it. The result includes `submission` and copyable `recovery` commands.
+An acknowledgment records reading and removes that message's pending Codex notice when possible. A question stays open until answered. When the builder's wait records an answer before the final notification check, htalk skips that notice. An already accepted notice may still arrive. Sending a notification does not prove that the recipient read it. The result includes `submission` and copyable `recovery` commands.
 
 After interrupted or uncertain delivery, use `show`, `wait`, `inbox` or `sent`. Never send the same question again under a new ID to retry a notification. For automation, supply a saved UUID with `send --id`; an identical retry returns the existing message without another notification. Use `--no-notify` when the recipient will poll its inbox.
 
