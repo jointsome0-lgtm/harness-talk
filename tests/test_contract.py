@@ -363,12 +363,16 @@ class CodexAdapter(unittest.TestCase):
                 adapters.check_codex(rpc, peer)
 
     def test_rejection_after_queue_attempt_is_uncertain(self):
-        peer = {"name": "receiver", "harness": "codex", "session_id": "test", "socket": "/socket"}
-        rpc = unittest.mock.Mock()
-        rpc.call.side_effect = TimeoutError()
-        with patch.object(adapters, "codex_rpc") as connect, patch.object(adapters, "check_codex"):
-            connect.return_value.__enter__.return_value = rpc
-            outcome = adapters.notify(peer, {"id": "message", "sender": "sender"}, Path("/tmp/db"))
+        with tempfile.TemporaryDirectory() as directory:
+            store = Store(Path(directory) / "mail.sqlite3")
+            store.add_peer("sender", "claude", str(uuid.uuid4()), directory)
+            peer = store.add_peer("receiver", "codex", str(uuid.uuid4()), directory, Path(directory) / "codex.sock")
+            message, _ = store.save("sender", "receiver", "Question")
+            rpc = unittest.mock.Mock()
+            rpc.call.side_effect = TimeoutError()
+            with patch.object(adapters, "codex_rpc") as connect, patch.object(adapters, "check_codex"):
+                connect.return_value.__enter__.return_value = rpc
+                outcome = adapters.notify(peer, message, store.path)
         self.assertEqual("submission_unknown", outcome[0])
 
 
@@ -404,9 +408,11 @@ class LocalSocketIntegration(unittest.TestCase):
                 thread = threading.Thread(target=server.serve_forever)
                 thread.start()
                 try:
-                    peer = {"name": "receiver", "harness": "codex", "session_id": session,
-                            "workspace": directory, "socket": str(path / "server.sock")}
-                    result = adapters.notify(peer, {"id": str(uuid.uuid4()), "sender": "sender"}, path / "db")
+                    store = Store(path / "db")
+                    store.add_peer("sender", "claude", str(uuid.uuid4()), directory)
+                    peer = store.add_peer("receiver", "codex", session, directory, path / "server.sock")
+                    message, _ = store.save("sender", "receiver", "Question")
+                    result = adapters.notify(peer, message, store.path)
                     self.assertEqual(("submitted", "codex_queued:queue-receipt"), result)
                 finally:
                     server.shutdown()
@@ -424,7 +430,11 @@ class NativeCodexAdapter(unittest.TestCase):
         self.addCleanup(environment.stop)
         self.peer = {"name": "receiver", "harness": "codex", "session_id": str(uuid.uuid4()),
                      "workspace": str(self.home), "socket": None}
-        self.message = {"id": str(uuid.uuid4()), "sender": "sender"}
+        # Every transport rereads the saved message state before its one write.
+        self.store = Store(self.home / "mail.sqlite3")
+        self.store.add_peer("sender", "claude", str(uuid.uuid4()), self.home)
+        self.store.add_peer("receiver", "codex", self.peer["session_id"], self.home)
+        self.message, _ = self.store.save("sender", "receiver", "Question")
         self.state = self.home / "state_5.sqlite"
         with closing(sqlite3.connect(self.state)) as db, db:
             db.execute("CREATE TABLE threads (id TEXT PRIMARY KEY, cwd TEXT, archived INTEGER, source TEXT)")
@@ -479,10 +489,7 @@ class NativeCodexAdapter(unittest.TestCase):
         self.assertFalse(self.state.exists())
 
     def test_unconfirmed_native_attempt_is_never_replayed(self):
-        store = Store(self.home / "mail.sqlite3")
-        store.add_peer("sender", "claude", str(uuid.uuid4()), self.home)
-        store.add_peer("receiver", "codex", self.peer["session_id"], self.home)
-        message, _ = store.save("sender", "receiver", "Question")
+        store, message = self.store, self.message
         with patch.object(adapters.subprocess, "run", side_effect=subprocess.TimeoutExpired("codex", 20)) as run:
             result = store.notify_once(message["id"], adapters.notify)
             store.notify_once(message["id"], adapters.notify)

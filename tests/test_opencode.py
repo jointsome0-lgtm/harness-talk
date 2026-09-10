@@ -229,6 +229,23 @@ class OpenCodeTests(unittest.TestCase):
         self.store.notify_once(question["id"], adapters.notify)
         self.assertEqual([], self.posts())
 
+    def test_answer_returned_by_the_requester_wait_during_preflight_is_not_posted(self):
+        request, _ = self.store.save("muse", "alice", "Question from OpenCode")
+        answer, _ = self.store.save("alice", "muse", "Answer read through wait", in_reply_to=request["id"])
+        probe = opencode.probe
+
+        def wait_returns(peer):
+            result = probe(peer)
+            self.assertEqual(answer["id"], Store(self.store.path).wait(request["id"], "muse", 0)["reply"]["id"])
+            return result
+
+        with patch.object(opencode, "probe", side_effect=wait_returns):
+            result = self.store.notify_once(answer["id"], adapters.notify)
+        self.assertEqual(("not_submitted", "returned_by_recipient_wait"),
+                         (result["submission"], result["notification_detail"]))
+        self.assertIsNone(result["ack_at"])
+        self.assertEqual([], self.posts())
+
     def test_unread_state_failure_stops_before_prompt_and_does_not_create_database(self):
         question, _ = self.store.save("alice", "muse", "Question")
         missing = self.path / "missing.sqlite3"

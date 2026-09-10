@@ -20,7 +20,7 @@ Use `--workspace` or `--harness` to filter. Repeat `--codex-socket` or `--openco
 
 ## Codex
 
-Ordinary local TUI sessions use `codex queue --thread EXACT_UUID --message TEXT`. `htalk` passes no model, sandbox, approval, profile, or configuration overrides and never types into tmux.
+Ordinary local TUI sessions use `codex queue --thread EXACT_UUID --message TEXT`. `htalk` passes no model, sandbox, approval, profile, or configuration overrides and never types into tmux. Both Codex routes reread the saved message state after their identity check and before queueing; an acknowledged message, or an answer the requester's `wait` has already returned, is not queued.
 
 Before invoking that command, `htalk` opens `state_5.sqlite` read-only and selects only the exact session's `id`, `cwd`, `archived`, and `source`. It requires the registered UUID/workspace, an unarchived row and `source=cli`. The metadata directory comes from the user-level `sqlite_home` setting in `$CODEX_HOME/config.toml`, then `CODEX_SQLITE_HOME`, then `$CODEX_HOME`, defaulting to `~/.codex`. Missing metadata, a different workspace, an archived session, or an unexpected schema prevents submission.
 
@@ -58,7 +58,7 @@ The frame contains `type: user`, session and message UUIDs, an honest `htalk:PEE
 
 This transport is an observed local client interface. It is not documented here as a stable public Claude API. Native inbound controls and filesystem permissions remain in force. If discovery fails, the message remains available in the shared inbox with `not_submitted`. `recipient_unavailable` does not establish that Claude is offline: discovery depends on the invoking command's execution scope. Check the peer in the intended send scope first; a known live session may require normal client permission approval for those specific commands.
 
-After discovery and socket connection, the adapter rereads the message's acknowledgment before writing the frame. If the recipient acknowledged it during preflight, no frame is written. This was checked with ordinary Claude Code `2.1.267` on 2026-09-10 using a controlled preflight delay until after acknowledgment and the current turn's final response. The message remained acknowledged, no notification entered the native queue, and no extra turn appeared during the following minute.
+After discovery and socket connection, the adapter rereads the saved message state before writing the frame. If the recipient acknowledged it during preflight, or its `wait` has already returned this answer, no frame is written. This was checked with ordinary Claude Code `2.1.267` on 2026-09-10 using a controlled preflight delay until after acknowledgment and the current turn's final response. The message remained acknowledged, no notification entered the native queue, and no extra turn appeared during the following minute.
 
 The inspected `2.1.267` ordinary-session socket handler has no message-cancellation action. The SDK's separate `cancel_async_message` protocol does not establish support through this socket. An already accepted Claude notice cannot be withdrawn by htalk; in an earlier native case it arrived after acknowledgment within the current turn. The final database check narrows the race but cannot eliminate delivery that starts after the check and before acknowledgment.
 

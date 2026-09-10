@@ -15,6 +15,7 @@ import tomllib
 import uuid
 
 from . import __version__
+from .store import skip_reason
 
 
 def owned_socket(path):
@@ -185,11 +186,14 @@ def codex_saved_identity(peer):
             "runtime_status": "unknown"}
 
 
-def notify_codex_cli(peer, body):
+def notify_codex_cli(peer, body, skip=None):
     try:
         codex_saved_identity(peer)
+        reason = skip() if skip else None
     except (OSError, ValueError, TypeError, sqlite3.Error) as exc:
         return "not_submitted", type(exc).__name__
+    if reason:
+        return "not_submitted", reason
     try:
         result = subprocess.run(["codex", "queue", "--thread", peer["session_id"],
                                  "--message", body], capture_output=True, text=True, timeout=20)
@@ -262,24 +266,23 @@ def notification(peer, message, db_path):
             "Reading does not acknowledge the message. Reply and ack through htalk when appropriate.")
 
 
-def notification_pending(peer, message, db_path):
-    """Recheck after client preflight without opening or migrating the store."""
+def notification_skip(peer, message, db_path):
+    """Recheck after client preflight, immediately before the one write, without
+    opening or migrating the store. Returns the reason to skip, or None."""
     try:
         with closing(sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True, timeout=3)) as db:
-            row = db.execute("SELECT ack_at FROM messages WHERE id=? AND recipient=?",
-                             (message["id"], peer["name"])).fetchone()
+            return skip_reason(db, message["id"], peer["name"])
     except sqlite3.Error:
         raise ValueError("notification_state_unavailable") from None
-    if row is None:
-        raise ValueError("notification_message_not_found")
-    return row[0] is None
 
 
 def notify(peer, message, db_path):
     body = notification(peer, message, db_path)
+    def skip():
+        return notification_skip(peer, message, db_path)
     if peer["harness"] == "opencode":
         from .opencode import notify as notify_opencode
-        return notify_opencode(peer, body, still_needed=lambda: notification_pending(peer, message, db_path))
+        return notify_opencode(peer, body, skip=skip)
     if peer["harness"] == "claude":
         try:
             path = claude_socket(peer)
@@ -292,8 +295,9 @@ def notify(peer, message, db_path):
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
                 connection.settimeout(3)
                 connection.connect(path)
-                if not notification_pending(peer, message, db_path):
-                    return "not_submitted", "acknowledged_before_notification"
+                reason = skip()
+                if reason:
+                    return "not_submitted", reason
                 connection.sendall((json.dumps(frame) + "\n").encode())
         except ValueError as exc:
             return "not_submitted", str(exc)
@@ -301,11 +305,14 @@ def notify(peer, message, db_path):
             return "submission_unknown", type(exc).__name__
         return "submitted", "claude_socket_bytes_written"
     if not peer.get("socket"):
-        return notify_codex_cli(peer, body)
+        return notify_codex_cli(peer, body, skip)
     attempted = False
     try:
         with codex_rpc(peer) as rpc:
             check_codex(rpc, peer)
+            reason = skip()
+            if reason:
+                return "not_submitted", reason
             attempted = True
             receipt = rpc.call("thread/queue/add", {"threadId": peer["session_id"],
                 "clientUserMessageId": message["id"], "input": [{"type": "text", "text": body}]})
