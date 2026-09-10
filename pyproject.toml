@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "harness-talk"
 version = "0.3.0"
-description = "Durable local request/reply conversations between agent sessions"
+description = "Exchange messages between local agent sessions"
 requires-python = ">=3.11"
 readme = "README.md"
 license = "MIT"
