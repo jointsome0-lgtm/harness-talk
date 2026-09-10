@@ -114,6 +114,8 @@ def message_actions(args, message):
             and message.get("notification_cleanup", {}).get("status") in ("pending", "unknown", "unavailable")):
         recovery["retry_notification_cleanup"] = command(args, "ack", message["id"])
         action += " Acknowledgment is saved. After submission finishes, use recovery.retry_notification_cleanup to retry removal."
+        if message["notification_cleanup"]["status"] == "unavailable":
+            action += " Verify the registered Codex address and native access. If sandbox restrictions prevented cleanup, use your client's normal approval flow before retrying."
     message["recovery"] = recovery
     message["next_action"] = action + " Never repeat an uncertain notification."
 
