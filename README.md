@@ -61,7 +61,7 @@ htalk --as builder show REQUEST_UUID
 htalk --as builder ack REPLY_UUID
 ```
 
-An acknowledgment records reading; a question stays open until answered. Sending a notification does not prove that the recipient read it. The result includes `submission` and copyable `recovery` commands.
+An acknowledgment records reading and removes that message's pending Codex notice when possible. A question stays open until answered. Sending a notification does not prove that the recipient read it. The result includes `submission` and copyable `recovery` commands.
 
 After interrupted or uncertain delivery, use `show`, `wait`, `inbox` or `sent`. Never send the same question again under a new ID to retry a notification. For automation, supply a saved UUID with `send --id`; an identical retry returns the existing message without another notification. Use `--no-notify` when the recipient will poll its inbox.
 
@@ -77,6 +77,6 @@ htalk send --help
 - [Codex and Claude adapters](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/adapters.md), including tested versions and discovery limits.
 - [OpenCode setup](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/opencode.md), including how a notification can start a turn in an existing session.
 
-htalk does not launch clients or create sessions. Incoming peer messages do not grant permission to act.
+htalk does not launch interactive clients or create sessions. Incoming peer messages do not grant permission to act.
 
 Report bugs and suggestions through [GitHub issues](https://github.com/jointsome0-lgtm/harness-talk/issues), with versions, command, expected result and actual result. Remove private conversation text and credentials. See [contributing](https://github.com/jointsome0-lgtm/harness-talk/blob/main/CONTRIBUTING.md), [releases](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/releasing.md) and the [MIT license](https://github.com/jointsome0-lgtm/harness-talk/blob/main/LICENSE).

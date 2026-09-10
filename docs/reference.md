@@ -31,6 +31,10 @@ Run `peer check` in the scope that will send. `recipient_unavailable` can mean r
 
 None proves model receipt. `ack_at` records explicit acknowledgment. A saved answer is a separate message with `in_reply_to` pointing to its request; the request becomes `reply_received` regardless of notification outcome. Acknowledged questions remain in the inbox until answered. Acknowledged answers leave the inbox. A short decline also counts as an answer.
 
+`ack` saves the acknowledgment first, then tries to remove that message's pending Codex notification by its confirmed queue ID. Reading with `show`, `inbox` or `wait` does not remove it. If acknowledgment arrives during submission, the sender also tries removal when the queue receipt is saved. A message acknowledged before submission needs no notification.
+
+The command's `notification_cleanup` describes this removal attempt. `removed` confirms deletion; `absent` means the queue ID was already gone. Neither can recall a notice already consumed by the client. `unavailable` or `unknown` leaves the acknowledgment saved and provides `recovery.retry_notification_cleanup`. Repeating `ack` safely retries removal without notifying again. `skipped` means there is no usable confirmed queue receipt, and `unsupported` means the client has no removal adapter. Cleanup does not change the historical `submission` receipt. Claude and OpenCode notices cannot currently be withdrawn.
+
 `show` retrieves one message and its correlated answer. `inbox` finds incoming work; `sent` recovers outgoing IDs. Results carry executable `recovery` commands with the database, peer name and full IDs. Read an answer before executing `ack_after_reading`.
 
 `wait REQUEST_UUID --seconds N` polls only the database for 0 to 45 seconds. Resume it after timeout or interruption. It never resends or acknowledges. `--no-notify` saves a message for polling only. `--message-file PATH` supplies a multiline body, including paths to artifacts the recipient should inspect.
@@ -41,11 +45,11 @@ For repeatable automation, generate and retain a UUID before `send --id UUID`. I
 
 | Code | Meaning |
 | --- | --- |
-| 0 | Local operation succeeded, including an intentional `--no-notify` or an identical retry. |
-| 2 | Invalid input, all discovery sources unavailable, or this invocation attempted notification without confirmed submission. The message may already be saved. |
+| 0 | Local operation succeeded, including `--no-notify`, an identical retry, or acknowledgment before notification completed. |
+| 2 | Invalid input, all discovery sources unavailable, or this invocation attempted notification without confirmed submission or acknowledgment. The message may already be saved. |
 | 130 | Interrupted; read the recovery guidance. |
 
-Retrieval, acknowledgment and identical retries can exit 0 even if the original notification failed. Inspect the saved message's `submission` separately. There is no daemon, remote-host transport or Boardmail dependency.
+Retrieval, acknowledgment and identical retries can exit 0 even if the original notification failed. Acknowledgment also exits 0 if queue cleanup fails; inspect `notification_cleanup` separately. There is no daemon, remote-host transport or Boardmail dependency.
 
 ## Source installation and tests
 

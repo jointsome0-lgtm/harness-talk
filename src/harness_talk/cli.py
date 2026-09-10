@@ -10,7 +10,7 @@ import sys
 import uuid
 
 from . import __version__
-from .adapters import notify, probe
+from .adapters import dismiss_notification, notify, probe
 from .discovery import discover
 from .store import Store, default_db, valid_wait
 
@@ -70,7 +70,7 @@ def parser():
                       help="Wait 0–45 seconds; 0 checks once (default: %(default)s).")
     for name in ("show", "ack"):
         description = ("Read a saved message and its correlated answer without acknowledging."
-                       if name == "show" else "Record that you read an incoming message. A question stays open until answered.")
+                       if name == "show" else "Record that you read an incoming message and remove its pending Codex notice when possible. A question stays open until answered.")
         commands.add_parser(name, help=description, description=description).add_argument(
             "message_id", help="Message UUID from inbox, sent or another command's result.")
     commands.add_parser("inbox", help="List incoming work that remains open.",
@@ -110,6 +110,10 @@ def message_actions(args, message):
             action += " Acknowledging a question leaves it open until you reply."
     else:
         action = "Inspect the saved answer with recovery.show; the recipient can retrieve it from their inbox."
+    if (message["recipient"] == args.actor
+            and message.get("notification_cleanup", {}).get("status") in ("unknown", "unavailable")):
+        recovery["retry_notification_cleanup"] = command(args, "ack", message["id"])
+        action += " Acknowledgment is saved. Retry recovery.retry_notification_cleanup to remove the pending notice."
     message["recovery"] = recovery
     message["next_action"] = action + " Never repeat an uncertain notification."
 
@@ -133,7 +137,7 @@ def main(argv=None):
             valid_wait(args.wait)
         if args.command == "wait":
             valid_wait(args.seconds)
-        store = Store(args.db)
+        store = Store(args.db, dismiss_notification=dismiss_notification)
         if args.command == "peer":
             if args.peer_command == "add":
                 result = store.add_peer(args.name, args.harness, args.session, args.workspace, args.socket, url=args.url)
@@ -180,7 +184,8 @@ def main(argv=None):
             else:
                 message_actions(args, result)
         print(json.dumps(result, ensure_ascii=False))
-        return 2 if attempted_notification and result.get("submission") != "submitted" else 0
+        return 2 if (attempted_notification and result.get("submission") != "submitted"
+                     and result.get("ack_at") is None) else 0
     except KeyboardInterrupt:
         recovery = {"peers": command(args, "peer", "list", actor=False)}
         if own:
