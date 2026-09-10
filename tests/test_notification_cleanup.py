@@ -113,6 +113,31 @@ class NotificationCleanup(unittest.TestCase):
             self.store.ack(self.message["id"], "sender")
         self.cleanup.assert_not_called()
 
+    def test_interrupted_ack_keeps_recovery_after_answer_leaves_inbox(self):
+        question, _ = self.store.save("reader", "sender", "Question")
+        answer, _ = self.store.save("sender", "reader", "Answer", in_reply_to=question["id"])
+        self.store.notify_once(answer["id"], self.submit)
+        args = ["--db", str(self.store.path), "--as", "reader", "ack", answer["id"]]
+        with patch.dict(os.environ, {}, clear=True), patch("builtins.print") as output, \
+                patch("harness_talk.cli.dismiss_notification", self.cleanup):
+            self.cleanup.side_effect = KeyboardInterrupt()
+            self.assertEqual(130, main(args))
+            interrupted = json.loads(output.call_args.args[0])
+            self.assertEqual("interrupted", interrupted["state"])
+            saved = self.store.get(answer["id"])
+            self.assertIsNotNone(saved["ack_at"])
+            self.assertNotIn(answer["id"], [m["id"] for m in self.store.inbox("reader")["messages"]])
+            self.assertEqual({self.queue_id}, self.queue)
+            retry = shlex.split(interrupted["recovery"]["retry_notification_cleanup"])
+            self.cleanup.side_effect = self.dismiss
+            self.assertEqual(0, main(retry[1:]))
+            recovered = json.loads(output.call_args.args[0])
+        self.assertEqual("removed", recovered["notification_cleanup"]["status"])
+        self.assertEqual(saved["ack_at"], recovered["ack_at"])
+        self.assertEqual(saved["notification_started_at"], recovered["notification_started_at"])
+        self.assertEqual(saved["notification_detail"], recovered["notification_detail"])
+        self.assertEqual(set(), self.queue)
+
 
 class CodexCleanup(unittest.TestCase):
     def setUp(self):

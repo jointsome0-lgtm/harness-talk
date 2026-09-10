@@ -195,11 +195,15 @@ def main(argv=None):
             known_id = str(uuid.UUID(known_id)) if known_id else None
         except (ValueError, TypeError, AttributeError):
             known_id = None
+        action = "Use the listed recovery commands to inspect the known ID or find saved messages. Do not resend."
         if known_id and own:
             recovery["show"] = command(args, "show", known_id)
+            if args.command == "ack":
+                recovery["retry_notification_cleanup"] = command(args, "ack", known_id)
+                action += " Use recovery.retry_notification_cleanup to finish acknowledgment and queue cleanup."
         print(json.dumps({"state": "interrupted", "message_id": known_id, "recovery": recovery,
                           "persistence": "saved" if saved_id else "unknown",
-                          "next_action": "Use the listed recovery commands to inspect the known ID or find saved messages. Do not resend."}))
+                          "next_action": action}))
         return 130
     except (ValueError, OSError, sqlite3.Error, KeyError, subprocess.SubprocessError) as exc:
         error = str(exc)
