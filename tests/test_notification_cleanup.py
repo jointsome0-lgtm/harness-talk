@@ -3,6 +3,7 @@ from contextlib import closing
 import json
 import os
 from pathlib import Path
+import shlex
 import sqlite3
 import subprocess
 import sys
@@ -143,6 +144,34 @@ class CodexCleanup(unittest.TestCase):
                 self.assertEqual(expected, cleanup["status"])
                 rpc.call.assert_called_once_with("thread/queue/delete", {
                     "threadId": self.peer["session_id"], "queuedSubmissionId": self.queue_id})
+
+    def test_in_flight_answer_keeps_recipient_recovery_after_sender_exits(self):
+        sender = Store(self.path / "mail.sqlite3")
+        sender.add_peer("reader", "codex", self.peer["session_id"], self.path)
+        sender.add_peer("sender", "claude", str(uuid.uuid4()), self.path)
+        question, _ = sender.save("reader", "sender", "Question")
+        answer, _ = sender.save("sender", "reader", "Answer", in_reply_to=question["id"])
+        acknowledgments = []
+
+        def submitting(*args):
+            with patch("builtins.print") as output:
+                self.assertEqual(0, main(["--db", str(sender.path), "--as", "reader", "ack", answer["id"]]))
+                acknowledgments.append(json.loads(output.call_args.args[0]))
+            return "submitted", "codex_cli_queued:" + self.queue_id
+
+        # No sender cleanup callback: model a process ending once its receipt is saved.
+        with patch.dict(os.environ, {"CODEX_THREAD_ID": self.peer["session_id"]}):
+            sender.notify_once(answer["id"], submitting)
+            ack = acknowledgments[0]
+            self.assertEqual("pending", ack["notification_cleanup"]["status"])
+            self.assertEqual([], sender.inbox("reader")["messages"])
+            retry = shlex.split(ack["recovery"]["retry_notification_cleanup"])
+            with patch.object(adapters, "codex_stdio_rpc") as connect, patch("builtins.print") as output:
+                connect.return_value.__enter__.return_value.call.return_value = {"deleted": True}
+                self.assertEqual(0, main(retry[1:]))
+                result = json.loads(output.call_args.args[0])
+            self.assertEqual("removed", result["notification_cleanup"]["status"])
+            self.assertEqual(ack["ack_at"], result["ack_at"])
 
     def test_no_removal_without_ack_confirmed_receipt_and_exact_native_identity(self):
         for change in ({"ack_at": None}, {"recipient": "other"}, {"submission": "submission_unknown"},

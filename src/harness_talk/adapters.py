@@ -216,6 +216,9 @@ def dismiss_notification(peer, message, db_path):
         return {"status": "unsupported", "detail": "client_has_no_notification_removal"}
     prefix = "codex_queued:" if peer.get("socket") else "codex_cli_queued:"
     detail = message.get("notification_detail") or ""
+    if (message.get("notification_started_at") is not None
+            and message.get("notification_finished_at") is None):
+        return {"status": "pending", "detail": "notification_submission_has_no_completion_receipt"}
     if message.get("submission") != "submitted" or not detail.startswith(prefix):
         return {"status": "skipped", "detail": "no_confirmed_queue_receipt"}
     attempted = False

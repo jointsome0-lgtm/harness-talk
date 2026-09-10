@@ -111,9 +111,9 @@ def message_actions(args, message):
     else:
         action = "Inspect the saved answer with recovery.show; the recipient can retrieve it from their inbox."
     if (message["recipient"] == args.actor
-            and message.get("notification_cleanup", {}).get("status") in ("unknown", "unavailable")):
+            and message.get("notification_cleanup", {}).get("status") in ("pending", "unknown", "unavailable")):
         recovery["retry_notification_cleanup"] = command(args, "ack", message["id"])
-        action += " Acknowledgment is saved. Retry recovery.retry_notification_cleanup to remove the pending notice."
+        action += " Acknowledgment is saved. After submission finishes, use recovery.retry_notification_cleanup to retry removal."
     message["recovery"] = recovery
     message["next_action"] = action + " Never repeat an uncertain notification."
 
