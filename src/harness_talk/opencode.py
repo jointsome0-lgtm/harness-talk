@@ -167,16 +167,17 @@ def probe(peer):
             "transport": "opencode_http_prompt_async", "authenticated": credentials() is not None}
 
 
-def notify(peer, body, *, still_needed=None):
+def notify(peer, body, *, skip=None):
     """One prompt_async attempt after preflight. A 2xx proves acceptance only;
     the model reading the text is established later by a reply or ack."""
     try:
         server = Server(peer.get("url"))
         probe(peer)
-        if still_needed is not None and not still_needed():
-            return "not_submitted", "acknowledged_before_notification"
+        reason = skip() if skip is not None else None
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return "not_submitted", str(exc) if isinstance(exc, OpenCodeError) else type(exc).__name__
+    if reason:
+        return "not_submitted", reason
     try:
         status, _ = server.request("POST", "/session/" + quote(peer["session_id"], safe="") + "/prompt_async",
                                    {"directory": peer["workspace"]}, {"parts": [{"type": "text", "text": body}]})

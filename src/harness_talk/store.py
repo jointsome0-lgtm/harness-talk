@@ -11,6 +11,12 @@ import uuid
 from .opencode import valid_session_id as valid_opencode_session_id, valid_url as valid_opencode_url
 
 SCHEMA_VERSION = 2
+# A waiting requester refreshes its registration every WAIT_HEARTBEAT seconds
+# for at most WAIT_TTL seconds ahead, so a killed waiter expires quickly. A reply
+# skips its client notice only while the registration still has WAIT_MARGIN left.
+WAIT_HEARTBEAT, WAIT_TTL, WAIT_MARGIN = 1.0, 3.0, 1.0
+# Notification outcomes that mean the recipient receives the message another way.
+NOT_NEEDED = ("acknowledged_before_notification", "recipient_waiting_for_this_answer")
 
 
 def default_db():
@@ -27,6 +33,23 @@ def valid_text(body):
 def valid_wait(seconds):
     if not math.isfinite(seconds) or not 0 <= seconds <= 45:
         raise ValueError("wait_seconds_must_be_between_0_and_45")
+
+
+def skip_reason(db, message_id, recipient):
+    """Why a claimed notification is no longer needed, or None. Read-only: an
+    acknowledged message, or an answer whose requester is polling for it now."""
+    row = db.execute("SELECT ack_at, in_reply_to FROM messages WHERE id=? AND recipient=?",
+                     (message_id, recipient)).fetchone()
+    if row is None:
+        raise ValueError("notification_message_not_found")
+    if row[0] is not None:
+        return "acknowledged_before_notification"
+    if row[1] is not None:
+        latest = db.execute("SELECT MAX(until) FROM waits WHERE message_id=? AND actor=?",
+                            (row[1], recipient)).fetchone()[0]
+        if latest is not None and latest - time.time() >= WAIT_MARGIN:
+            return "recipient_waiting_for_this_answer"
+    return None
 
 
 class Store:
@@ -62,6 +85,11 @@ class Store:
             # addresses are untouched; 0.2 clients reject version 2 explicitly.
             if "url" not in {row[1] for row in db.execute("PRAGMA table_info(peers)")}:
                 db.execute("ALTER TABLE peers ADD COLUMN url TEXT")
+            # Active polls on a request. Additive: the version stays 2, and a 0.3.0
+            # client ignores the table, so its waits and replies behave as before.
+            db.execute("""CREATE TABLE IF NOT EXISTS waits (
+                    token TEXT PRIMARY KEY, message_id TEXT NOT NULL REFERENCES messages(id),
+                    actor TEXT NOT NULL, until REAL NOT NULL)""")
             db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     def connect(self):
@@ -159,8 +187,12 @@ class Store:
             return self.get(message_id)
         message = self.get(message_id)
         try:
-            if message["ack_at"] is not None:
-                state, detail = "not_submitted", "acknowledged_before_notification"
+            reason = self.skip_reason(message)
+        except sqlite3.Error:
+            reason = None  # The adapter repeats this check before writing.
+        try:
+            if reason:
+                state, detail = "not_submitted", reason
             else:
                 state, detail = notify(self.peer(message["recipient"]), message, self.path)
             if state not in ("submitted", "not_submitted", "submission_unknown"):
@@ -173,6 +205,23 @@ class Store:
         # The recipient may ack while the adapter is still submitting. Once the
         # queue receipt is saved, the sender completes the same idempotent cleanup.
         return self.dismiss_acknowledged(self.get(message_id))
+
+    def skip_reason(self, message):
+        with closing(self.connect()) as db:
+            return skip_reason(db, message["id"], message["recipient"])
+
+    def register_wait(self, token, message_id, actor, until):
+        with closing(self.connect()) as db, db:
+            db.execute("DELETE FROM waits WHERE until < ?", (time.time() - 60,))
+            db.execute("""INSERT INTO waits VALUES (?, ?, ?, ?)
+                ON CONFLICT(token) DO UPDATE SET until=excluded.until""", (token, message_id, actor, until))
+
+    def forget_wait(self, token):
+        try:
+            with closing(self.connect()) as db, db:
+                db.execute("DELETE FROM waits WHERE token=?", (token,))
+        except sqlite3.Error:
+            pass  # The registration expires within WAIT_TTL anyway.
 
     def dismiss_acknowledged(self, message):
         if message["ack_at"] is not None and self.dismiss_notification is not None:
@@ -224,12 +273,21 @@ class Store:
         request = self.get(message_id, actor)
         if request["sender"] != actor or request["in_reply_to"] is not None:
             raise ValueError("wait_requires_own_request")
-        deadline = time.monotonic() + seconds
-        while True:
-            result = self.get(message_id, actor)
-            if result["reply"]:
-                return result
-            if time.monotonic() >= deadline:
-                result["wait_ended"] = "timeout"
-                return result
-            time.sleep(min(.1, max(0, deadline - time.monotonic())))
+        # Register the poll first: an answer saved from now on is read here, so its
+        # client notice is skipped while this registration is fresh.
+        token, deadline, ends_at, refreshed = str(uuid.uuid4()), time.monotonic() + seconds, time.time() + seconds, None
+        try:
+            while True:
+                if seconds and (refreshed is None or time.monotonic() - refreshed >= WAIT_HEARTBEAT):
+                    self.register_wait(token, message_id, actor, min(ends_at, time.time() + WAIT_TTL))
+                    refreshed = time.monotonic()
+                result = self.get(message_id, actor)
+                if result["reply"]:
+                    return result
+                if time.monotonic() >= deadline:
+                    result["wait_ended"] = "timeout"
+                    return result
+                time.sleep(min(.1, max(0, deadline - time.monotonic())))
+        finally:
+            if seconds:
+                self.forget_wait(token)

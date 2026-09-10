@@ -12,7 +12,7 @@ import uuid
 from . import __version__
 from .adapters import dismiss_notification, notify, probe
 from .discovery import discover
-from .store import Store, default_db, valid_wait
+from .store import NOT_NEEDED, Store, default_db, valid_wait
 
 
 class Parser(argparse.ArgumentParser):
@@ -106,9 +106,11 @@ def parser():
         text.add_argument("--message-file", type=Path, metavar="PATH", help="Read the same message body from a local text file.")
         cmd.add_argument("--no-notify", action="store_true", help="Save for inbox polling without notifying the client.")
     send.add_argument("--wait", type=float, default=0, metavar="SECONDS",
-                      help="Wait 0–45 seconds for an answer (default: %(default)s). Waiting polls the database; it does not resend.")
+                      help="Wait 0–45 seconds for an answer (default: %(default)s). Waiting polls the database and "
+                           "replaces the client notice for an answer saved meanwhile; it does not resend.")
     wait = commands.add_parser("wait", help="Wait for an answer to a saved request.",
-                               description="Poll a saved outgoing request for its answer. Safe to resume after timeout or interruption; does not resend or acknowledge.",
+                               description="Poll a saved outgoing request for its answer. An answer saved while this runs is returned here "
+                                           "instead of notifying your client. Safe to resume after timeout or interruption; does not resend or acknowledge.",
                                epilog="Example: htalk --as alice wait REQUEST_ID --seconds 45\n"
                                       "On timeout, use this same request ID again. If reply is present, read\n"
                                       "reply.body, then run htalk --as alice ack REPLY_ID using reply.id.")
@@ -172,6 +174,8 @@ def message_actions(args, message):
             action += " Acknowledging a question leaves it open until you reply."
     else:
         action = "Inspect the saved answer with recovery.show; the recipient can retrieve it from their inbox."
+        if message.get("notification_detail") == "recipient_waiting_for_this_answer":
+            action += " The recipient was polling for this answer when it was saved, so no client notice was sent."
     if (message["recipient"] == args.actor
             and message.get("notification_cleanup", {}).get("status") in ("pending", "unknown", "unavailable")):
         recovery["retry_notification_cleanup"] = command(args, "ack", message["id"])
@@ -249,7 +253,8 @@ def main(argv=None):
                 message_actions(args, result)
         print(json.dumps(result, ensure_ascii=False))
         return 2 if (attempted_notification and result.get("submission") != "submitted"
-                     and result.get("ack_at") is None) else 0
+                     and result.get("ack_at") is None
+                     and result.get("notification_detail") not in NOT_NEEDED) else 0
     except KeyboardInterrupt:
         recovery = {"peers": command(args, "peer", "list", actor=False)}
         if own:
