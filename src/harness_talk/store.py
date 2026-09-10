@@ -30,8 +30,9 @@ def valid_wait(seconds):
 
 
 class Store:
-    def __init__(self, path):
+    def __init__(self, path, dismiss_notification=None):
         self.path = Path(path).expanduser().resolve()
+        self.dismiss_notification = dismiss_notification
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         # Create privately before sqlite opens it, independent of the caller's umask.
         fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
@@ -151,13 +152,17 @@ class Store:
         # Claim durably BEFORE crossing the client boundary. A crash stays unknown.
         with closing(self.connect()) as db, db:
             claimed = db.execute("""UPDATE messages SET submission='submission_unknown',
-                notification_started_at=? WHERE id=? AND notification_started_at IS NULL""",
+                notification_started_at=? WHERE id=? AND notification_started_at IS NULL
+                AND ack_at IS NULL""",
                                  (time.time(), message_id)).rowcount
         if not claimed:
             return self.get(message_id)
         message = self.get(message_id)
         try:
-            state, detail = notify(self.peer(message["recipient"]), message, self.path)
+            if message["ack_at"] is not None:
+                state, detail = "not_submitted", "acknowledged_before_notification"
+            else:
+                state, detail = notify(self.peer(message["recipient"]), message, self.path)
             if state not in ("submitted", "not_submitted", "submission_unknown"):
                 raise ValueError("invalid_notification_result")
         except Exception as exc:
@@ -165,7 +170,18 @@ class Store:
         with closing(self.connect()) as db, db:
             db.execute("""UPDATE messages SET submission=?, notification_detail=?,
                 notification_finished_at=? WHERE id=?""", (state, detail, time.time(), message_id))
-        return self.get(message_id)
+        # The recipient may ack while the adapter is still submitting. Once the
+        # queue receipt is saved, the sender completes the same idempotent cleanup.
+        return self.dismiss_acknowledged(self.get(message_id))
+
+    def dismiss_acknowledged(self, message):
+        if message["ack_at"] is not None and self.dismiss_notification is not None:
+            try:
+                cleanup = self.dismiss_notification(self.peer(message["recipient"]), message, self.path)
+            except Exception as exc:
+                cleanup = {"status": "unknown", "detail": type(exc).__name__}
+            message["notification_cleanup"] = cleanup
+        return message
 
     def get(self, message_id, actor=None):
         with closing(self.connect()) as db:
@@ -201,7 +217,7 @@ class Store:
             if not db.execute("""UPDATE messages SET ack_at=COALESCE(ack_at, ?)
                 WHERE id=? AND recipient=?""", (time.time(), message_id, actor)).rowcount:
                 raise ValueError("only_recipient_can_ack")
-        return self.get(message_id, actor)
+        return self.dismiss_acknowledged(self.get(message_id, actor))
 
     def wait(self, message_id, actor, seconds):
         valid_wait(seconds)

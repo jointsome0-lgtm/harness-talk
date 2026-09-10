@@ -4,6 +4,7 @@ import json
 import os
 import re
 from pathlib import Path
+import select
 import shlex
 import socket
 import stat
@@ -70,6 +71,62 @@ class Rpc:
             return frame["result"]
 
 
+def initialize_rpc(connection):
+    rpc = Rpc(connection)
+    rpc.call("initialize", {"clientInfo": {"name": "harness-talk", "version": __version__},
+                            "capabilities": {"experimentalApi": True}})
+    rpc.write({"method": "initialized"})
+    return rpc
+
+
+class StdioConnection:
+    """Bounded newline framing for the local Codex app-server process."""
+    def __init__(self, process):
+        self.process = process
+        self.buffer = b""
+
+    def send(self, text):
+        self.process.stdin.write((text + "\n").encode())
+        self.process.stdin.flush()
+
+    def recv(self, timeout):
+        deadline = time.monotonic() + timeout
+        while b"\n" not in self.buffer:
+            if len(self.buffer) >= 4 * 1024 * 1024:
+                raise ValueError("codex_rpc_frame_too_large")
+            remaining = max(0, deadline - time.monotonic())
+            if not select.select([self.process.stdout], [], [], remaining)[0]:
+                raise TimeoutError("codex_rpc_timeout")
+            chunk = os.read(self.process.stdout.fileno(), 65536)
+            if not chunk:
+                raise OSError("codex_rpc_closed")
+            self.buffer += chunk
+        line, self.buffer = self.buffer.split(b"\n", 1)
+        if len(line) > 4 * 1024 * 1024:
+            raise ValueError("codex_rpc_frame_too_large")
+        return line.decode()
+
+
+@contextmanager
+def codex_stdio_rpc():
+    # No thread is started or resumed. Use the user's normal Codex configuration.
+    with subprocess.Popen(["codex", "app-server", "--stdio"], stdin=subprocess.PIPE,
+                          stdout=subprocess.PIPE, stderr=subprocess.DEVNULL) as process:
+        try:
+            yield initialize_rpc(StdioConnection(process))
+        finally:
+            process.stdin.close()
+            try:
+                process.wait(timeout=1)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+                try:
+                    process.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=1)
+
+
 @contextmanager
 def codex_rpc(peer):
     path = owned_socket(peer["socket"])
@@ -78,11 +135,7 @@ def codex_rpc(peer):
     try:
         with unix_connect(path, open_timeout=5, close_timeout=1, ping_interval=None,
                           compression=None, max_size=4 * 1024 * 1024) as connection:
-            rpc = Rpc(connection)
-            rpc.call("initialize", {"clientInfo": {"name": "harness-talk", "version": __version__},
-                                    "capabilities": {"experimentalApi": True}})
-            rpc.write({"method": "initialized"})
-            yield rpc
+            yield initialize_rpc(connection)
     except WebSocketException as exc:
         raise OSError("codex_websocket_failure") from exc
 
@@ -153,6 +206,37 @@ def notify_codex_cli(peer, body):
         return "submitted", "codex_cli_queued:" + queue_id
     # The process may have queued before failing or returning an unfamiliar receipt.
     return "submission_unknown", "codex_cli_unconfirmed_receipt"
+
+
+def dismiss_notification(peer, message, db_path):
+    """Delete only this acknowledged message's saved Codex queue receipt."""
+    if message.get("ack_at") is None or peer["name"] != message["recipient"]:
+        return {"status": "skipped", "detail": "message_not_acknowledged_by_recipient"}
+    if peer["harness"] != "codex":
+        return {"status": "unsupported", "detail": "client_has_no_notification_removal"}
+    prefix = "codex_queued:" if peer.get("socket") else "codex_cli_queued:"
+    detail = message.get("notification_detail") or ""
+    if (message.get("notification_started_at") is not None
+            and message.get("notification_finished_at") is None):
+        return {"status": "pending", "detail": "notification_submission_has_no_completion_receipt"}
+    if message.get("submission") != "submitted" or not detail.startswith(prefix):
+        return {"status": "skipped", "detail": "no_confirmed_queue_receipt"}
+    attempted = False
+    try:
+        queue_id = str(uuid.UUID(detail[len(prefix):]))
+        if not peer.get("socket"):
+            codex_saved_identity(peer)
+        with (codex_rpc(peer) if peer.get("socket") else codex_stdio_rpc()) as rpc:
+            if peer.get("socket"):
+                check_codex(rpc, peer)
+            attempted = True
+            result = rpc.call("thread/queue/delete", {"threadId": peer["session_id"],
+                                                       "queuedSubmissionId": queue_id})
+            if type(result.get("deleted")) is not bool:
+                raise ValueError("codex_queue_delete_receipt_invalid")
+        return {"status": "removed" if result["deleted"] else "absent", "queue_id": queue_id}
+    except (OSError, ValueError, KeyError, TypeError, sqlite3.Error, subprocess.SubprocessError) as exc:
+        return {"status": "unknown" if attempted else "unavailable", "detail": type(exc).__name__}
 
 
 def probe(peer):

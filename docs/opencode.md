@@ -31,7 +31,7 @@ When the server was started with `OPENCODE_SERVER_PASSWORD`, every route includi
 
 Notification repeats that check, then makes exactly one `prompt_async` request. Any preflight failure, a connection failure before the request is written, or a `4xx` answer is `not_submitted`, because the server states that nothing was accepted. A `204` is `submitted` with detail `opencode_prompt_async_accepted`. A timeout, a closed connection, an unreadable response or a `5xx` after the request was written is `submission_unknown`, and the store's claim prevents any replay. Acceptance means the server queued the text for that session; it does not prove the model read it. A reply or an explicit acknowledgment establishes progress, as for the other harnesses.
 
-The notification text is the shared inbox pointer used for every harness. A `busy` session receives the message when its current turn ends; an idle session starts a turn with whatever model and agent the session already uses. `htalk` passes no model, agent, tools or system prompt.
+The notification text is the shared inbox pointer used for every harness. A `busy` session can receive it within its current tool loop. On 2026-09-10, OpenCode `1.18.30` read a reply through `htalk wait`, received the native notice before acknowledging it, and completed the current turn without a later extra turn. An idle session starts a turn with whatever model and agent the session already uses. `htalk` passes no model, agent, tools or system prompt.
 
 ## Discovery
 

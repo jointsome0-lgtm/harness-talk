@@ -34,6 +34,14 @@ For previously configured standalone app-server sessions, the explicit `--socket
 
 The official [App Server documentation](https://learn.chatgpt.com/docs/app-server) describes the Unix WebSocket and metadata-only `thread/read`. The installed CLI's generated schema supplies the experimental queue shape. The [CLI reference](https://learn.chatgpt.com/docs/developer-commands?surface=cli) describes queued input. The retained standalone mode is why `websockets` remains a runtime dependency. Only the inspected client version is claimed as tested.
 
+### Removing acknowledged notifications
+
+`ack` saves the read mark before calling `thread/queue/delete` with the registered thread UUID and the queue UUID from that message's confirmed submission receipt. It never deletes the whole queue. A notice already consumed by the client cannot be recalled.
+
+For native CLI addresses, removal repeats the saved-identity check and uses a temporary `codex app-server --stdio` process with the user's normal configuration. It initializes the protocol, deletes the one queue item and closes the process. It never starts or resumes a thread or requests a model turn. Each RPC has a 10-second timeout, with bounded process shutdown. No persistent server is installed or managed. Explicit socket addresses use their registered socket and repeat the live identity check, with no native fallback.
+
+If `ack` races an in-flight submission, the sender tries the same idempotent removal after saving the queue receipt. A crash or unconfirmed submission can leave a queued notice without a known queue UUID; htalk does not search for or replay it. See [cleanup results and recovery](reference.md#notifications-and-recovery).
+
 ### Discovery
 
 `peer discover` connects to `$CODEX_HOME/app-server-control/app-server-control.sock`, or the explicitly supplied `--codex-socket` paths. It pages through `thread/loaded/list` and reads metadata with `includeTurns: false`. It never resumes or subscribes to a thread. Sessions unloaded during discovery and internal workers that cannot accept direct input are excluded. Each server is bounded to 200 inspected IDs, 20 pagination cursors and a 15-second scan budget, plus any already-running bounded RPC. Truncation or a failed page produces source diagnostics while preserving verified addresses.
