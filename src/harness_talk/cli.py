@@ -54,10 +54,11 @@ def parser():
                       help="Your registered peer name; overrides HTALK_PEER. Without either, message commands "
                            "use the peer registered for the Claude Code session running them, if recognized.")
     commands = root.add_subparsers(dest="command", required=True)
-    peer = commands.add_parser("peer", help="Discover, register and check session addresses.",
+    peer = commands.add_parser("peer", help="Discover, register, check and retire session addresses.",
                                description="Discover sessions and manage registered addresses. These commands do not message peers.",
                                epilog="Start with htalk peer discover, then htalk peer add --help.\n"
                                       "After registering: htalk peer check NAME\n"
+                                      "When a session is no longer used: htalk peer retire NAME\n"
                                       "Use the same --db PATH before peer for both sessions.").add_subparsers(dest="peer_command", required=True)
     add = peer.add_parser("add", help="Register an immutable session address.",
                           description="Save a peer name and exact session address. Existing names cannot be reassigned. Does not notify or launch a client.",
@@ -72,9 +73,12 @@ def parser():
     add.add_argument("--workspace", required=True, help="Session workspace path; must match after resolving paths.")
     add.add_argument("--socket", help="Codex only: explicit standalone app-server Unix socket. Omit to use native codex queue.")
     add.add_argument("--url", help="OpenCode only: loopback server URL (default: http://127.0.0.1:4096).")
-    peer.add_parser("list", help="List registered peer addresses.", description="Read registered peer names and their immutable session addresses.",
-                    epilog="Example: htalk --db /shared/mail.sqlite3 peer list\n"
-                           "These are saved addresses; use peer check NAME to inspect a recipient now.")
+    listing = peer.add_parser("list", help="List registered peer addresses.",
+                              description="Read registered peer names and their immutable session addresses. Retired peers are hidden unless --all is given.",
+                              epilog="Example: htalk --db /shared/mail.sqlite3 peer list\n"
+                                     "These are saved addresses; use peer check NAME to inspect a recipient now.\n"
+                                     "retired_hidden counts the retired peers left out.")
+    listing.add_argument("--all", action="store_true", help="Include retired peers; their retired_at is set.")
     find = peer.add_parser("discover", help="Find native session addresses.",
                            description="Find native session addresses without registering or messaging them. Source statuses describe discovery coverage; an empty result does not prove that no client is running.",
                            epilog="Examples:\n"
@@ -90,6 +94,17 @@ def parser():
                             epilog="Example: htalk peer check bob\n"
                                    "Run this before send. A successful check does not prove message receipt.")
     check.add_argument("name", help="Registered peer name.")
+    retire = peer.add_parser("retire", help="Refuse new requests to or from a peer that is no longer used.",
+                             description="Mark a registered peer retired. New requests to or from it are refused, and notices to it are skipped. "
+                                         "Replies to saved requests, inbox, show, wait and ack keep working. The name and session stay bound.",
+                             epilog="Example: htalk peer retire bob\n"
+                                    "peer list then hides bob; peer list --all shows its retired_at. Repeating keeps\n"
+                                    "the first time. htalk 0.3 clients ignore retirement and can still message bob.")
+    retire.add_argument("name", help="Registered peer name.")
+    restore = peer.add_parser("restore", help="Allow new requests to or from a retired peer again.",
+                              description="Clear a peer's retirement. Notices skipped while it was retired are not sent. Repeating is safe.",
+                              epilog="Example: htalk peer restore bob")
+    restore.add_argument("name", help="Registered peer name.")
     send = commands.add_parser("send", help="Save a request and attempt one notification.",
                                description="Save a request before attempting one notification. After uncertain delivery, recover with show, wait or sent; do not send it again under a new ID.",
                                epilog="Example, after both peers are registered:\n"
@@ -192,6 +207,8 @@ def message_actions(args, message):
         action = "Inspect the saved answer with recovery.show; the recipient can retrieve it from their inbox."
         if message.get("notification_detail") == "returned_by_recipient_wait":
             action += " The recipient's wait recorded this answer for return, so no client notice was sent."
+    if message.get("notification_detail") == "recipient_retired":
+        action += " The recipient peer is retired, so no client notice was sent."
     if (message["recipient"] == args.actor
             and message.get("notification_cleanup", {}).get("status") in ("pending", "unknown", "unavailable")):
         recovery["retry_notification_cleanup"] = command(args, "ack", message["id"])
@@ -218,7 +235,7 @@ def page_actions(args, result):
 def main(argv=None):
     args = parser().parse_args(argv)
     saved_id = None
-    own = native = source = None
+    own = native = source = checked = None
     try:
         attempted_notification = False
         os.umask(0o077)
@@ -239,10 +256,20 @@ def main(argv=None):
         if args.command == "peer":
             if args.peer_command == "add":
                 result = store.add_peer(args.name, args.harness, args.session, args.workspace, args.socket, url=args.url)
+                if result["retired_at"] is not None:
+                    result["recovery"] = {"restore": command(args, "peer", "restore", args.name, actor=False)}
+                    result["next_action"] = (f"Peer {args.name} is retired, and peer add does not change that. "
+                                             "If this session should get new requests again, use recovery.restore.")
             elif args.peer_command == "check":
-                result = probe(store.peer(args.name))
+                checked = store.peer(args.name)
+                result = {**probe(checked), "retired_at": checked["retired_at"]}
+            elif args.peer_command in ("retire", "restore"):
+                result = getattr(store, args.peer_command)(args.name)
             else:
-                result = {"peers": store.peers()}
+                peers = store.peers()
+                result = {"peers": [peer for peer in peers if args.all or peer["retired_at"] is None]}
+                if not args.all:
+                    result["retired_hidden"] = len(peers) - len(result["peers"])
         else:
             if args.actor:
                 source = "option"
@@ -361,6 +388,12 @@ def main(argv=None):
                     "Use --as NAME or set HTALK_PEER to your registered peer name. Only a recognized Claude Code session "
                     "can omit both; native_session.reason names the check that failed. "
                     "Inspect registered addresses with recovery.peers.")
+        elif error == "peer_retired":
+            result["retired_peers"] = [name for name in (args.actor, args.recipient) if store.peer(name)["retired_at"] is not None]
+            result["next_action"] = (
+                "Nothing was saved: new requests to or from a retired peer are refused. Choose an active peer with "
+                "recovery.peers. Replies to saved requests still work. Restoring a peer is a registry decision, "
+                "not a way to deliver this message.")
         elif error == "peer_already_has_a_different_address":
             registered = store.peer(args.name)
             result.update(registered_peer=args.name, registered_session_id=registered["session_id"])
@@ -394,6 +427,8 @@ def main(argv=None):
                 result["next_action"] = "Check the error and inspect registered addresses with recovery.peers."
         if source:
             result["actor_source"] = source
+        if checked:
+            result["retired_at"] = checked["retired_at"]
         print(json.dumps(result))
         return 2
 

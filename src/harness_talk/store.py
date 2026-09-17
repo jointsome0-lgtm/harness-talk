@@ -16,7 +16,9 @@ SCHEMA_VERSION = 2
 # recipient's own wait already returned it. A registered wait is merely a hint
 # that such a receipt may arrive within WAIT_GRACE seconds; it never suppresses.
 WAIT_GRACE = 1.0
-NOT_NEEDED = ("acknowledged_before_notification", "returned_by_recipient_wait")
+NOT_NEEDED = ("acknowledged_before_notification", "returned_by_recipient_wait", "recipient_retired")
+# Every peer row carries retired_at, which is null for an active peer.
+PEER_ROWS = "SELECT p.*, r.retired_at FROM peers p LEFT JOIN retired_peers r ON r.name = p.name"
 PAGE_LIMIT, MAX_PAGE_LIMIT, PREVIEW_CHARS = 20, 500, 120
 MAX_SEQ = 2**63 - 1
 
@@ -63,7 +65,8 @@ def summarize(message):
 
 def skip_reason(db, message_id, recipient):
     """Why a claimed notification is no longer needed, or None. Read-only: the
-    recipient acknowledged the message, or its own wait already returned this answer."""
+    recipient acknowledged the message, its own wait already returned this answer,
+    or the recipient peer is retired."""
     row = db.execute("SELECT ack_at, in_reply_to, wait_returned_at FROM messages WHERE id=? AND recipient=?",
                      (message_id, recipient)).fetchone()
     if row is None:
@@ -72,6 +75,8 @@ def skip_reason(db, message_id, recipient):
         return "acknowledged_before_notification"
     if row[1] is not None and row[2] is not None:
         return "returned_by_recipient_wait"
+    if db.execute("SELECT 1 FROM retired_peers WHERE name=?", (recipient,)).fetchone():
+        return "recipient_retired"
     return None
 
 
@@ -131,6 +136,9 @@ class Store:
             db.execute("""CREATE TABLE IF NOT EXISTS waits (
                     token TEXT PRIMARY KEY, message_id TEXT NOT NULL REFERENCES messages(id),
                     actor TEXT NOT NULL, until REAL NOT NULL)""")
+            # Also additive: 0.3 clients ignore retirement, and their peers inserts keep six columns.
+            db.execute("""CREATE TABLE IF NOT EXISTS retired_peers (
+                    name TEXT PRIMARY KEY REFERENCES peers(name), retired_at REAL NOT NULL)""")
             db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     def connect(self):
@@ -177,19 +185,34 @@ class Store:
 
     def peer(self, name):
         with closing(self.connect()) as db:
-            row = db.execute("SELECT * FROM peers WHERE name=?", (name,)).fetchone()
+            row = db.execute(PEER_ROWS + " WHERE p.name=?", (name,)).fetchone()
         if row is None:
             raise ValueError("unknown_peer")
         return dict(row)
 
     def session_peer(self, harness, session_id):
         with closing(self.connect()) as db:
-            row = db.execute("SELECT * FROM peers WHERE harness=? AND session_id=?", (harness, session_id)).fetchone()
+            row = db.execute(PEER_ROWS + " WHERE p.harness=? AND p.session_id=?", (harness, session_id)).fetchone()
         return dict(row) if row else None
 
     def peers(self):
+        """All registered peers, including retired ones."""
         with closing(self.connect()) as db:
-            return [dict(row) for row in db.execute("SELECT * FROM peers ORDER BY name")]
+            return [dict(row) for row in db.execute(PEER_ROWS + " ORDER BY p.name")]
+
+    def retire(self, name):
+        """Refuse new requests to or from the peer. Repeating keeps the first time."""
+        self.peer(name)
+        with closing(self.connect()) as db, db:
+            db.execute("INSERT OR IGNORE INTO retired_peers VALUES (?, ?)", (name, time.time()))
+        return self.peer(name)
+
+    def restore(self, name):
+        """Allow new requests again. Notices skipped while retired are not replayed."""
+        self.peer(name)
+        with closing(self.connect()) as db, db:
+            db.execute("DELETE FROM retired_peers WHERE name=?", (name,))
+        return self.peer(name)
 
     def save(self, sender, recipient, body, message_id=None, in_reply_to=None):
         valid_text(body)
@@ -218,6 +241,10 @@ class Store:
                 if tuple(existing[k] for k in ("sender", "recipient", "body", "in_reply_to")) != (sender, recipient, body, in_reply_to):
                     raise ValueError("message_id_conflict")
                 return self.get(message_id), False
+            # Retirement refuses new requests only; saved requests can still be answered.
+            if in_reply_to is None and db.execute("SELECT 1 FROM retired_peers WHERE name IN (?, ?)",
+                                                  (sender, recipient)).fetchone():
+                raise ValueError("peer_retired")
             db.execute("""INSERT INTO messages
                 (id, sender, recipient, in_reply_to, body, created_at, submission)
                 VALUES (?, ?, ?, ?, ?, ?, 'not_submitted')""",
