@@ -12,6 +12,7 @@ import uuid
 from . import __version__
 from .adapters import dismiss_notification, notify, probe
 from .discovery import discover
+from .identity import claude_session
 from .store import MAX_PAGE_LIMIT, NOT_NEEDED, PAGE_LIMIT, PREVIEW_CHARS, Store, default_db, valid_wait
 
 
@@ -37,6 +38,7 @@ def parser():
                "Read the body before ack. REQUEST_ID and REPLY_ID are message IDs from JSON,\n"
                "not native session IDs. A reply has its own id and an in_reply_to request ID.\n\n"
                "Put --db and --as before the command, or set HTALK_DB and HTALK_PEER.\n"
+               "A command run by a registered Claude Code session can omit --as.\n"
                "Use htalk COMMAND --help, or htalk peer COMMAND --help, for examples.\n"
                "Commands return JSON with state, submission and recovery guidance.\n"
                "Exit 0: completed, including send --wait that returned an answer. Exit 2:\n"
@@ -48,8 +50,9 @@ def parser():
                       help="Shared SQLite file. Default: HTALK_DB, then $XDG_DATA_HOME/harness-talk/mail.sqlite3, "
                            "then ~/.local/share/harness-talk/mail.sqlite3 (current: %(default)s). "
                            "Only peer add creates a missing file.")
-    root.add_argument("--as", dest="actor", default=os.environ.get("HTALK_PEER"), metavar="NAME",
-                      help="Your registered peer name; overrides HTALK_PEER. Required for message commands.")
+    root.add_argument("--as", dest="actor", metavar="NAME",
+                      help="Your registered peer name; overrides HTALK_PEER. Without either, message commands "
+                           "use the peer registered for the Claude Code session running them, if recognized.")
     commands = root.add_subparsers(dest="command", required=True)
     peer = commands.add_parser("peer", help="Discover, register and check session addresses.",
                                description="Discover sessions and manage registered addresses. These commands do not message peers.",
@@ -215,7 +218,7 @@ def page_actions(args, result):
 def main(argv=None):
     args = parser().parse_args(argv)
     saved_id = None
-    own = None
+    own = native = source = None
     try:
         attempted_notification = False
         os.umask(0o077)
@@ -241,13 +244,27 @@ def main(argv=None):
             else:
                 result = {"peers": store.peers()}
         else:
-            if not args.actor:
-                raise ValueError("peer_required_use_as_or_HTALK_PEER")
-            own = store.peer(args.actor)
+            if args.actor:
+                source = "option"
+            elif os.environ.get("HTALK_PEER"):
+                args.actor, source = os.environ["HTALK_PEER"], "HTALK_PEER"
+            else:
+                # The registry is consulted only for a session whose evidence passed every check.
+                native = claude_session()
+                if native["status"] == "recognized":
+                    own = store.session_peer("claude", native["session_id"])
+                if not own:
+                    raise ValueError("peer_required_use_as_or_HTALK_PEER")
+                args.actor, source = own["name"], "native_session"
+            own = own or store.peer(args.actor)
             # Available native sender evidence is a mismatch guard, not authentication.
             native_id = os.environ.get("CODEX_THREAD_ID")
             if native_id and own["harness"] == "codex" and own["session_id"] != native_id:
                 raise ValueError("actor_conflicts_with_CODEX_THREAD_ID")
+            if source != "native_session" and own["harness"] == "claude":
+                native = claude_session()
+                if native["status"] == "recognized" and native["session_id"] != own["session_id"]:
+                    raise ValueError("actor_conflicts_with_CLAUDE_CODE_SESSION_ID")
             if args.command in ("send", "reply"):
                 body = args.message_file.read_text() if args.message_file else args.message
                 if args.command == "reply":
@@ -279,6 +296,7 @@ def main(argv=None):
                 page_actions(args, result)
             else:
                 message_actions(args, result)
+            result["actor_source"] = source
         print(json.dumps(result, ensure_ascii=False))
         # A saved answer completes the exchange even if its request's notice is unconfirmed.
         return 2 if (attempted_notification and result.get("reply") is None
@@ -300,9 +318,11 @@ def main(argv=None):
             if args.command == "ack":
                 recovery["retry_notification_cleanup"] = command(args, "ack", known_id)
                 action += " Use recovery.retry_notification_cleanup to finish acknowledgment and queue cleanup."
-        print(json.dumps({"state": "interrupted", "message_id": known_id, "recovery": recovery,
-                          "persistence": "saved" if saved_id else "unknown",
-                          "next_action": action}))
+        result = {"state": "interrupted", "message_id": known_id, "recovery": recovery,
+                  "persistence": "saved" if saved_id else "unknown", "next_action": action}
+        if source:
+            result["actor_source"] = source
+        print(json.dumps(result))
         return 130
     except (ValueError, OSError, sqlite3.Error, KeyError, subprocess.SubprocessError) as exc:
         error = str(exc)
@@ -320,6 +340,27 @@ def main(argv=None):
                 f"Peer {args.actor} belongs to Codex session {own['session_id']}, not current session {native_id}. "
                 "Use recovery.peers to find the peer registered to this session, or return to the registered "
                 "session before running recovery.inbox_in_registered_session. The binding cannot be reassigned.")
+        elif error == "actor_conflicts_with_CLAUDE_CODE_SESSION_ID":
+            result.update(registered_peer=args.actor, registered_session_id=own["session_id"],
+                          current_session_id=native["session_id"])
+            result["recovery"]["inbox_in_registered_session"] = command(args, "inbox")
+            result["next_action"] = (
+                f"Peer {args.actor} belongs to Claude session {own['session_id']}, not current session {native['session_id']}. "
+                "Check --as and HTALK_PEER. Use recovery.peers to find the peer registered to this session, which is "
+                "selected when both are omitted, or return to the registered session before running "
+                "recovery.inbox_in_registered_session. The binding cannot be reassigned.")
+        elif error == "peer_required_use_as_or_HTALK_PEER":
+            result["native_session"] = native
+            if native["status"] == "recognized":
+                result["next_action"] = (
+                    "This Claude Code session has no peer in this database. Register it with htalk peer add NAME "
+                    "--harness claude, using native_session.session_id and native_session.workspace, or use --as NAME. "
+                    "Inspect registered addresses with recovery.peers.")
+            else:
+                result["next_action"] = (
+                    "Use --as NAME or set HTALK_PEER to your registered peer name. Only a recognized Claude Code session "
+                    "can omit both; native_session.reason names the check that failed. "
+                    "Inspect registered addresses with recovery.peers.")
         elif error == "peer_already_has_a_different_address":
             registered = store.peer(args.name)
             result.update(registered_peer=args.name, registered_session_id=registered["session_id"])
@@ -351,6 +392,8 @@ def main(argv=None):
                 result["next_action"] = "Inspect saved messages with recovery.sent or recovery.inbox. Check registered addresses with recovery.peers. Never repeat an uncertain notification."
             else:
                 result["next_action"] = "Check the error and inspect registered addresses with recovery.peers."
+        if source:
+            result["actor_source"] = source
         print(json.dumps(result))
         return 2
 

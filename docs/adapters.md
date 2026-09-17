@@ -54,6 +54,8 @@ The lock lifecycle follows Codex's [writer ownership implementation](https://git
 
 The adapter runs `claude agents --json` and selects exactly one live record matching both session UUID and workspace. It reads only that PID's `~/.claude/sessions/PID.json` metadata, verifies the UUID and workspace again, and checks the Unix socket's type and owner. It never reads credentials.
 
+A command run by Claude Code can omit `--as`: htalk then locates the same metadata file through the command's `CLAUDE_PID`, without running `claude`, and verifies process ancestry in `/proc`. See [peer selection](reference.md#database-and-peers) for the checks and their limits.
+
 The frame contains `type: user`, session and message UUIDs, an honest `htalk:PEER` sender, `priority: next`, and a message pointing to the inbox. It does not assert permission classes or impersonate a native Claude peer. A successful `sendall` proves only that the bytes were written. The adapter does not claim the model saw them.
 
 This transport is an observed local client interface. It is not documented here as a stable public Claude API. Native inbound controls and filesystem permissions remain in force. If discovery fails, the message remains available in the shared inbox with `not_submitted`. `recipient_unavailable` does not establish that Claude is offline: discovery depends on the invoking command's execution scope. Check the peer in the intended send scope first; a known live session may require normal client permission approval for those specific commands.

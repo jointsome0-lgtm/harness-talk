@@ -21,6 +21,11 @@ from harness_talk.cli import main
 from harness_talk.store import Store
 
 
+def without_claude_session():
+    # A test run from a Claude Code command must not give CLI subprocesses that session's identity.
+    return {k: v for k, v in os.environ.items() if k not in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_PID")}
+
+
 class WaitReturnReceipt(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -114,7 +119,7 @@ class WaitReturnReceipt(unittest.TestCase):
     def test_killed_waiter_only_delays_the_notice_by_the_grace_bound(self):
         process = subprocess.Popen([sys.executable, "-m", "harness_talk.cli", "--db", str(self.store.path),
                                     "--as", "builder", "wait", self.request["id"], "--seconds", "45"],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                                   env=without_claude_session(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         try:
             self.assertTrue(self.wait_registered())
         finally:
@@ -134,7 +139,7 @@ class WaitReturnReceipt(unittest.TestCase):
     def test_cli_reply_to_a_waiting_process_exits_zero_and_the_wait_returns_the_answer(self):
         process = subprocess.Popen([sys.executable, "-m", "harness_talk.cli", "--db", str(self.store.path),
                                     "--as", "builder", "wait", self.request["id"], "--seconds", "20"],
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                                   env=without_claude_session(), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
             self.assertTrue(self.wait_registered())
             args = ["--db", str(self.store.path), "--as", "reviewer"]

@@ -126,12 +126,12 @@ class Conversations(unittest.TestCase):
         self.assertEqual([], self.store.sent("alice")["messages"])
 
     def test_sender_native_evidence_mismatch(self):
-        with patch.dict(os.environ, {"CODEX_THREAD_ID": str(uuid.uuid4())}):
+        with patch.dict(os.environ, {"CODEX_THREAD_ID": str(uuid.uuid4())}, clear=True):
             with patch("builtins.print"):
                 self.assertEqual(2, main(["--db", str(self.store.path), "--as", "alice", "inbox"]))
 
     def test_claude_actor_ignores_inherited_codex_variable(self):
-        with patch.dict(os.environ, {"CODEX_THREAD_ID": str(uuid.uuid4())}):
+        with patch.dict(os.environ, {"CODEX_THREAD_ID": str(uuid.uuid4())}, clear=True):
             with patch("builtins.print"):
                 self.assertEqual(0, main(["--db", str(self.store.path), "--as", "bob", "inbox"]))
 
@@ -177,7 +177,7 @@ class Conversations(unittest.TestCase):
                                            "send", "bob", "--id", message_id, "--message", "Question?"]))
                 interrupted = json.loads(output.call_args.args[0])
                 self.assertEqual(message_id, interrupted["message_id"])
-                self.assertEqual("saved", interrupted["persistence"])
+                self.assertEqual(("saved", "option"), (interrupted["persistence"], interrupted["actor_source"]))
                 self.assertEqual(0, main(shlex.split(interrupted["recovery"]["show"])[1:]))
                 self.assertEqual("submission_unknown", json.loads(output.call_args.args[0])["submission"])
                 self.assertEqual(0, main(["--db", str(self.store.path), "--as", "alice",
@@ -235,7 +235,8 @@ class ProcessRecovery(unittest.TestCase):
             path = Path(directory)
             db_path = path / "mail 'quoted' $draft.sqlite3"
             session_id = str(uuid.uuid4())
-            environment = {**os.environ, "CODEX_THREAD_ID": session_id}
+            inherited = {k: v for k, v in os.environ.items() if k not in ("CLAUDE_CODE_SESSION_ID", "CLAUDE_PID")}
+            environment = {**inherited, "CODEX_THREAD_ID": session_id}
 
             def cli(*args, code=0, env=environment):
                 run = subprocess.run([sys.executable, "-m", "harness_talk.cli", "--db", str(db_path), *args],
