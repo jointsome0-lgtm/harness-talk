@@ -113,7 +113,7 @@ class OpenCodeTests(unittest.TestCase):
             db.execute("INSERT INTO peers VALUES ('old', 'claude', 'b6ab4f5e-4c1a-4a35-9b3c-2c0b3f0e6f12', ?, NULL)", (str(self.path),))
         old = Store(legacy).peer("old")
         self.assertIsNone(old["url"])
-        self.assertEqual(old, Store(legacy).add_peer(**{k: old[k] for k in old}))
+        self.assertEqual(old, Store(legacy).add_peer(**{k: old[k] for k in old if k != "retired_at"}))
         with closing(sqlite3.connect(legacy)) as db:
             self.assertEqual(db.execute("PRAGMA user_version").fetchone()[0], SCHEMA_VERSION)
             db.execute("PRAGMA user_version=3")

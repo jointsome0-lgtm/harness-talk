@@ -37,6 +37,8 @@ htalk peer list
 
 Replace those IDs and paths with the discovered addresses. For an app-server address, keep its `--socket PATH`. For OpenCode, follow the [server setup](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/opencode.md).
 
+When a registered session is no longer used, `htalk peer retire NAME` hides it from `peer list` and refuses new requests to or from it. Its saved questions can still be answered.
+
 ## Ask, answer and recover
 
 From the builder's session, check the recipient in the same execution scope that will send:

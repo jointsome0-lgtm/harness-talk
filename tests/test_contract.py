@@ -33,7 +33,7 @@ class Conversations(unittest.TestCase):
 
     def test_address_is_immutable_and_unique(self):
         bob = self.store.peer("bob")
-        self.assertEqual(bob, self.store.add_peer(**{k: bob[k] for k in bob}))
+        self.assertEqual(bob, self.store.add_peer(**{k: bob[k] for k in bob if k != "retired_at"}))
         with self.assertRaisesRegex(ValueError, "different_address"):
             self.store.add_peer("bob", "claude", str(uuid.uuid4()), self.path)
         with self.assertRaisesRegex(ValueError, "already_has_a_peer_name"):
