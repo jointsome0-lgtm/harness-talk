@@ -13,7 +13,7 @@ uv tool install harness-talk
 export HTALK_DB=/absolute/shared/directory/mail.sqlite3
 ```
 
-Set the same `HTALK_DB` in both sessions. Both must be able to run `htalk` and write the database directory. `--db PATH` overrides the environment; [storage defaults](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/reference.md#database-and-peers) are documented separately.
+Set the same `HTALK_DB` in both sessions. Both must be able to run `htalk` and write the database directory. Only `peer add` creates the file; other commands report `database_not_found` for a wrong path. `--db PATH` overrides the environment; [storage defaults](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/reference.md#database-and-peers) are documented separately.
 
 Before opening an existing database with 0.3, upgrade every participant. The first storage command migrates it to schema 2; older clients cannot open that file.
 
@@ -63,7 +63,7 @@ htalk --as builder ack REPLY_UUID
 
 An acknowledgment records reading and removes that message's pending Codex notice when possible. A question stays open until answered. When the builder's wait records an answer before the final notification check, htalk skips that notice. An already accepted notice may still arrive. Sending a notification does not prove that the recipient read it. The result includes `submission` and copyable `recovery` commands.
 
-After interrupted or uncertain delivery, use `show`, `wait`, `inbox` or `sent`. Never send the same question again under a new ID to retry a notification. For automation, supply a saved UUID with `send --id`; an identical retry returns the existing message without another notification. Use `--no-notify` when the recipient will poll its inbox.
+After interrupted or uncertain delivery, use `show`, `wait`, `inbox` or `sent`. `sent` lists your newest outgoing messages first, 20 at a time with summarized texts; `recovery.next_page` continues the list. Never send the same question again under a new ID to retry a notification. For automation, supply a saved UUID with `send --id`; an identical retry returns the existing message without another notification. Use `--no-notify` when the recipient will poll its inbox.
 
 ## Help and details
 

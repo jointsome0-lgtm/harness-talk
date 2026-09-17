@@ -15,13 +15,14 @@ import tomllib
 import uuid
 
 from . import __version__
+from .errors import CodedOSError, CodedTimeoutError, CodedValueError, failure_detail
 from .store import skip_reason
 
 
 def owned_socket(path):
     info = Path(path).stat()
     if not stat.S_ISSOCK(info.st_mode) or info.st_uid != os.getuid():
-        raise ValueError("recipient_socket_unavailable")
+        raise CodedValueError("recipient_socket_unavailable")
     return str(path)
 
 
@@ -40,10 +41,10 @@ def claude_socket(peer):
     rows = [row for row in json.loads(listed.stdout)
             if row.get("sessionId") == peer["session_id"] and same_workspace(row.get("cwd"), peer["workspace"])]
     if len(rows) != 1 or type(rows[0].get("pid")) is not int:
-        raise ValueError("recipient_unavailable")
+        raise CodedValueError("recipient_unavailable")
     metadata = json.loads((Path.home() / ".claude/sessions" / f"{rows[0]['pid']}.json").read_text())
     if metadata.get("sessionId") != peer["session_id"] or not same_workspace(metadata.get("cwd"), peer["workspace"]):
-        raise ValueError("recipient_identity_changed")
+        raise CodedValueError("recipient_identity_changed")
     return owned_socket(metadata["messagingSocketPath"])
 
 
@@ -63,12 +64,14 @@ class Rpc:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise TimeoutError("codex_rpc_timeout")
+                raise CodedTimeoutError("codex_rpc_timeout")
             frame = json.loads(self.connection.recv(timeout=remaining))
             if frame.get("id") != self.counter:
                 continue
             if "error" in frame:
-                raise ValueError("codex_rpc_rejected:" + str(frame["error"].get("code")))
+                # Only an integer RPC code is kept; the server's message is never recorded.
+                code = frame["error"].get("code") if isinstance(frame["error"], dict) else None
+                raise CodedValueError("codex_rpc_rejected" + (":%d" % code if type(code) is int else ""))
             return frame["result"]
 
 
@@ -94,17 +97,17 @@ class StdioConnection:
         deadline = time.monotonic() + timeout
         while b"\n" not in self.buffer:
             if len(self.buffer) >= 4 * 1024 * 1024:
-                raise ValueError("codex_rpc_frame_too_large")
+                raise CodedValueError("codex_rpc_frame_too_large")
             remaining = max(0, deadline - time.monotonic())
             if not select.select([self.process.stdout], [], [], remaining)[0]:
-                raise TimeoutError("codex_rpc_timeout")
+                raise CodedTimeoutError("codex_rpc_timeout")
             chunk = os.read(self.process.stdout.fileno(), 65536)
             if not chunk:
-                raise OSError("codex_rpc_closed")
+                raise CodedOSError("codex_rpc_closed")
             self.buffer += chunk
         line, self.buffer = self.buffer.split(b"\n", 1)
         if len(line) > 4 * 1024 * 1024:
-            raise ValueError("codex_rpc_frame_too_large")
+            raise CodedValueError("codex_rpc_frame_too_large")
         return line.decode()
 
 
@@ -138,15 +141,15 @@ def codex_rpc(peer):
                           compression=None, max_size=4 * 1024 * 1024) as connection:
             yield initialize_rpc(connection)
     except WebSocketException as exc:
-        raise OSError("codex_websocket_failure") from exc
+        raise CodedOSError("codex_websocket_failure") from exc
 
 
 def check_codex(rpc, peer):
     thread = rpc.call("thread/read", {"threadId": peer["session_id"], "includeTurns": False})["thread"]
     if thread.get("id") != peer["session_id"] or not same_workspace(thread.get("cwd"), peer["workspace"]):
-        raise ValueError("recipient_identity_changed")
+        raise CodedValueError("recipient_identity_changed")
     if thread.get("status", {}).get("type") not in ("idle", "active"):
-        raise ValueError("recipient_not_loaded")
+        raise CodedValueError("recipient_not_loaded")
     return {"harness": "codex", "session_id": thread["id"], "workspace": thread["cwd"],
             "status": thread["status"]["type"]}
 
@@ -176,11 +179,11 @@ def codex_saved_identity(peer):
         row = db.execute("SELECT id, cwd, archived, source FROM threads WHERE id=?",
                          (peer["session_id"],)).fetchone()
     if row is None:
-        raise ValueError("recipient_not_in_codex_state")
+        raise CodedValueError("recipient_not_in_codex_state")
     if row[0] != peer["session_id"] or not same_workspace(row[1], peer["workspace"]):
-        raise ValueError("recipient_identity_changed")
+        raise CodedValueError("recipient_identity_changed")
     if row[2] != 0 or row[3] != "cli":
-        raise ValueError("recipient_is_not_an_unarchived_codex_cli_session")
+        raise CodedValueError("recipient_is_not_an_unarchived_codex_cli_session")
     return {"harness": "codex", "session_id": row[0], "workspace": row[1],
             "metadata_source": str(path), "transport": "codex_cli_queue",
             "runtime_status": "unknown"}
@@ -191,16 +194,16 @@ def notify_codex_cli(peer, body, skip=None):
         codex_saved_identity(peer)
         reason = skip() if skip else None
     except (OSError, ValueError, TypeError, sqlite3.Error) as exc:
-        return "not_submitted", type(exc).__name__
+        return "not_submitted", failure_detail(exc)
     if reason:
         return "not_submitted", reason
     try:
         result = subprocess.run(["codex", "queue", "--thread", peer["session_id"],
                                  "--message", body], capture_output=True, text=True, timeout=20)
     except (FileNotFoundError, PermissionError) as exc:
-        return "not_submitted", type(exc).__name__
+        return "not_submitted", failure_detail(exc)
     except (OSError, subprocess.SubprocessError) as exc:
-        return "submission_unknown", type(exc).__name__
+        return "submission_unknown", failure_detail(exc)
     receipt = re.fullmatch(r"Queued message ([0-9a-f-]{36}) for thread ([0-9a-f-]{36})\.\s*", result.stdout)
     if result.returncode == 0 and receipt and receipt[2] == peer["session_id"]:
         try:
@@ -237,10 +240,10 @@ def dismiss_notification(peer, message, db_path):
             result = rpc.call("thread/queue/delete", {"threadId": peer["session_id"],
                                                        "queuedSubmissionId": queue_id})
             if type(result.get("deleted")) is not bool:
-                raise ValueError("codex_queue_delete_receipt_invalid")
+                raise CodedValueError("codex_queue_delete_receipt_invalid")
         return {"status": "removed" if result["deleted"] else "absent", "queue_id": queue_id}
     except (OSError, ValueError, KeyError, TypeError, sqlite3.Error, subprocess.SubprocessError) as exc:
-        return {"status": "unknown" if attempted else "unavailable", "detail": type(exc).__name__}
+        return {"status": "unknown" if attempted else "unavailable", "detail": failure_detail(exc)}
 
 
 def probe(peer):
@@ -273,7 +276,7 @@ def notification_skip(peer, message, db_path):
         with closing(sqlite3.connect(Path(db_path).resolve().as_uri() + "?mode=ro", uri=True, timeout=3)) as db:
             return skip_reason(db, message["id"], peer["name"])
     except sqlite3.Error:
-        raise ValueError("notification_state_unavailable") from None
+        raise CodedValueError("notification_state_unavailable") from None
 
 
 def notify(peer, message, db_path):
@@ -287,7 +290,7 @@ def notify(peer, message, db_path):
         try:
             path = claude_socket(peer)
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
-            return "not_submitted", type(exc).__name__
+            return "not_submitted", failure_detail(exc)
         frame = {"type": "user", "session_id": peer["session_id"], "uuid": message["id"],
                  "msg_id": message["id"], "from": "htalk:" + message["sender"], "priority": "next",
                  "message": {"role": "user", "content": body}}
@@ -300,9 +303,9 @@ def notify(peer, message, db_path):
                     return "not_submitted", reason
                 connection.sendall((json.dumps(frame) + "\n").encode())
         except ValueError as exc:
-            return "not_submitted", str(exc)
+            return "not_submitted", failure_detail(exc)
         except OSError as exc:
-            return "submission_unknown", type(exc).__name__
+            return "submission_unknown", failure_detail(exc)
         return "submitted", "claude_socket_bytes_written"
     if not peer.get("socket"):
         return notify_codex_cli(peer, body, skip)
@@ -318,7 +321,7 @@ def notify(peer, message, db_path):
                 "clientUserMessageId": message["id"], "input": [{"type": "text", "text": body}]})
             queued = receipt["queuedSubmission"]
             if queued["clientUserMessageId"] != message["id"]:
-                raise ValueError("codex_queue_receipt_mismatch")
+                raise CodedValueError("codex_queue_receipt_mismatch")
         return "submitted", "codex_queued:" + queued["id"]
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as exc:
-        return ("submission_unknown" if attempted else "not_submitted"), type(exc).__name__
+        return ("submission_unknown" if attempted else "not_submitted"), failure_detail(exc)
