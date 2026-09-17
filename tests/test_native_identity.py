@@ -122,6 +122,10 @@ class NativeClaudeIdentity(unittest.TestCase):
         show = shlex.split(question["recovery"]["show"])
         self.assertEqual(["--as", "reviewer"], show[3:5])
         self.assertEqual("option", self.cli(*show[3:], **self.environment)["actor_source"])
+        with patch("harness_talk.cli.notify", side_effect=KeyboardInterrupt()):
+            interrupted = self.cli("send", "builder", "--message", "Interrupted", code=130, **self.environment)
+        self.assertEqual(("saved", "native_session"), (interrupted["persistence"], interrupted["actor_source"]))
+        self.assertIn("--as reviewer", interrupted["recovery"]["show"])
         self.assertEqual("HTALK_PEER", self.cli("inbox", HTALK_PEER="builder")["actor_source"])
         self.assertEqual("option", self.cli("--as", "reviewer", "inbox", HTALK_PEER="builder", **self.environment)["actor_source"])
 

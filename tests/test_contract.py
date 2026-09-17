@@ -177,7 +177,7 @@ class Conversations(unittest.TestCase):
                                            "send", "bob", "--id", message_id, "--message", "Question?"]))
                 interrupted = json.loads(output.call_args.args[0])
                 self.assertEqual(message_id, interrupted["message_id"])
-                self.assertEqual("saved", interrupted["persistence"])
+                self.assertEqual(("saved", "option"), (interrupted["persistence"], interrupted["actor_source"]))
                 self.assertEqual(0, main(shlex.split(interrupted["recovery"]["show"])[1:]))
                 self.assertEqual("submission_unknown", json.loads(output.call_args.args[0])["submission"])
                 self.assertEqual(0, main(["--db", str(self.store.path), "--as", "alice",

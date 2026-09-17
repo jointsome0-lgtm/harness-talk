@@ -318,9 +318,11 @@ def main(argv=None):
             if args.command == "ack":
                 recovery["retry_notification_cleanup"] = command(args, "ack", known_id)
                 action += " Use recovery.retry_notification_cleanup to finish acknowledgment and queue cleanup."
-        print(json.dumps({"state": "interrupted", "message_id": known_id, "recovery": recovery,
-                          "persistence": "saved" if saved_id else "unknown",
-                          "next_action": action}))
+        result = {"state": "interrupted", "message_id": known_id, "recovery": recovery,
+                  "persistence": "saved" if saved_id else "unknown", "next_action": action}
+        if source:
+            result["actor_source"] = source
+        print(json.dumps(result))
         return 130
     except (ValueError, OSError, sqlite3.Error, KeyError, subprocess.SubprocessError) as exc:
         error = str(exc)
