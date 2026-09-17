@@ -232,6 +232,14 @@ def page_actions(args, result):
     result["next_action"] = " ".join(filter(None, (result.get("next_action"), f"{more} messages remain: use recovery.next_page.")))
 
 
+def retired_registration(args, result, registered):
+    """A registration conflict with a retired peer points to the list that shows it."""
+    if registered["retired_at"] is not None:
+        result["retired_at"] = registered["retired_at"]
+        result["recovery"]["peers"] = command(args, "peer", "list", "--all", actor=False)
+        result["next_action"] += f" Peer {registered['name']} is retired, so recovery.peers includes retired peers."
+
+
 def main(argv=None):
     args = parser().parse_args(argv)
     saved_id = None
@@ -400,14 +408,17 @@ def main(argv=None):
             result["next_action"] = (
                 f"Peer {args.name} is already bound to {registered['harness']} session {registered['session_id']}. "
                 "Inspect recovery.peers. Keep that address for the existing session; a separate session needs a different peer name.")
+            retired_registration(args, result, registered)
         elif error == "session_already_has_a_peer_name":
             session_id = args.session if args.harness == "opencode" else str(uuid.UUID(args.session))
-            registered = next(peer for peer in store.peers()
-                              if peer["harness"] == args.harness and peer["session_id"] == session_id)
+            registered = store.session_peer(args.harness, session_id)
             result.update(registered_peer=registered["name"], registered_session_id=registered["session_id"])
             result["next_action"] = (
                 f"Session {registered['session_id']} already uses peer {registered['name']}. "
                 "Use that name from its registered session. Inspect recovery.peers for the existing immutable addresses.")
+            retired_registration(args, result, registered)
+            if registered["retired_at"] is not None:
+                result["next_action"] += f" To give this session new requests again, run htalk peer restore {registered['name']}."
         elif error in ("message_id_conflict", "reply_conflict_existing_answer_preserved"):
             known_id = str(uuid.UUID(args.id)) if args.command == "send" else args.message_id
             result["message_id"] = known_id

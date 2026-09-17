@@ -65,8 +65,16 @@ class RetiredPeers(unittest.TestCase):
         again = self.cli("peer", "add", "bob", *address)
         self.assertEqual(first, again["retired_at"])
         self.assertTrue(again["recovery"]["restore"].endswith("peer restore bob"))
+        # Registration conflicts point to the list that includes the retired peer.
         taken = self.cli("peer", "add", "carol", *address, code=2)
-        self.assertEqual(("session_already_has_a_peer_name", "bob"), (taken["error"], taken["registered_peer"]))
+        self.assertEqual(("session_already_has_a_peer_name", "bob", first), (taken["error"], taken["registered_peer"], taken["retired_at"]))
+        self.assertTrue(taken["recovery"]["peers"].endswith("peer list --all"))
+        self.assertIn("peer restore bob", taken["next_action"])
+        rebound = self.cli("peer", "add", "bob", *address[:3], str(uuid.uuid4()), *address[4:], code=2)
+        self.assertEqual(("peer_already_has_a_different_address", first), (rebound["error"], rebound["retired_at"]))
+        self.assertTrue(rebound["recovery"]["peers"].endswith("peer list --all"))
+        self.assertTrue(self.cli("peer", "add", "carol", "--harness", "claude", "--session", self.store.peer("alice")["session_id"],
+                                 "--workspace", str(self.path), code=2)["recovery"]["peers"].endswith("peer list"))
         listed = self.cli("peer", "list")
         self.assertEqual((["alice"], 1), ([peer["name"] for peer in listed["peers"]], listed["retired_hidden"]))
         self.assertEqual([None, first], [peer["retired_at"] for peer in self.cli("peer", "list", "--all")["peers"]])
