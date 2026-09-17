@@ -46,7 +46,7 @@ htalk peer check reviewer
 htalk --as builder send reviewer --message 'Which case needs another test?' --wait 45
 ```
 
-From the reviewer's session, read the request, acknowledge it and answer. Use the request ID returned by `inbox`:
+From the reviewer's session, read the request, acknowledge it and answer. Use the request ID returned by `inbox`. A registered Claude Code session such as this reviewer may also omit `--as`; see [peer selection](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/reference.md#database-and-peers).
 
 ```sh
 htalk --as reviewer inbox

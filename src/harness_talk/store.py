@@ -182,6 +182,11 @@ class Store:
             raise ValueError("unknown_peer")
         return dict(row)
 
+    def session_peer(self, harness, session_id):
+        with closing(self.connect()) as db:
+            row = db.execute("SELECT * FROM peers WHERE harness=? AND session_id=?", (harness, session_id)).fetchone()
+        return dict(row) if row else None
+
     def peers(self):
         with closing(self.connect()) as db:
             return [dict(row) for row in db.execute("SELECT * FROM peers ORDER BY name")]

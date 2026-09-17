@@ -17,7 +17,18 @@ Only `peer add` creates a missing database file and its directory. Every other c
 
 `peer add` records an immutable name and session address. It does not notify the session. `peer list` shows registered addresses; `peer discover` finds addresses outside the registry. Session IDs are UUIDs for Codex/Claude and opaque `ses...` IDs for OpenCode. Workspace comparisons resolve paths. Endpoint options must agree with the selected client.
 
-`--as NAME` overrides `HTALK_PEER`. Names are routing assertions under one trusted OS account. Anyone with database access can read or change it. For a Codex sender, a conflicting `CODEX_THREAD_ID` is rejected when available; Claude/OpenCode actors ignore that inherited variable. On a conflict, use the returned `recovery.peers` command to inspect addresses. Select the correct peer or register a separate name; existing peers cannot be reassigned.
+`--as NAME` overrides `HTALK_PEER`. Without either, a message command run by a recognized Claude Code session acts as the peer registered for that session. Results report the choice as `actor_source`: `option`, `HTALK_PEER` or `native_session`. Names are routing assertions under one trusted OS account. Anyone with database access can read or change it. For a Codex sender, a conflicting `CODEX_THREAD_ID` is rejected when available. For a Claude sender, a different recognized Claude Code session is rejected with `actor_conflicts_with_CLAUDE_CODE_SESSION_ID`. Neither check applies to peers of other clients. On a conflict, use the returned `recovery.peers` command to inspect addresses. Select the correct peer or register a separate name; existing peers cannot be reassigned.
+
+htalk recognizes a Claude Code session only when all of these hold:
+
+- `CLAUDE_CODE_SESSION_ID` is a UUID and `CLAUDE_PID` is a process ID.
+- `~/.claude/sessions/CLAUDE_PID.json` records that session ID, that PID and the process start time shown in `/proc`.
+- That process is an ancestor of htalk, with at most 64 processes in between.
+- `CODEX_THREAD_ID` is unset, and no process in between has a command or executable name starting with `claude`, `codex` or `opencode`.
+
+If any check fails, including when `/proc` or the metadata is unreadable, explicit names work as before. A command without one fails with `peer_required_use_as_or_HTALK_PEER`. Its `native_session` holds either the recognized `session_id` and `workspace` to register, or the `reason` recognition failed. Recognition reads htalk's own environment, that metadata file, and `/proc` entries for htalk's ancestors. It is not authentication: any process under the same account can reproduce this evidence.
+
+Use `--as` or `HTALK_PEER` where recognition does not apply. A tmux server started by a Claude Code command detaches from Claude, so its panes are not recognized. A Claude Code session started from a Codex command inherits `CODEX_THREAD_ID` and is not recognized either. A client nested in a Claude Code command that sets neither Claude variable and runs under another process name, for example through `node`, inherits the outer session's peer. Recognition never selects a peer registered to another session ID, including after `/clear` or `--resume` changes the ID.
 
 ## Notifications and recovery
 
