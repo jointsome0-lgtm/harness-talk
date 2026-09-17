@@ -8,6 +8,7 @@ import sqlite3
 import time
 import uuid
 
+from .errors import CodedValueError, failure_detail
 from .opencode import valid_session_id as valid_opencode_session_id, valid_url as valid_opencode_url
 
 SCHEMA_VERSION = 2
@@ -16,6 +17,8 @@ SCHEMA_VERSION = 2
 # that such a receipt may arrive within WAIT_GRACE seconds; it never suppresses.
 WAIT_GRACE = 1.0
 NOT_NEEDED = ("acknowledged_before_notification", "returned_by_recipient_wait")
+PAGE_LIMIT, MAX_PAGE_LIMIT, PREVIEW_CHARS = 20, 500, 120
+MAX_SEQ = 2**63 - 1
 
 
 def default_db():
@@ -34,13 +37,37 @@ def valid_wait(seconds):
         raise ValueError("wait_seconds_must_be_between_0_and_45")
 
 
+def valid_page(limit, cursor):
+    if type(limit) is not int or not 1 <= limit <= MAX_PAGE_LIMIT:
+        raise ValueError("limit_must_be_between_1_and_500")
+    if cursor is not None and (type(cursor) is not int or not 1 <= cursor <= MAX_SEQ):
+        raise ValueError("seq_cursor_must_be_a_positive_integer")
+
+
+def with_reply(db, row):
+    result = dict(row)
+    answer = db.execute("SELECT * FROM messages WHERE in_reply_to=?", (row["id"],)).fetchone()
+    result["reply"] = dict(answer) if answer else None
+    result["state"] = "reply_received" if answer else "saved"
+    return result
+
+
+def summarize(message):
+    """Replace a message's and its answer's text with its UTF-8 size and first nonblank line."""
+    for item in (message, message["reply"]):
+        if item is not None:
+            body = item.pop("body")
+            item["body_bytes"] = len(body.encode())
+            item["body_preview"] = next((line.strip() for line in body.splitlines() if line.strip()), "")[:PREVIEW_CHARS]
+
+
 def skip_reason(db, message_id, recipient):
     """Why a claimed notification is no longer needed, or None. Read-only: the
     recipient acknowledged the message, or its own wait already returned this answer."""
     row = db.execute("SELECT ack_at, in_reply_to, wait_returned_at FROM messages WHERE id=? AND recipient=?",
                      (message_id, recipient)).fetchone()
     if row is None:
-        raise ValueError("notification_message_not_found")
+        raise CodedValueError("notification_message_not_found")
     if row[0] is not None:
         return "acknowledged_before_notification"
     if row[1] is not None and row[2] is not None:
@@ -56,13 +83,21 @@ def wait_deadline(db, message_id, recipient):
 
 
 class Store:
-    def __init__(self, path, dismiss_notification=None):
+    def __init__(self, path, dismiss_notification=None, create=True):
         self.path = Path(path).expanduser().resolve()
         self.dismiss_notification = dismiss_notification
-        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-        # Create privately before sqlite opens it, independent of the caller's umask.
-        fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
-        os.close(fd)
+        self.create = create
+        if create:
+            self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            # Create privately before sqlite opens it, independent of the caller's umask.
+            fd = os.open(self.path, os.O_CREAT | os.O_RDWR, 0o600)
+            os.close(fd)
+        else:
+            try:
+                self.path.stat()
+            except (FileNotFoundError, NotADirectoryError):
+                # Access and corruption errors surface separately when opening.
+                raise ValueError("database_not_found") from None
         with closing(self.connect()) as db, db:
             # One write transaction: concurrent first opens serialize here, so the
             # schema check, table creation and column addition cannot interleave.
@@ -99,7 +134,9 @@ class Store:
             db.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
     def connect(self):
-        db = sqlite3.connect(self.path, timeout=5)
+        # Without create, a file removed after the check fails to open instead of reappearing empty.
+        db = (sqlite3.connect(self.path, timeout=5) if self.create else
+              sqlite3.connect(self.path.as_uri() + "?mode=rw", uri=True, timeout=5))
         db.row_factory = sqlite3.Row
         db.execute("PRAGMA foreign_keys=ON")
         return db
@@ -202,9 +239,9 @@ class Store:
             else:
                 state, detail = notify(self.peer(message["recipient"]), message, self.path)
             if state not in ("submitted", "not_submitted", "submission_unknown"):
-                raise ValueError("invalid_notification_result")
+                raise CodedValueError("invalid_notification_result")
         except Exception as exc:
-            state, detail = "submission_unknown", type(exc).__name__
+            state, detail = "submission_unknown", failure_detail(exc)
         with closing(self.connect()) as db, db:
             db.execute("""UPDATE messages SET submission=?, notification_detail=?,
                 notification_finished_at=? WHERE id=?""", (state, detail, time.time(), message_id))
@@ -256,7 +293,7 @@ class Store:
             try:
                 cleanup = self.dismiss_notification(self.peer(message["recipient"]), message, self.path)
             except Exception as exc:
-                cleanup = {"status": "unknown", "detail": type(exc).__name__}
+                cleanup = {"status": "unknown", "detail": failure_detail(exc)}
             message["notification_cleanup"] = cleanup
         return message
 
@@ -265,29 +302,44 @@ class Store:
             row = db.execute("SELECT * FROM messages WHERE id=?", (message_id,)).fetchone()
             if row is None:
                 raise ValueError("unknown_message")
-            result = dict(row)
-            if actor is not None and actor not in (result["sender"], result["recipient"]):
+            if actor is not None and actor not in (row["sender"], row["recipient"]):
                 raise ValueError("message_not_addressed_to_peer")
-            answer = db.execute("SELECT * FROM messages WHERE in_reply_to=?", (message_id,)).fetchone()
-        result["reply"] = dict(answer) if answer else None
-        result["state"] = "reply_received" if answer else "saved"
+            return with_reply(db, row)
+
+    def page(self, actor, condition, newest_first, limit, cursor):
+        """One page of the actor's matching messages, ordered by seq. Counts and rows
+        come from one read snapshot. omitted counts matches beyond this page in its
+        direction; total ignores the cursor and limit."""
+        valid_page(limit, cursor)
+        self.peer(actor)
+        order, beyond = ("DESC", "<") if newest_first else ("ASC", ">")
+        if cursor is None:
+            cursor = MAX_SEQ if newest_first else 0
+        with closing(self.connect()) as db:
+            db.execute("BEGIN")
+            total = db.execute(f"SELECT COUNT(*) FROM messages m WHERE {condition}", (actor,)).fetchone()[0]
+            rows = db.execute(f"SELECT * FROM messages m WHERE {condition} AND m.seq {beyond} ? "
+                              f"ORDER BY m.seq {order} LIMIT ?", (actor, cursor, limit)).fetchall()
+            omitted = db.execute(f"SELECT COUNT(*) FROM messages m WHERE {condition} AND m.seq {beyond} ?",
+                                 (actor, rows[-1]["seq"])).fetchone()[0] if rows else 0
+            messages = [with_reply(db, row) for row in rows]
+        return {"messages": messages, "total": total, "omitted": omitted}
+
+    def inbox(self, actor, limit=PAGE_LIMIT, after_seq=None):
+        """Unanswered incoming questions and unacknowledged answers, oldest first."""
+        result = self.page(actor, """m.recipient=? AND
+            ((m.in_reply_to IS NULL AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.in_reply_to=m.id)) OR
+             (m.in_reply_to IS NOT NULL AND m.ack_at IS NULL))""", False, limit, after_seq)
+        result["next_action"] = "Read and ack messages explicitly. Unanswered questions remain until replied to."
         return result
 
-    def inbox(self, actor):
-        self.peer(actor)
-        with closing(self.connect()) as db:
-            rows = db.execute("""SELECT id FROM messages m WHERE recipient=? AND
-                ((in_reply_to IS NULL AND NOT EXISTS
-                  (SELECT 1 FROM messages r WHERE r.in_reply_to=m.id)) OR
-                 (in_reply_to IS NOT NULL AND ack_at IS NULL)) ORDER BY seq""", (actor,)).fetchall()
-        return {"messages": [self.get(row["id"]) for row in rows],
-                "next_action": "Read and ack messages explicitly. Unanswered questions remain until replied to."}
-
-    def sent(self, actor):
-        self.peer(actor)
-        with closing(self.connect()) as db:
-            rows = db.execute("SELECT id FROM messages WHERE sender=? ORDER BY seq", (actor,)).fetchall()
-        return {"messages": [self.get(row["id"]) for row in rows]}
+    def sent(self, actor, limit=PAGE_LIMIT, before_seq=None, bodies=False):
+        """Outgoing messages, newest first. Without bodies, texts are summarized."""
+        result = self.page(actor, "m.sender=?", True, limit, before_seq)
+        if not bodies:
+            for message in result["messages"]:
+                summarize(message)
+        return result
 
     def ack(self, message_id, actor):
         with closing(self.connect()) as db, db:

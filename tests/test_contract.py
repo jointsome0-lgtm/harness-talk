@@ -376,9 +376,6 @@ class CodexAdapter(unittest.TestCase):
         self.assertEqual("submission_unknown", outcome[0])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
 @unittest.skipUnless(os.environ.get("HTALK_SOCKET_TESTS") == "1", "set HTALK_SOCKET_TESTS=1 when local socket binding is permitted")
 class LocalSocketIntegration(unittest.TestCase):
     def test_codex_websocket_identity_and_queue_receipt(self):
@@ -510,3 +507,7 @@ class NativeCodexAdapter(unittest.TestCase):
         (self.home / "config.toml").write_text("sqlite_home = " + json.dumps(str(configured)))
         with patch.dict(os.environ, {"CODEX_SQLITE_HOME": str(self.home / "wrong")}):
             self.assertEqual(str(configured / "state_5.sqlite"), adapters.probe(self.peer)["metadata_source"])
+
+
+if __name__ == "__main__":
+    unittest.main()

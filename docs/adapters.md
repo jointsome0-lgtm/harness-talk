@@ -68,7 +68,7 @@ OpenCode uses an explicit loopback HTTP server and opaque session IDs. The serve
 
 ## Adding an adapter
 
-Keep persistence and conversation rules in `Store`. A notification function takes the registered recipient, saved message and database path, then returns `(submission, detail)`. The store claims the one attempt before calling it. A failure after client submission might have begun must return `submission_unknown`; only a failure known to precede transmission may return `not_submitted`. Exceptions leave the claim uncertain.
+Keep persistence and conversation rules in `Store`. A notification function takes the registered recipient, saved message and database path, then returns `(submission, detail)`. The store claims the one attempt before calling it. A failure after client submission might have begun must return `submission_unknown`; only a failure known to precede transmission may return `not_submitted`. Exceptions leave the claim uncertain. Report fixed codes by raising a subclass of `errors.Coded`; any other exception is recorded by class name only.
 
 An adapter must verify available evidence for the exact session address, never broaden delivery to a name match, and never replay an uncertain attempt. Adding a harness also requires registration validation and focused tests. Shared storage, reply correlation, acknowledgments and waiting remain unchanged.
 

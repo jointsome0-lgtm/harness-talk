@@ -15,6 +15,8 @@ import re
 import sqlite3
 from urllib.parse import quote, urlencode, urlsplit
 
+from .errors import Coded, CodedValueError, failure_detail
+
 DEFAULT_URL = "http://127.0.0.1:4096"
 TIMEOUT = 5
 MAX_RESPONSE = 4 * 1024 * 1024
@@ -22,17 +24,17 @@ SAVED_LIMIT = 50
 STATUSES = ("idle", "busy", "retry")
 
 
-class OpenCodeError(ValueError):
+class OpenCodeError(Coded, ValueError):
     """A fixed code; never server prose or credentials."""
 
 
-class Uncertain(OSError):
+class Uncertain(Coded, OSError):
     """The request may have reached the server before this failure."""
 
 
 def valid_session_id(value):
     if not isinstance(value, str) or not re.fullmatch(r"ses[A-Za-z0-9_.-]{1,253}", value):
-        raise ValueError("invalid_opencode_session_id")
+        raise CodedValueError("invalid_opencode_session_id")
     return value
 
 
@@ -41,14 +43,14 @@ def valid_url(value):
     parts = urlsplit(value) if isinstance(value, str) else None
     if (not parts or parts.scheme not in ("http", "https") or not parts.hostname or parts.username is not None
             or parts.password is not None or parts.query or parts.fragment):
-        raise ValueError("invalid_opencode_url")
+        raise CodedValueError("invalid_opencode_url")
     if parts.hostname != "localhost":
         try:
             loopback = ipaddress.ip_address(parts.hostname).is_loopback
         except ValueError:
             loopback = False  # Names such as 127.attacker.example are not addresses.
         if not loopback:
-            raise ValueError("opencode_url_must_be_loopback")
+            raise CodedValueError("opencode_url_must_be_loopback")
     parts.port  # A malformed port raises here.
     return parts.scheme + "://" + parts.netloc + parts.path.rstrip("/")
 
@@ -175,16 +177,16 @@ def notify(peer, body, *, skip=None):
         probe(peer)
         reason = skip() if skip is not None else None
     except (OSError, ValueError, KeyError, TypeError) as exc:
-        return "not_submitted", str(exc) if isinstance(exc, OpenCodeError) else type(exc).__name__
+        return "not_submitted", failure_detail(exc)
     if reason:
         return "not_submitted", reason
     try:
         status, _ = server.request("POST", "/session/" + quote(peer["session_id"], safe="") + "/prompt_async",
                                    {"directory": peer["workspace"]}, {"parts": [{"type": "text", "text": body}]})
     except OpenCodeError as exc:
-        return "not_submitted", str(exc)
+        return "not_submitted", failure_detail(exc)
     except Uncertain as exc:
-        return "submission_unknown", str(exc)
+        return "submission_unknown", failure_detail(exc)
     if status == 204:
         return "submitted", "opencode_prompt_async_accepted"
     if status == 401:
@@ -237,8 +239,7 @@ def server_sessions(url, workspace=None):
                 source.update(status="partial", detail="opencode_invalid_session_records",
                               rejected=source.get("rejected", 0) + 1)
     except (OSError, ValueError, TypeError, KeyError) as exc:
-        fixed = isinstance(exc, (OpenCodeError, Uncertain)) or str(exc) in ("invalid_opencode_url", "opencode_url_must_be_loopback")
-        source.update(status="unavailable", error=str(exc) if fixed else "opencode_" + type(exc).__name__)
+        source.update(status="unavailable", error=str(exc) if isinstance(exc, Coded) else "opencode_" + type(exc).__name__)
         found = []
     return found, source
 
@@ -262,7 +263,7 @@ def saved_sessions(path):
         for session_id, directory, updated in rows:
             try:
                 if not isinstance(directory, str) or not directory:
-                    raise ValueError("opencode_invalid_saved_metadata")
+                    raise CodedValueError("opencode_invalid_saved_metadata")
                 found.append(candidate(valid_session_id(session_id), directory, "unknown", "saved_metadata_only",
                                        "opencode_saved", None, int(updated // 1000) if type(updated) is int else None))
             except (ValueError, TypeError):
@@ -270,7 +271,7 @@ def saved_sessions(path):
                               rejected=source.get("rejected", 0) + 1)
     except (sqlite3.Error, OSError, ValueError, TypeError) as exc:
         source.update(status="unavailable", detail=None,
-                      error="opencode_saved_" + type(exc).__name__ if isinstance(exc, (sqlite3.Error, OSError)) else str(exc))
+                      error=str(exc) if isinstance(exc, Coded) else "opencode_saved_" + type(exc).__name__)
         found = []
     return found, source
 

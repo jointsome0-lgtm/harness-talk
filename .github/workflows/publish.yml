@@ -35,6 +35,8 @@ jobs:
           python -m twine check --strict dist/*
           sha256sum dist/*
       - name: Test the installed wheel outside the checkout
+        env:
+          HTALK_SOCKET_TESTS: "1"
         run: |
           wheel=(dist/*.whl)
           python -m pip install "${wheel[0]}"

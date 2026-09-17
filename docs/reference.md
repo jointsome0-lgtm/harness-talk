@@ -13,6 +13,8 @@ Choose one writable directory shared by the participants. SQLite writers need di
 
 A checkout is never the default database location. Before an existing database is opened by 0.3, update every participant: the first storage command migrates it to schema 2, preserving peers, messages and acknowledgments. Older clients reject it. The `waits` table and the nullable `messages.wait_returned_at` column are added to schema 2 files without changing the version; a 0.3.0 client ignores them, so its waits and replies keep the earlier notification behavior. Discovery does not open or migrate the database.
 
+Only `peer add` creates a missing database file and its directory. Every other command reports `database_not_found` with the `resolved_path`, so a mistyped `--db` or `HTALK_DB` does not start an empty registry. Access and corruption errors are reported separately. Opening an existing database can still migrate its schema.
+
 `peer add` records an immutable name and session address. It does not notify the session. `peer list` shows registered addresses; `peer discover` finds addresses outside the registry. Session IDs are UUIDs for Codex/Claude and opaque `ses...` IDs for OpenCode. Workspace comparisons resolve paths. Endpoint options must agree with the selected client.
 
 `--as NAME` overrides `HTALK_PEER`. Names are routing assertions under one trusted OS account. Anyone with database access can read or change it. For a Codex sender, a conflicting `CODEX_THREAD_ID` is rejected when available; Claude/OpenCode actors ignore that inherited variable. On a conflict, use the returned `recovery.peers` command to inspect addresses. Select the correct peer or register a separate name; existing peers cannot be reassigned.
@@ -22,6 +24,8 @@ A checkout is never the default database location. Before an existing database i
 After saving a message, the store durably claims its one notification attempt. The adapter then checks the exact recipient before client submission. An interruption during that check can leave `submission_unknown`; it does not permit another attempt. A notification contains a `show` command for the exact message ID, without the message body. An answer with `ack_at` set, or a request with a saved `reply`, needs no duplicate processing. A request (`in_reply_to` is null) without a reply stays open after acknowledgment and may still need an answer. The notification preserves the recipient's configured client/model settings and grants no additional permissions.
 
 Run `peer check` in the scope that will send. `recipient_unavailable` can mean restricted discovery rather than an offline client. Use the client's normal permission approval for a needed host check; do not replay an already-saved notification. An unavailable client can later retrieve the message from `inbox`.
+
+`notification_detail` and a cleanup `detail` carry fixed htalk codes, such as `recipient_unavailable` or `codex_rpc_rejected:-32600`. Any other failure is recorded by its exception class name only, without its message text.
 
 | `submission` | Evidence |
 | --- | --- |
@@ -45,7 +49,7 @@ A race after the final check, including a notice already accepted by the client,
 
 The command's `notification_cleanup` describes this removal attempt. `removed` confirms deletion; `absent` means the queue ID was already gone. Neither can recall a notice already consumed by the client. `pending` means submission has started without a saved completion receipt. It provides `recovery.retry_notification_cleanup`, as do `unavailable` and `unknown`. The acknowledgment stays saved; after submission finishes, repeating `ack` safely retries removal without notifying again. An interrupted `ack` exits with code 130 and also provides this recovery command. `skipped` means there is no usable confirmed queue receipt, and `unsupported` means the client has no removal adapter. Cleanup does not change the historical `submission` receipt. Cleanup needs access to native Codex state or its registered socket. A writable htalk database does not imply that access: a sandboxed `ack` may save the read mark but return `unavailable`; use the client's normal approval flow for native access before retrying the listed command. Claude and OpenCode notices cannot currently be withdrawn.
 
-`show` retrieves one message and its correlated answer. `inbox` finds incoming work; `sent` recovers outgoing IDs. Results carry executable `recovery` commands with the database, peer name and full IDs. Read an answer before executing `ack_after_reading`.
+`show` retrieves one message and its correlated answer. `inbox` finds incoming work, oldest first; `sent` recovers outgoing IDs, newest first. Both return at most `--limit` messages (default 20, up to 500) with `total`, the count of all matching messages, and `omitted`, the count beyond this page. When `omitted` is above 0, `recovery.next_page` continues with the same options from a `seq` cursor: `--after-seq` for `inbox`, `--before-seq` for `sent`. `sent` summarizes each text, including a correlated answer's, as `body_bytes` (UTF-8 size) and `body_preview`, the first nonblank line up to 120 characters; `show` and `sent --bodies` return full texts. Results carry executable `recovery` commands with the database, peer name and full IDs. Read an answer before executing `ack_after_reading`.
 
 `wait REQUEST_UUID --seconds N` polls only the database for 0 to 45 seconds and records an answer before returning it. A later notification check skips an answer carrying that record. Resume the wait after timeout or interruption. It never resends or acknowledges. `--no-notify` saves a message for polling only. `--message-file PATH` supplies a multiline body, including paths to artifacts the recipient should inspect.
 
@@ -55,11 +59,11 @@ For repeatable automation, generate and retain a UUID before `send --id UUID`. I
 
 | Code | Meaning |
 | --- | --- |
-| 0 | Local operation succeeded, including `--no-notify`, an identical retry, acknowledgment before notification completed, or an answer already returned by the requester's wait. |
-| 2 | Invalid input, all discovery sources unavailable, or this invocation attempted notification without confirmed submission or acknowledgment. The message may already be saved. |
+| 0 | Local operation succeeded, including `--no-notify`, an identical retry, acknowledgment before notification completed, an answer already returned by the requester's wait, or `send --wait` that returned a saved answer. |
+| 2 | Invalid input, a missing database, all discovery sources unavailable, or this invocation attempted notification without confirmed submission, acknowledgment or a saved answer. The message may already be saved. |
 | 130 | Interrupted; read the recovery guidance. |
 
-Retrieval, acknowledgment and identical retries can exit 0 even if the original notification failed. Acknowledgment also exits 0 if queue cleanup fails; inspect `notification_cleanup` separately. There is no daemon, remote-host transport or Boardmail dependency.
+Retrieval, acknowledgment and identical retries can exit 0 even if the original notification failed. A `send --wait` that returns an answer exits 0 and keeps its request's unconfirmed `submission`. Acknowledgment also exits 0 if queue cleanup fails; inspect `notification_cleanup` separately. There is no daemon, remote-host transport or Boardmail dependency.
 
 ## Source installation and tests
 

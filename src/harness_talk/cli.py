@@ -12,7 +12,7 @@ import uuid
 from . import __version__
 from .adapters import dismiss_notification, notify, probe
 from .discovery import discover
-from .store import NOT_NEEDED, Store, default_db, valid_wait
+from .store import MAX_PAGE_LIMIT, NOT_NEEDED, PAGE_LIMIT, PREVIEW_CHARS, Store, default_db, valid_wait
 
 
 class Parser(argparse.ArgumentParser):
@@ -39,13 +39,15 @@ def parser():
                "Put --db and --as before the command, or set HTALK_DB and HTALK_PEER.\n"
                "Use htalk COMMAND --help, or htalk peer COMMAND --help, for examples.\n"
                "Commands return JSON with state, submission and recovery guidance.\n"
-               "Exit 0: completed. Exit 2: invalid input or unconfirmed notification;\n"
-               "the message may be saved. Exit 130: interrupted; inspect recovery.",
+               "Exit 0: completed, including send --wait that returned an answer. Exit 2:\n"
+               "invalid input, or an unconfirmed notification without an answer; the message\n"
+               "may be saved. Exit 130: interrupted; inspect recovery.",
     )
     root.add_argument("--version", action="version", version=__version__)
     root.add_argument("--db", type=Path, default=default_db(), metavar="PATH",
                       help="Shared SQLite file. Default: HTALK_DB, then $XDG_DATA_HOME/harness-talk/mail.sqlite3, "
-                           "then ~/.local/share/harness-talk/mail.sqlite3 (current: %(default)s).")
+                           "then ~/.local/share/harness-talk/mail.sqlite3 (current: %(default)s). "
+                           "Only peer add creates a missing file.")
     root.add_argument("--as", dest="actor", default=os.environ.get("HTALK_PEER"), metavar="NAME",
                       help="Your registered peer name; overrides HTALK_PEER. Required for message commands.")
     commands = root.add_subparsers(dest="command", required=True)
@@ -132,16 +134,26 @@ def parser():
                    "Claude/OpenCode do not support withdrawing an already queued notice.")
         commands.add_parser(name, help=description, description=description, epilog=example).add_argument(
             "message_id", help="Message UUID from inbox, sent or another command's result.")
-    commands.add_parser("inbox", help="List incoming work that remains open.",
-                        description="Read incoming unanswered questions and unacknowledged answers. Reading changes no acknowledgments.",
-                        epilog="Example: htalk --as bob inbox\n"
-                               "Read messages[].body, then ack that message's id. Reply to a question\n"
-                               "using the same id; acknowledging alone leaves the question open.")
-    commands.add_parser("sent", help="List outgoing messages and recover their IDs.",
-                        description="Recover outgoing IDs after interruption, including messages with uncertain notifications. Does not resend.",
-                        epilog="Example: htalk --as alice sent\n"
-                               "Use a saved request's id with show or wait. Inspect reply for its answer.\n"
-                               "A saved message with an uncertain notification must not be resent.")
+    inbox = commands.add_parser("inbox", help="List incoming work that remains open.",
+                                description="Read incoming unanswered questions and unacknowledged answers, oldest first. Reading changes no acknowledgments.",
+                                epilog="Example: htalk --as bob inbox\n"
+                                       "Read messages[].body, then ack that message's id. Reply to a question\n"
+                                       "using the same id; acknowledging alone leaves the question open.\n"
+                                       "When omitted is above 0, run recovery.next_page for newer messages.")
+    sent = commands.add_parser("sent", help="List outgoing messages and recover their IDs.",
+                               description="Recover outgoing IDs after interruption, including messages with uncertain notifications, newest first. Does not resend.",
+                               epilog="Example: htalk --as alice sent\n"
+                                      "Use a saved request's id with show or wait. Inspect reply for its answer.\n"
+                                      "Texts are summarized as body_bytes and body_preview, the first nonblank line\n"
+                                      f"up to {PREVIEW_CHARS} characters; show or --bodies returns them in full.\n"
+                                      "When omitted is above 0, run recovery.next_page for older messages.\n"
+                                      "A saved message with an uncertain notification must not be resent.")
+    for cmd, cursor, direction in ((inbox, "--after-seq", "newer"), (sent, "--before-seq", "older")):
+        cmd.add_argument("--limit", type=int, default=PAGE_LIMIT, metavar="N",
+                         help=f"Return at most N messages, 1–{MAX_PAGE_LIMIT} (default: %(default)s).")
+        cmd.add_argument(cursor, type=int, metavar="SEQ",
+                         help=f"Continue with messages {direction} than this seq; recovery.next_page supplies it.")
+    sent.add_argument("--bodies", action="store_true", help="Return full message and answer texts.")
     return root
 
 
@@ -187,6 +199,19 @@ def message_actions(args, message):
     message["next_action"] = action + " Never repeat an uncertain notification."
 
 
+def page_actions(args, result):
+    """Continue a truncated inbox or sent listing with the same options."""
+    if not result["omitted"]:
+        return
+    last = str(result["messages"][-1]["seq"])
+    if args.command == "sent":
+        words, more = ["sent", "--limit", str(args.limit), "--before-seq", last, *(["--bodies"] if args.bodies else [])], "Older"
+    else:
+        words, more = ["inbox", "--limit", str(args.limit), "--after-seq", last], "Newer"
+    result["recovery"] = {"next_page": command(args, *words)}
+    result["next_action"] = " ".join(filter(None, (result.get("next_action"), f"{more} messages remain: use recovery.next_page.")))
+
+
 def main(argv=None):
     args = parser().parse_args(argv)
     saved_id = None
@@ -206,7 +231,8 @@ def main(argv=None):
             valid_wait(args.wait)
         if args.command == "wait":
             valid_wait(args.seconds)
-        store = Store(args.db, dismiss_notification=dismiss_notification)
+        store = Store(args.db, dismiss_notification=dismiss_notification,
+                      create=args.command == "peer" and args.peer_command == "add")
         if args.command == "peer":
             if args.peer_command == "add":
                 result = store.add_peer(args.name, args.harness, args.session, args.workspace, args.socket, url=args.url)
@@ -244,16 +270,19 @@ def main(argv=None):
             elif args.command == "ack":
                 result = store.ack(args.message_id, args.actor)
             elif args.command == "inbox":
-                result = store.inbox(args.actor)
+                result = store.inbox(args.actor, args.limit, args.after_seq)
             else:
-                result = store.sent(args.actor)
+                result = store.sent(args.actor, args.limit, args.before_seq, args.bodies)
             if "messages" in result:
                 for message in result["messages"]:
                     message_actions(args, message)
+                page_actions(args, result)
             else:
                 message_actions(args, result)
         print(json.dumps(result, ensure_ascii=False))
-        return 2 if (attempted_notification and result.get("submission") != "submitted"
+        # A saved answer completes the exchange even if its request's notice is unconfirmed.
+        return 2 if (attempted_notification and result.get("reply") is None
+                     and result.get("submission") != "submitted"
                      and result.get("ack_at") is None
                      and result.get("notification_detail") not in NOT_NEEDED) else 0
     except KeyboardInterrupt:
@@ -279,7 +308,11 @@ def main(argv=None):
         error = str(exc)
         result = {"state": "error", "error": error,
                   "recovery": {"peers": command(args, "peer", "list", actor=False)}}
-        if error == "actor_conflicts_with_CODEX_THREAD_ID":
+        if error == "database_not_found":
+            result = {"state": "error", "error": error, "resolved_path": str(args.db.expanduser().resolve()),
+                      "next_action": "No database file exists at resolved_path. Check --db and HTALK_DB; every participant "
+                                     "must use the same file. Only peer add creates a database: see htalk peer add --help."}
+        elif error == "actor_conflicts_with_CODEX_THREAD_ID":
             result.update(registered_peer=args.actor, registered_session_id=own["session_id"],
                           current_session_id=native_id)
             result["recovery"]["inbox_in_registered_session"] = command(args, "inbox")

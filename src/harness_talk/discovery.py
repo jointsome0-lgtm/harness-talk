@@ -11,6 +11,7 @@ import time
 import uuid
 
 from .adapters import codex_home, codex_rpc, codex_state_path, owned_socket, same_workspace
+from .errors import CodedTimeoutError, CodedValueError, failure_detail
 
 
 def address(session_id, workspace):
@@ -122,13 +123,13 @@ def discover_codex(paths=None):
                 cursor, seen_cursors, seen_ids = None, set(), set()
                 while True:
                     if time.monotonic() >= deadline:
-                        raise TimeoutError("codex_discovery_time_limit")
+                        raise CodedTimeoutError("codex_discovery_time_limit")
                     page = rpc.call("thread/loaded/list", {"cursor": cursor, "limit": 100})
                     if not isinstance(page, dict) or not isinstance(page.get("data"), list):
-                        raise ValueError("invalid_loaded_threads_response")
+                        raise CodedValueError("invalid_loaded_threads_response")
                     for ident in page["data"]:
                         if len(seen_ids) >= 200 or time.monotonic() >= deadline:
-                            raise TimeoutError("codex_discovery_limit")
+                            raise CodedTimeoutError("codex_discovery_limit")
                         try:
                             ident = str(uuid.UUID(ident))
                             if ident in seen_ids:
@@ -155,14 +156,13 @@ def discover_codex(paths=None):
                     if cursor is None:
                         break
                     if not isinstance(cursor, str) or cursor in seen_cursors or len(seen_cursors) >= 20:
-                        raise ValueError("invalid_discovery_cursor")
+                        raise CodedValueError("invalid_discovery_cursor")
                     seen_cursors.add(cursor)
                 if rejected:
                     source.update(status="partial", rejected=rejected,
                                   detail="Some loaded records could not be verified.")
         except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-            source.update(status="partial" if count else "unavailable", detail=str(exc) if
-                          isinstance(exc, (TimeoutError, ValueError)) else type(exc).__name__)
+            source.update(status="partial" if count else "unavailable", detail=failure_detail(exc))
         if source["status"] == "unavailable":
             source["next_action"] = ("Check the running Codex app-server socket and permissions, or pass --codex-socket. "
                                      "Embedded clients without a socket are outside this source's coverage.")
