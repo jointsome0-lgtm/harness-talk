@@ -28,9 +28,11 @@ pub fn now() -> f64 {
         .as_secs_f64()
 }
 pub fn home() -> PathBuf {
-    env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/"))
+    match env::var_os("HOME") {
+        Some(value) if value.is_empty() => PathBuf::from("/"),
+        Some(value) => PathBuf::from(value),
+        None => env::home_dir().unwrap_or_else(|| PathBuf::from("/")),
+    }
 }
 pub fn expand_user(path: &Path) -> PathBuf {
     if path == Path::new("~") {
