@@ -9,6 +9,6 @@ pub mod model;
 pub mod notify;
 pub mod opencode;
 pub mod os;
+mod parser;
 pub mod store;
 pub mod validate;
-

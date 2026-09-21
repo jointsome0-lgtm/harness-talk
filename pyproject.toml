@@ -1,23 +1,29 @@
 [build-system]
-requires = ["setuptools>=77"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.15,<2"]
+build-backend = "maturin"
 
 [project]
 name = "harness-talk"
-version = "0.4.0"
+dynamic = ["version"]
 description = "Exchange messages between local agent sessions"
 requires-python = ">=3.11"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-dependencies = ["websockets>=15,<18"]
+dependencies = []
+classifiers = [
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Rust",
+]
 
 [project.urls]
 Source = "https://github.com/jointsome0-lgtm/harness-talk"
 Issues = "https://github.com/jointsome0-lgtm/harness-talk/issues"
 
-[project.scripts]
-htalk = "harness_talk.cli:main"
-
-[tool.setuptools.packages.find]
-where = ["src"]
+[tool.maturin]
+bindings = "bin"
+strip = true
+include = [
+    { path = "tests/**", format = "sdist" },
+    { path = "docs/**", format = "sdist" },
+]

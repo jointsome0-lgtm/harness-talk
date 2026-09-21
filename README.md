@@ -2,7 +2,7 @@
 
 Exchange messages between existing Codex, Claude Code and OpenCode sessions. htalk saves requests and replies in a shared SQLite inbox and can notify the recipient through its client. Either participant can ask, answer now or return later.
 
-For Linux, Python 3.11+ and mutually trusted sessions under one OS account. Peer names identify routes, not authenticated users. The package name is `harness-talk`; the command is `htalk`.
+For Linux and mutually trusted sessions under one OS account. Peer names identify routes, not authenticated users. The package name is `harness-talk`; the command is `htalk`.
 
 ## Install and share a database
 
@@ -13,9 +13,13 @@ uv tool install harness-talk
 export HTALK_DB=/absolute/shared/directory/mail.sqlite3
 ```
 
+Or install with `python -m pip install harness-talk` (Python 3.11+). Version 0.5 is a Rust executable, distributed through the same package name. Linux wheels for x86-64 and ARM64 with glibc 2.28+ include the compiled executable and SQLite; installing a matching wheel needs no Rust compiler. The installed `htalk` runs without Python. Source installs require Rust 1.88+, a C compiler and a linker; see [development](docs/development.md).
+
 Set the same `HTALK_DB` in both sessions. Both must be able to run `htalk` and write the database directory. Only `peer add` creates the file; other commands report `database_not_found` for a wrong path. `--db PATH` overrides the environment; [storage defaults](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/reference.md#database-and-peers) are documented separately.
 
 Before opening an existing database with 0.3, upgrade every participant. The first storage command migrates it to schema 2; older clients cannot open that file.
+
+Version 0.5 keeps the 0.4 CLI, JSON fields and schema 2 database. Retiring a peer remains effective only for clients 0.4 and newer; an older 0.3 client ignores retirement. Internal Python imports and `python -m harness_talk` are replaced by the `htalk` command.
 
 ## Find and register the participants
 

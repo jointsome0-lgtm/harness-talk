@@ -80,13 +80,15 @@ Retrieval, acknowledgment and identical retries can exit 0 even if the original 
 
 ## Source installation and tests
 
-From a checkout:
+Source installs compile Rust and need Rust 1.88+ plus a C compiler/linker. Binary wheels do not need a compiler. See [development](development.md) for the build, isolated fixture tests and installed-wheel checks.
 
 ```sh
 python3 -m venv .venv
 .venv/bin/pip install .
 .venv/bin/htalk --help
-PYTHONPATH=src .venv/bin/python -m unittest discover -s tests -v
+cargo test --locked
+cargo build --locked
+python3 -B -m unittest discover -s tests -p test_cli_compat.py -v
 ```
 
-Storage, Claude notifications and OpenCode HTTP use the standard library. Ordinary Codex notifications use `codex queue`; the explicit app-server socket mode uses `websockets`.
+SQLite is bundled in the executable. Ordinary Codex notifications use `codex queue`; the explicit app-server socket uses a native WebSocket connection. Claude uses its Unix socket, and OpenCode uses its local HTTP/HTTPS server.
