@@ -44,9 +44,9 @@ jobs:
         run: |
           python -m pip install 'maturin[zig]>=1.15,<2' twine
           if [ "${{ matrix.arch }}" = x86_64 ]; then
-            maturin build --release --locked --zig --compatibility manylinux_2_28 --sdist --out dist
+            maturin build --release --locked --zig --compatibility manylinux_2_28 --sdist --target-dir "$RUNNER_TEMP/dist-build" --out dist
           else
-            maturin build --release --locked --zig --compatibility manylinux_2_28 --out dist
+            maturin build --release --locked --zig --compatibility manylinux_2_28 --target-dir "$RUNNER_TEMP/dist-build" --out dist
           fi
           python -m twine check --strict dist/*
           sha256sum dist/*
@@ -65,7 +65,7 @@ jobs:
         if: matrix.arch == 'x86_64'
         run: |
           python -m venv "$RUNNER_TEMP/source-install"
-          "$RUNNER_TEMP/source-install/bin/python" -m pip install dist/*.tar.gz
+          CARGO_TARGET_DIR="$RUNNER_TEMP/source-build" "$RUNNER_TEMP/source-install/bin/python" -m pip install dist/*.tar.gz
           "$RUNNER_TEMP/source-install/bin/htalk" --version
           "$RUNNER_TEMP/source-install/bin/python" -m pip check
       - name: Store the checked distributions

@@ -16,11 +16,11 @@ For a local binary wheel:
 
 ```sh
 python -m pip install 'maturin[zig]>=1.15,<2' twine
-maturin build --release --locked --zig --compatibility manylinux_2_28 --sdist --out dist
+maturin build --release --locked --zig --compatibility manylinux_2_28 --sdist --target-dir "$(mktemp -d)" --out dist
 python -m twine check --strict dist/*
 python -m pip install dist/*.whl
 ```
 
-`--sdist` rebuilds the wheel from the source archive, checking that it contains the required sources. For source installation, `python -m pip install .` invokes maturin and the Rust toolchain. For a standalone executable, use `cargo build --release --locked`; copy `target/release/htalk` to a directory on `PATH`.
+`--sdist` rebuilds the wheel from the source archive, checking that it contains the required sources. Use a fresh Cargo target directory: archive timestamps are normalized, and reusing cached outputs for the same package version can retain an older executable. For source installation, `python -m pip install .` invokes maturin and the Rust toolchain. For a standalone executable, use `cargo build --release --locked`; copy `target/release/htalk` to a directory on `PATH`.
 
 Distribution checks run the installed wheel from outside the checkout with an explicit executable path. A release still requires the live client checks in [releasing](releasing.md); fixture tests do not establish compatibility with an untested native client version.
