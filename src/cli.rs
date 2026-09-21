@@ -264,6 +264,8 @@ fn execute(call: &mut Call, context: &mut Context) -> Result<(Value, i32), Error
         "send" | "reply" => {
             let body = if let Some(path) = call.value("message_file") {
                 std::fs::read_to_string(path)?
+                    .replace("\r\n", "\n")
+                    .replace('\r', "\n")
             } else {
                 call.required("message")?.to_owned()
             };

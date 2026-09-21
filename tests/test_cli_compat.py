@@ -390,6 +390,12 @@ class Conversation(HtalkCase):
         timed = self.htalk("--as", "alice", "send", "bob", "--message", "Timed", "--no-notify", "--wait", "0.2")
         self.assertEqual(("timeout", True), (timed["wait_ended"], timed["created"]))
 
+    def test_message_file_normalizes_crlf_and_cr_like_python_text_reading(self):
+        text = self.tmp / "line-endings.txt"
+        text.write_bytes(b"one\r\ntwo\rthree\n")
+        saved = self.htalk("--as", "alice", "send", "bob", "--message-file", str(text), "--no-notify")
+        self.assertEqual("one\ntwo\nthree\n", saved["body"])
+
     def test_message_bodies_and_limits(self):
         accepted = ("a" * 32000, "я" * 16000, "  padded  \n\n", "🙂 multi\nline\n")
         for body in accepted:
