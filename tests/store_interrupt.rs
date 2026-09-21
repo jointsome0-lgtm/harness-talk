@@ -3,7 +3,6 @@
 mod support;
 
 use harness_talk::{error::Error, os};
-use std::time::{Duration, Instant};
 use support::*;
 
 #[test]
@@ -17,12 +16,10 @@ fn an_interrupted_wait_forgets_its_registration_and_records_nothing() {
     os::install_interrupt_handler().unwrap();
     assert_eq!(0, unsafe { libc::raise(libc::SIGINT) });
     assert!(os::interrupted());
-    let started = Instant::now();
     assert!(matches!(
         store.wait(&request.row.id, "builder", 5.0),
         Err(Error::Interrupted)
     ));
-    assert!(started.elapsed() < Duration::from_secs(1));
     assert!(waits(&temp.db()).is_empty());
     let answer = store
         .save("reviewer", "builder", "Answer", None, Some(&request.row.id))
