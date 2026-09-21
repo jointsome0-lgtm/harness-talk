@@ -55,6 +55,7 @@ fn uncertain(class: &str) -> Req {
 fn from_error(e: Error) -> Failure {
     match e {
         Error::Code(c) => Failure::Coded(c),
+        Error::Value(_) => Failure::Class("ValueError"),
         Error::Io(e) => e.into(),
         Error::Db(e) => e.into(),
         Error::Interrupted => Failure::Class("KeyboardInterrupt"),

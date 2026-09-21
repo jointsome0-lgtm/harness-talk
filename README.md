@@ -19,7 +19,7 @@ Set the same `HTALK_DB` in both sessions. Both must be able to run `htalk` and w
 
 Before opening an existing database with 0.3, upgrade every participant. The first storage command migrates it to schema 2; older clients cannot open that file.
 
-Version 0.5 keeps the 0.4 CLI, JSON fields and schema 2 database. Retiring a peer remains effective only for clients 0.4 and newer; an older 0.3 client ignores retirement. Internal Python imports and `python -m harness_talk` are replaced by the `htalk` command.
+Version 0.5 keeps the 0.4 CLI, JSON fields and schema 2 database. Retiring a peer remains effective only for clients 0.4 and newer; an older 0.3 client ignores retirement. Internal Python imports and `python -m harness_talk` are replaced by the `htalk` command. Fixed htalk error codes remain stable; uncoded OS/SQLite error wording and JSON whitespace may differ from the Python version. Parse JSON fields and fixed codes rather than exception prose.
 
 ## Find and register the participants
 

@@ -62,10 +62,12 @@ pub fn opencode_url(value: Option<&str>) -> Result<String, Error> {
     }
     if !port.is_empty() {
         if !port.bytes().all(|b| b.is_ascii_digit()) {
-            return Err(Error::code("Port could not be cast to integer value"));
+            return Err(Error::Value(
+                "Port could not be cast to integer value".into(),
+            ));
         }
         port.parse::<u16>()
-            .map_err(|_| Error::code("Port out of range 0-65535"))?;
+            .map_err(|_| Error::Value("Port out of range 0-65535".into()))?;
     }
     let parsed = url::Url::parse(&value).map_err(|_| invalid())?;
     if parsed.query().is_some_and(|q| !q.is_empty())

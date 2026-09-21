@@ -982,6 +982,39 @@ class Interrupts(HtalkCase):
 
 
 class Discovery(HtalkCase):
+    def test_native_metadata_reads_see_uncheckpointed_python_wal(self):
+        peer = self.codex_recipient("wal_peer")
+        codex_path = self.codex_home / "state_5.sqlite"
+        with closing(sqlite3.connect(codex_path)) as writer:
+            self.assertEqual("wal", writer.execute("PRAGMA journal_mode=WAL").fetchone()[0])
+            writer.execute("PRAGMA wal_autocheckpoint=0")
+            writer.execute("UPDATE threads SET archived=1 WHERE id=?", (peer["session_id"],))
+            writer.commit()
+            self.assertGreater(Path(str(codex_path) + "-wal").stat().st_size, 0)
+            self.error("peer", "check", "wal_peer", error="recipient_is_not_an_unarchived_codex_cli_session")
+            writer.execute("UPDATE threads SET archived=0 WHERE id=?", (peer["session_id"],))
+            writer.commit()
+            self.assertEqual(peer["session_id"], self.htalk("peer", "check", "wal_peer")["session_id"])
+        opencode_path = self.home / ".local/share/opencode/opencode.db"
+        opencode_path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(opencode_path)) as writer:
+            self.assertEqual("wal", writer.execute("PRAGMA journal_mode=WAL").fetchone()[0])
+            writer.execute("PRAGMA wal_autocheckpoint=0")
+            writer.execute("CREATE TABLE session (id TEXT, parent_id TEXT, directory TEXT, time_updated INTEGER, time_archived INTEGER)")
+            writer.execute("INSERT INTO session VALUES (?, NULL, ?, 2000, NULL)", ("ses_wal", str(self.work)))
+            writer.commit()
+            self.assertGreater(Path(str(opencode_path) + "-wal").stat().st_size, 0)
+            result = self.htalk("peer", "discover", "--harness", "opencode", "--opencode-url", "http://127.0.0.1:abc")
+            self.assertEqual(["ses_wal"], [row["session_id"] for row in result["sessions"]])
+            self.assertEqual(2, result["sessions"][0]["updated_at"])
+
+    def test_invalid_opencode_ports_use_class_name_error(self):
+        for port in ("abc", "99999"):
+            result = self.htalk("peer", "discover", "--harness", "opencode", "--opencode-url",
+                                "http://127.0.0.1:" + port, code=2)
+            self.assertEqual("opencode_ValueError", result["sources"][0]["error"])
+        self.assertFalse(self.db.parent.exists())
+
     def test_claude_discovery_is_read_only_and_reports_coverage(self):
         from compat_support import ClaudeSocket
         live = ClaudeSocket(self.tmp / "live.sock")

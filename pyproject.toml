@@ -23,6 +23,7 @@ Issues = "https://github.com/jointsome0-lgtm/harness-talk/issues"
 [tool.maturin]
 bindings = "bin"
 strip = true
+locked = true
 include = [
     { path = "tests/**", format = "sdist" },
     { path = "docs/**", format = "sdist" },

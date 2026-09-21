@@ -2,7 +2,7 @@
 #[path = "store_support.rs"]
 mod support;
 
-use harness_talk::{error::Error, model::*, os};
+use harness_talk::{error::Error, os};
 use std::time::{Duration, Instant};
 use support::*;
 
@@ -24,15 +24,6 @@ fn an_interrupted_wait_forgets_its_registration_and_records_nothing() {
     ));
     assert!(started.elapsed() < Duration::from_secs(1));
     assert!(waits(&temp.db()).is_empty());
-    // A single check still completes, and one that returns the answer records the receipt.
-    assert_eq!(
-        Some("timeout"),
-        store
-            .wait(&request.row.id, "builder", 0.0)
-            .unwrap()
-            .wait_ended
-            .as_deref()
-    );
     let answer = store
         .save("reviewer", "builder", "Answer", None, Some(&request.row.id))
         .unwrap()
@@ -45,18 +36,22 @@ fn an_interrupted_wait_forgets_its_registration_and_records_nothing() {
             .row
             .wait_returned_at
     );
+    // An answer appearing alongside SIGINT must remain eligible for its notice:
+    // the CLI returns interrupted, so it did not deliver the answer's body.
+    for seconds in [5.0, 0.0] {
+        assert!(matches!(
+            store.wait(&request.row.id, "builder", seconds),
+            Err(Error::Interrupted)
+        ));
+    }
     assert_eq!(
-        answer.row.id,
+        None,
         store
-            .wait(&request.row.id, "builder", 5.0)
+            .get(&answer.row.id, None)
             .unwrap()
-            .reply
-            .unwrap()
-            .id
+            .row
+            .wait_returned_at
     );
-    assert_eq!(
-        Some(SkipReason::ReturnedByRecipientWait),
-        store.skip_reason(&answer).unwrap()
-    );
+    assert_eq!(None, store.skip_reason(&answer).unwrap());
     assert!(waits(&temp.db()).is_empty());
 }

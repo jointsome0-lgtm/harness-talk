@@ -84,6 +84,7 @@ impl From<rusqlite::Error> for Failure {
 #[derive(Debug)]
 pub enum Error {
     Code(String),
+    Value(String),
     Io(io::Error),
     Db(rusqlite::Error),
     Interrupted,
@@ -96,7 +97,7 @@ impl Error {
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Code(s) => f.write_str(s),
+            Self::Code(s) | Self::Value(s) => f.write_str(s),
             Self::Io(e) => e.fmt(f),
             Self::Db(e) => e.fmt(f),
             Self::Interrupted => f.write_str("interrupted"),

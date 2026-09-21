@@ -41,7 +41,7 @@ fn code(c: &str) -> Error {
 /// validation errors are plain ValueErrors, others keep only their class name.
 fn failure_detail(e: Error) -> String {
     match e {
-        Error::Code(_) => "ValueError".into(),
+        Error::Code(_) | Error::Value(_) => "ValueError".into(),
         Error::Db(e) => Failure::from(e).to_string(),
         Error::Io(e) => Failure::from(e).to_string(),
         Error::Interrupted => "KeyboardInterrupt".into(),
@@ -647,8 +647,14 @@ impl Store {
             tx.commit()?;
         }
         loop {
+            if os::interrupted() {
+                return Err(Error::Interrupted);
+            }
             let mut result = self.get(id, Some(actor))?;
             if let Some(reply) = &result.reply {
+                if os::interrupted() {
+                    return Err(Error::Interrupted);
+                }
                 self.record_wait_return(&reply.id, actor);
                 return self.get(id, Some(actor));
             }
@@ -656,9 +662,6 @@ impl Store {
             if now >= deadline {
                 result.wait_ended = Some("timeout".into());
                 return Ok(result);
-            }
-            if os::interrupted() {
-                return Err(Error::Interrupted);
             }
             thread::sleep((deadline - now).min(Duration::from_millis(100)));
         }

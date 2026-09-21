@@ -16,6 +16,8 @@ permissions: {}
 
 jobs:
   build:
+    env:
+      RUSTUP_TOOLCHAIN: "1.98.1"
     runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
@@ -36,7 +38,6 @@ jobs:
       - name: Select Rust
         run: |
           rustup toolchain install 1.98.1 --profile minimal
-          rustup override set 1.98.1
       - name: Test native contracts
         run: cargo test --locked
       - name: Build and check binary wheel and source distribution
@@ -60,6 +61,13 @@ jobs:
           htalk --version
           htalk --help
           python -B -m unittest test_cli_compat -v
+      - name: Test source archive installation
+        if: matrix.arch == 'x86_64'
+        run: |
+          python -m venv "$RUNNER_TEMP/source-install"
+          "$RUNNER_TEMP/source-install/bin/python" -m pip install dist/*.tar.gz
+          "$RUNNER_TEMP/source-install/bin/htalk" --version
+          "$RUNNER_TEMP/source-install/bin/python" -m pip check
       - name: Store the checked distributions
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

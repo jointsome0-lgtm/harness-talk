@@ -8,6 +8,8 @@ permissions:
 
 jobs:
   test:
+    env:
+      RUSTUP_TOOLCHAIN: "1.98.1"
     runs-on: ubuntu-24.04
     strategy:
       matrix:
@@ -22,7 +24,6 @@ jobs:
       - name: Select Rust
         run: |
           rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
-          rustup override set 1.98.1
       - name: Check and test Rust
         run: |
           cargo fmt --check
@@ -40,3 +41,14 @@ jobs:
           cd "$RUNNER_TEMP"
           htalk --version
           python -B -m unittest test_cli_compat -v
+
+  msrv:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Check the minimum Rust version
+        run: |
+          rustup toolchain install 1.88.0 --profile minimal
+          cargo +1.88.0 check --locked --all-targets

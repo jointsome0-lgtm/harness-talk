@@ -86,7 +86,7 @@ pub fn same_workspace(native: Option<&str>, registered: &str) -> bool {
 }
 pub fn owned_socket(path: &Path) -> Result<PathBuf, Failure> {
     let metadata = fs::metadata(path)?;
-    if !metadata.file_type().is_socket() || metadata.uid() != unsafe { libc::geteuid() } {
+    if !metadata.file_type().is_socket() || metadata.uid() != unsafe { libc::getuid() } {
         return Err(Failure::coded("recipient_socket_unavailable"));
     }
     Ok(path.to_path_buf())
