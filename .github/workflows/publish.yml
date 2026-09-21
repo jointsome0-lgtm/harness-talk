@@ -16,11 +16,18 @@ permissions: {}
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: "1.98.1"
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: x86_64
+          - runner: ubuntu-24.04-arm
+            arch: aarch64
     permissions:
       contents: read
-    outputs:
-      artifact-id: ${{ steps.upload.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -28,28 +35,43 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
-      - name: Build and check wheel and source distribution
+      - name: Select Rust
         run: |
-          python -m pip install build twine
-          python -m build
+          rustup toolchain install 1.98.1 --profile minimal
+      - name: Test native contracts
+        run: cargo test --locked
+      - name: Build and check binary wheel and source distribution
+        run: |
+          python -m pip install 'maturin[zig]>=1.15,<2' twine
+          if [ "${{ matrix.arch }}" = x86_64 ]; then
+            maturin build --release --locked --zig --compatibility manylinux_2_28 --sdist --target-dir "$RUNNER_TEMP/dist-build" --out dist
+          else
+            maturin build --release --locked --zig --compatibility manylinux_2_28 --target-dir "$RUNNER_TEMP/dist-build" --out dist
+          fi
           python -m twine check --strict dist/*
           sha256sum dist/*
       - name: Test the installed wheel outside the checkout
-        env:
-          HTALK_SOCKET_TESTS: "1"
         run: |
           wheel=(dist/*.whl)
           python -m pip install "${wheel[0]}"
-          cp -R tests "$RUNNER_TEMP/"
+          python -m pip check
+          export HTALK_TEST_COMMAND="$(python -c 'import json, shutil; print(json.dumps([shutil.which("htalk")]))')"
+          cp tests/compat_support.py tests/test_cli_compat.py "$RUNNER_TEMP/"
           cd "$RUNNER_TEMP"
           htalk --version
           htalk --help
-          python -m unittest discover -s tests -v
+          python -B -m unittest test_cli_compat -v
+      - name: Test source archive installation
+        if: matrix.arch == 'x86_64'
+        run: |
+          python -m venv "$RUNNER_TEMP/source-install"
+          CARGO_TARGET_DIR="$RUNNER_TEMP/source-build" "$RUNNER_TEMP/source-install/bin/python" -m pip install dist/*.tar.gz
+          "$RUNNER_TEMP/source-install/bin/htalk" --version
+          "$RUNNER_TEMP/source-install/bin/python" -m pip check
       - name: Store the checked distributions
-        id: upload
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: harness-talk-dist
+          name: harness-talk-dist-${{ matrix.arch }}
           path: dist/*
           if-no-files-found: error
 
@@ -66,7 +88,7 @@ jobs:
       - name: Download this run's checked distributions
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          artifact-ids: ${{ needs.build.outputs.artifact-id }}
+          pattern: harness-talk-dist-*
           merge-multiple: true
           path: dist/
       - name: Publish to PyPI with Trusted Publishing
