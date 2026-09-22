@@ -55,6 +55,9 @@ pub fn message_actions(db: &Path, actor: &str, message: &mut Value) {
     {
         recovery["retry_notification_cleanup"] = command(db, Some(actor), &["ack", id]).into();
         action.push_str(" Acknowledgment is saved. After submission finishes, use recovery.retry_notification_cleanup to retry removal.");
+        if cleanup == Some("pending") {
+            action.push_str(" If the sending process stopped before saving its completion receipt, cleanup can remain pending indefinitely; htalk cannot reconstruct the missing receipt.");
+        }
         if cleanup == Some("unavailable") {
             action.push_str(" Verify the registered Codex address and native access. If sandbox restrictions prevented cleanup, use your client's normal approval flow before retrying.");
         }

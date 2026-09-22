@@ -20,6 +20,7 @@ struct Call {
     command: String,
     peer_command: Option<String>,
     options: ArgMatches,
+    message_body: Option<String>,
 }
 impl Call {
     fn new(mut matches: ArgMatches) -> Result<Self, Error> {
@@ -46,6 +47,7 @@ impl Call {
             command,
             peer_command,
             options,
+            message_body: None,
         })
     }
     fn value(&self, name: &str) -> Option<&str> {
@@ -93,6 +95,7 @@ impl Call {
 
 #[derive(Default)]
 struct Context {
+    turn: Option<std::fs::File>,
     store: Option<Store>,
     saved_id: Option<String>,
     own: Option<Peer>,
@@ -131,6 +134,40 @@ fn page_parameters(call: &Call, cursor: &str) -> Result<(i64, Option<i64>), Erro
 }
 
 fn execute(call: &mut Call, context: &mut Context) -> Result<(Value, i32), Error> {
+    if !matches!(call.command.as_str(), "send" | "reply") {
+        return execute_once(call, context);
+    }
+    let actor = call.actor.clone();
+    let _probe = crate::write_turn::probe();
+    let first = execute_once(call, context);
+    let busy_before_write = matches!(&first, Err(Error::Db(rusqlite::Error::SqliteFailure(e, _)))
+        if e.code == rusqlite::ErrorCode::DatabaseBusy)
+        && crate::write_turn::fresh();
+    if !busy_before_write || os::interrupted() {
+        return first;
+    }
+    // The first attempt ended before any write transaction began. All its
+    // read connections and snapshots are gone before waiting for the turn.
+    *context = Context::default();
+    call.actor = actor;
+    context.turn = crate::write_turn::acquire(&call.db)?;
+    crate::write_turn::queued(context.turn.is_some());
+    if context.turn.is_some()
+        && crate::write_turn::extra_successor_slot()
+        && crate::store::await_writer(&call.db)
+    {
+        crate::write_turn::successor_grace();
+    }
+    let result = if os::interrupted() {
+        Err(Error::Interrupted)
+    } else {
+        execute_once(call, context)
+    };
+    drop(context.turn.take());
+    result
+}
+
+fn execute_once(call: &mut Call, context: &mut Context) -> Result<(Value, i32), Error> {
     if call.command == "peer" && call.peer_command.as_deref() == Some("discover") {
         let harness = call
             .value("harness")
@@ -262,12 +299,18 @@ fn execute(call: &mut Call, context: &mut Context) -> Result<(Value, i32), Error
     let mut attempted_notification = false;
     let mut value = match call.command.as_str() {
         "send" | "reply" => {
-            let body = if let Some(path) = call.value("message_file") {
-                std::fs::read_to_string(path)?
-                    .replace("\r\n", "\n")
-                    .replace('\r', "\n")
+            let body = if let Some(body) = &call.message_body {
+                body.clone()
             } else {
-                call.required("message")?.to_owned()
+                let body = if let Some(path) = call.value("message_file") {
+                    std::fs::read_to_string(path)?
+                        .replace("\r\n", "\n")
+                        .replace('\r', "\n")
+                } else {
+                    call.required("message")?.to_owned()
+                };
+                call.message_body = Some(body.clone());
+                body
             };
             let (recipient, reply_to, id) = if call.command == "reply" {
                 let request_id = call.required("message_id")?;
@@ -281,6 +324,8 @@ fn execute(call: &mut Call, context: &mut Context) -> Result<(Value, i32), Error
                 )
             };
             let (mut message, created) = store.save(actor, &recipient, &body, id, reply_to)?;
+            crate::write_turn::started_write();
+            drop(context.turn.take());
             context.saved_id = Some(message.row.id.clone());
             if os::interrupted() {
                 return Err(Error::Interrupted);

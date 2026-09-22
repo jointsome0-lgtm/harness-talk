@@ -55,6 +55,27 @@ fn save_checks_run_in_order() {
 }
 
 #[test]
+fn invalid_requests_do_not_wait_for_a_writer_and_keep_peer_error_precedence() {
+    let temp = Temp::new();
+    let store = store(&temp, &["alice", "bob"]);
+    let writer = store.connect().unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+    assert_eq!(
+        "unknown_peer",
+        code(store.save("alice", "nobody", "Hi", Some("bad"), None))
+    );
+    assert_eq!(
+        "sender_and_recipient_must_differ",
+        code(store.save("alice", "alice", "Hi", Some("bad"), None))
+    );
+    assert_eq!(
+        "badly formed hexadecimal UUID string",
+        code(store.save("alice", "bob", "Hi", Some("bad"), None))
+    );
+    writer.execute_batch("ROLLBACK").unwrap();
+}
+
+#[test]
 fn retries_are_idempotent_and_conflicts_preserve_the_first_write() {
     let temp = Temp::new();
     let store = store(&temp, &["alice", "bob", "eve"]);

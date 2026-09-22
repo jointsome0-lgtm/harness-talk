@@ -25,6 +25,7 @@ bindings = "bin"
 strip = true
 locked = true
 include = [
+    { path = ".cargo/config.toml", format = "sdist" },
     { path = "tests/**", format = "sdist" },
     { path = "docs/**", format = "sdist" },
 ]
