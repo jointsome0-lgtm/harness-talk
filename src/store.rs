@@ -96,6 +96,16 @@ fn message_row(db: &Connection, sql: &str, p: impl Params) -> Result<Option<Row>
     first(db, sql, p, read_row)
 }
 
+fn peer_on(db: &Connection, name: &str) -> Result<Peer, Error> {
+    first(
+        db,
+        &format!("{PEER_ROWS} WHERE p.name=?"),
+        [name],
+        read_peer,
+    )?
+    .ok_or_else(|| code("unknown_peer"))
+}
+
 fn with_reply(db: &Connection, row: Row) -> Result<Message, Error> {
     let reply = message_row(db, "SELECT * FROM messages WHERE in_reply_to=?", [&row.id])?;
     Ok(Message::from_row(row, reply))
@@ -211,6 +221,47 @@ impl Drop for Registration<'_> {
     }
 }
 
+/// Keep retries frequent even after prolonged lock contention.
+/// SQLite resets `attempt` for each locking event. Keep its five-second sleep
+/// budget, but cap each pause at 5 ms instead of backing off to 100 ms.
+fn wait_for_lock(attempt: i32) -> bool {
+    if let Some(retry) = crate::write_turn::wait(attempt) {
+        return retry;
+    }
+    let (elapsed, pause) = match attempt {
+        0 => (0, 1),
+        1 => (1, 2),
+        n => (3 + (i64::from(n) - 2) * 5, 5),
+    };
+    let remaining = 5000 - elapsed;
+    if remaining <= 0 {
+        return false;
+    }
+    thread::sleep(Duration::from_millis(pause.min(remaining) as u64));
+    true
+}
+
+/// An empty transaction observes a writer's release without changing rows.
+/// It closes before any application transaction begins. In queued mode its
+/// callback requests at most 100 one-millisecond sleeps.
+pub(crate) fn await_writer(path: &Path) -> bool {
+    fn wait(attempt: i32) -> bool {
+        attempt < 100 && !os::interrupted() && wait_for_lock(attempt)
+    }
+    let probe = || -> rusqlite::Result<bool> {
+        let mut db = Connection::open_with_flags(
+            os::resolve(path),
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        db.busy_handler(Some(wait))?;
+        let before = crate::write_turn::heir_waits();
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        tx.rollback()?;
+        Ok(crate::write_turn::heir_waits() != before)
+    };
+    probe().unwrap_or(false)
+}
+
 impl Store {
     pub fn open(path: &Path, create: bool) -> Result<Self, Error> {
         let store = Store {
@@ -243,9 +294,35 @@ impl Store {
             );
         }
         let mut db = store.connect()?;
+        // Check the complete additive schema in one read snapshot. Current
+        // databases need no writer lock just to open. End this snapshot before
+        // taking IMMEDIATE below; upgrading a stale read can return BUSY.
+        {
+            let tx = db.transaction_with_behavior(TransactionBehavior::Deferred)?;
+            let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+            if version == SCHEMA_VERSION {
+                let ready: bool = tx.query_row(
+                    "SELECT
+                        EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='peers')
+                        AND EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='messages')
+                        AND EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='waits')
+                        AND EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='retired_peers')
+                        AND EXISTS(SELECT 1 FROM pragma_table_info('peers') WHERE name='url')
+                        AND EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name='wait_returned_at')",
+                    [],
+                    |r| r.get(0),
+                )?;
+                if ready {
+                    tx.commit()?;
+                    return Ok(store);
+                }
+            }
+            tx.rollback()?;
+        }
         // One write transaction: concurrent first opens serialize here, so the
         // schema check, table creation and column addition cannot interleave.
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        crate::write_turn::started_write();
         let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if !matches!(version, 0 | 1 | SCHEMA_VERSION) {
             return Err(code("unsupported_database_version"));
@@ -296,7 +373,9 @@ impl Store {
             "CREATE TABLE IF NOT EXISTS retired_peers (
                     name TEXT PRIMARY KEY REFERENCES peers(name), retired_at REAL NOT NULL)",
         )?;
-        tx.execute_batch(&format!("PRAGMA user_version={SCHEMA_VERSION}"))?;
+        if version != SCHEMA_VERSION {
+            tx.execute_batch(&format!("PRAGMA user_version={SCHEMA_VERSION}"))?;
+        }
         tx.commit()?;
         Ok(store)
     }
@@ -313,7 +392,7 @@ impl Store {
             flags |= OpenFlags::SQLITE_OPEN_CREATE;
         }
         let db = Connection::open_with_flags(&self.path, flags)?;
-        db.busy_timeout(Duration::from_secs(5))?;
+        db.busy_handler(Some(wait_for_lock))?;
         db.execute_batch("PRAGMA foreign_keys=ON")?;
         Ok(db)
     }
@@ -398,13 +477,7 @@ impl Store {
     }
 
     pub fn peer(&self, name: &str) -> Result<Peer, Error> {
-        first(
-            &self.connect()?,
-            &format!("{PEER_ROWS} WHERE p.name=?"),
-            [name],
-            read_peer,
-        )?
-        .ok_or_else(|| code("unknown_peer"))
+        peer_on(&self.connect()?, name)
     }
 
     pub fn session_peer(&self, h: Harness, session: &str) -> Result<Option<Peer>, Error> {
@@ -455,8 +528,9 @@ impl Store {
         in_reply_to: Option<&str>,
     ) -> Result<(Message, bool), Error> {
         validate::text(body)?;
-        self.peer(sender)?;
-        self.peer(recipient)?;
+        let mut db = self.connect()?;
+        peer_on(&db, sender)?;
+        peer_on(&db, recipient)?;
         if sender == recipient {
             return Err(code("sender_and_recipient_must_differ"));
         }
@@ -464,8 +538,8 @@ impl Store {
             Some(v) => validate::uuid(v)?,
             None => uuid::Uuid::new_v4().to_string(),
         };
-        let mut db = self.connect()?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        crate::write_turn::started_write();
         if let Some(request) = in_reply_to.filter(|v| !v.is_empty()) {
             let parent = message_row(&tx, "SELECT * FROM messages WHERE id=?", [request])?
                 .ok_or_else(|| code("unknown_request"))?;
@@ -515,7 +589,7 @@ impl Store {
             params![id, sender, recipient, in_reply_to, body, os::now()],
         )?;
         tx.commit()?;
-        Ok((self.get(&id, None)?, true))
+        Ok((load(&db, &id, None)?, true))
     }
 
     pub fn notify_once(

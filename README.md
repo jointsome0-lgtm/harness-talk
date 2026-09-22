@@ -19,7 +19,16 @@ Set the same `HTALK_DB` in both sessions. Both must be able to run `htalk` and w
 
 Before opening an existing database with 0.3, upgrade every participant. The first storage command migrates it to schema 2; older clients cannot open that file.
 
-Version 0.5 keeps the 0.4 CLI, JSON fields and schema 2 database. Retiring a peer remains effective only for clients 0.4 and newer; an older 0.3 client ignores retirement. Internal Python imports and `python -m harness_talk` are replaced by the `htalk` command. Fixed htalk error codes remain stable; uncoded OS/SQLite error wording and JSON whitespace may differ from the Python version. Parse JSON fields and fixed codes rather than exception prose.
+Version 0.5 keeps the 0.4 CLI, JSON fields and schema 2 database. Retiring a peer remains effective only for clients 0.4 and newer; an older 0.3 client ignores retirement. Python imports from `harness_talk` are no longer supported. Replace module invocations in scripts with the installed command, keeping the same database and arguments:
+
+```sh
+# Before 0.5
+python -m harness_talk --as builder inbox
+# 0.5 and later
+htalk --as builder inbox
+```
+
+Fixed htalk error codes remain stable; uncoded OS/SQLite error wording and JSON whitespace may differ from the Python version. Parse JSON fields and fixed codes rather than exception prose.
 
 ## Find and register the participants
 
@@ -69,7 +78,33 @@ htalk --as builder ack REPLY_UUID
 
 An acknowledgment records reading and removes that message's pending Codex notice when possible. A question stays open until answered. When the builder's wait records an answer before the final notification check, htalk skips that notice. An already accepted notice may still arrive. Sending a notification does not prove that the recipient read it. The result includes `submission` and copyable `recovery` commands.
 
-After interrupted or uncertain delivery, use `show`, `wait`, `inbox` or `sent`. `sent` lists your newest outgoing messages first, 20 at a time with summarized texts; `recovery.next_page` continues the list. Never send the same question again under a new ID to retry a notification. For automation, supply a saved UUID with `send --id`; an identical retry returns the existing message without another notification. Use `--no-notify` when the recipient will poll its inbox.
+After interrupted or uncertain delivery, use `show`, `wait`, `inbox` or `sent`. `sent` lists your newest outgoing messages first, 20 at a time with summarized texts; `recovery.next_page` continues the list. Never send the same question again under a new ID to retry a notification. Use `--no-notify` when the recipient will poll its inbox.
+
+### Reuse a request ID
+
+For automation, generate and save a UUID before the first send, for example with `uuidgen`. Replace `REQUEST_UUID` below with that saved value. Keep the same database, sender, recipient and message text when retrying after an interruption:
+
+```sh
+htalk --as builder send reviewer --id REQUEST_UUID \
+  --message 'Which case needs another test?'
+
+# An identical retry uses the same saved UUID.
+htalk --as builder send reviewer --id REQUEST_UUID \
+  --message 'Which case needs another test?'
+```
+
+If the request is already saved, the retry returns it with `created: false` and makes no new notification attempt. Its exit code can be 0 even when the original notification is `submission_unknown`. Check the saved result:
+
+```sh
+htalk --as builder show REQUEST_UUID
+```
+
+Reusing that ID with different text returns `message_id_conflict`, exits with code 2 and preserves the original request:
+
+```sh
+htalk --as builder send reviewer --id REQUEST_UUID \
+  --message 'A different question?'
+```
 
 ## Help and details
 

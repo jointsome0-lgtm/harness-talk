@@ -8,7 +8,8 @@ use harness_talk::{
     store::{self, Store},
 };
 use std::os::unix::fs::PermissionsExt;
-use std::sync::{Arc, Barrier};
+use std::sync::{Arc, Barrier, mpsc};
+use std::time::{Duration, Instant};
 use std::{fs, thread};
 use support::*;
 
@@ -295,18 +296,13 @@ fn concurrent_first_opens_all_succeed() {
 }
 
 #[test]
-fn every_connection_enforces_foreign_keys_and_waits_for_locks() {
+fn every_connection_enforces_foreign_keys() {
     let temp = Temp::new();
     let store = store(&temp, &["alice"]);
     let db = store.connect().unwrap();
     assert_eq!(
         1,
         db.query_row("PRAGMA foreign_keys", [], |r| r.get::<_, i64>(0))
-            .unwrap()
-    );
-    assert_eq!(
-        5000,
-        db.query_row("PRAGMA busy_timeout", [], |r| r.get::<_, i64>(0))
             .unwrap()
     );
     assert!(
@@ -317,6 +313,52 @@ fn every_connection_enforces_foreign_keys_and_waits_for_locks() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn busy_writer_retries_after_the_lock_is_released() {
+    let temp = Temp::new();
+    let store = store(&temp, &["alice"]);
+    let holder = raw(&temp.db());
+    holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let waiter = thread::spawn(move || {
+        let db = store.connect().unwrap();
+        started_tx.send(()).unwrap();
+        let result = db.execute_batch("BEGIN IMMEDIATE; ROLLBACK");
+        done_tx.send(result).unwrap();
+    });
+    started_rx.recv().unwrap();
+    assert!(matches!(
+        done_rx.recv_timeout(Duration::from_millis(50)),
+        Err(mpsc::RecvTimeoutError::Timeout)
+    ));
+    holder.execute_batch("COMMIT").unwrap();
+    done_rx
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap()
+        .unwrap();
+    waiter.join().unwrap();
+}
+
+#[test]
+fn busy_writer_stops_after_its_sleep_budget() {
+    let temp = Temp::new();
+    let store = store(&temp, &["alice"]);
+    let holder = raw(&temp.db());
+    holder.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let db = store.connect().unwrap();
+    let started = Instant::now();
+    let error = db.execute_batch("BEGIN IMMEDIATE").unwrap_err();
+    let elapsed = started.elapsed();
+    assert!(matches!(
+        error,
+        rusqlite::Error::SqliteFailure(e, _) if e.code == rusqlite::ErrorCode::DatabaseBusy
+    ));
+    assert!(elapsed >= Duration::from_secs(5), "{elapsed:?}");
+    // The budget counts requested sleep, so allow scheduler and I/O overhead.
+    assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
 }
 
 #[test]
@@ -355,4 +397,15 @@ fn readonly_skip_check_never_creates_and_reports_only_codes() {
         Err(Failure::coded("notification_state_unavailable")),
         store::skip_reason_readonly(&temp.db(), &other.row.id, "bob")
     );
+}
+
+#[test]
+fn current_schema_opens_and_reads_while_another_connection_holds_writer_lock() {
+    let temp = Temp::new();
+    let store = store(&temp, &["alice"]);
+    let writer = store.connect().unwrap();
+    writer.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let reader = Store::open(&temp.db(), false).unwrap();
+    assert_eq!("alice", reader.peers().unwrap()[0].name);
+    writer.execute_batch("ROLLBACK").unwrap();
 }

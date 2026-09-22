@@ -5,6 +5,7 @@ Fake claude/codex executables, a fake Claude messaging socket and a loopback
 OpenCode server stand in for clients. No test imports the implementation.
 """
 from contextlib import closing
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -41,7 +42,7 @@ def words_of(command):
 class CommandSurface(HtalkCase):
     def test_version_and_help(self):
         version = self.run_raw("--version", db=False)
-        self.assertEqual((0, os.environ.get("HTALK_TEST_VERSION", "0.5.0")), (version.code, version.stdout.strip()))
+        self.assertEqual((0, os.environ.get("HTALK_TEST_VERSION", "0.5.1")), (version.code, version.stdout.strip()))
         for words, expected in ((["--help"], ("peer", "send", "reply", "inbox", "sent", "wait", "ack", "show")),
                                 (["peer", "add", "--help"], ("--harness", "--session", "--workspace", "--socket", "--url")),
                                 (["send", "--help"], ("--id", "--message", "--message-file", "--no-notify", "--wait")),
@@ -981,6 +982,187 @@ class Interrupts(HtalkCase):
         self.assertEqual(1, len(self.calls("codex", ["queue"])))
 
 
+class ProcessRecovery(HtalkCase):
+    def setUp(self):
+        super().setUp()
+        self.alice = self.codex_recipient("alice")
+        self.bob = self.codex_recipient("bob")
+        self.queue_id = str(uuid.uuid4())
+        self.configure(codex_queue={"queue_id": self.queue_id})
+
+    def kill(self, process):
+        process.kill()
+        process.communicate(timeout=10)
+        self.assertEqual(-signal.SIGKILL, process.returncode)
+
+    def send_words(self, chosen, body="Question?"):
+        return ("--as", "alice", "send", "bob", "--id", chosen, "--message", body)
+
+    def two_retries(self, chosen):
+        processes = [self.spawn(*self.send_words(chosen)) for _ in range(2)]
+        results = [self.finish(process) for process in processes]
+        self.assertEqual([False, False], [result["created"] for result in results])
+        self.assertEqual([chosen, chosen], [result["id"] for result in results])
+        return results
+
+    def test_sigkill_during_notification_preserves_unknown_and_polling_recovery(self):
+        self.configure(codex_queue={"mode": "block"})
+        chosen = str(uuid.uuid4())
+        sending = self.spawn(*self.send_words(chosen))
+        self.started("codex_queue")
+        before = self.htalk("--as", "alice", "show", chosen)
+        self.assertEqual(("submission_unknown", None),
+                         (before["submission"], before["notification_finished_at"]))
+        self.assertIsNotNone(before["notification_started_at"])
+        self.kill(sending)
+
+        for retry in self.two_retries(chosen):
+            self.assertEqual(("Question?", before["created_at"], "submission_unknown", None),
+                             (retry["body"], retry["created_at"], retry["submission"],
+                              retry["notification_finished_at"]))
+        self.assertEqual([(1,)], self.sql("SELECT COUNT(*) FROM messages WHERE id=?", (chosen,)))
+        self.assertEqual([chosen], [m["id"] for m in self.htalk("--as", "bob", "inbox")["messages"]])
+        acknowledged = self.htalk("--as", "bob", "ack", chosen)
+        self.assertIsNotNone(acknowledged["ack_at"])
+        self.assertEqual(("submission_unknown", None, "pending"),
+                         (acknowledged["submission"], acknowledged["notification_finished_at"],
+                          acknowledged["notification_cleanup"]["status"]))
+        repeated_ack = self.recover(acknowledged["recovery"]["retry_notification_cleanup"])
+        self.assertEqual((acknowledged["ack_at"], "pending"),
+                         (repeated_ack["ack_at"], repeated_ack["notification_cleanup"]["status"]))
+        # This gated fake exits unsuccessfully without a receipt when released.
+        # Observe the late failure, without claiming to simulate late acceptance.
+        child_pid = self.calls("codex", ["queue"])[0]["pid"]
+
+        def fake_is_running():
+            try:
+                return str(self.bin).encode() in Path("/proc/%d/cmdline" % child_pid).read_bytes()
+            except FileNotFoundError:
+                return False
+
+        self.assertTrue(fake_is_running(), "the blocked fake must outlive the killed sender")
+        self.release("codex_queue")
+        wait_for(lambda: not fake_is_running(), message="the orphaned fake client to exit")
+        after_child = self.htalk("--as", "bob", "show", chosen)
+        self.assertEqual(("submission_unknown", None, acknowledged["ack_at"]),
+                         (after_child["submission"], after_child["notification_finished_at"],
+                          after_child["ack_at"]))
+        after_child_ack = self.recover(acknowledged["recovery"]["retry_notification_cleanup"])
+        self.assertEqual((acknowledged["ack_at"], "pending"),
+                         (after_child_ack["ack_at"], after_child_ack["notification_cleanup"]["status"]))
+        self.assertEqual([], self.calls("codex", ["app-server"]))
+        self.assertEqual(1, len(self.calls("codex", ["queue"])))
+
+    def test_sigkill_after_receipt_keeps_submission_and_allows_a_notified_answer(self):
+        chosen = str(uuid.uuid4())
+        sending = self.spawn(*self.send_words(chosen), "--wait", "30")
+        wait_for(self.waits, message="the wait after a confirmed notification")
+        before = self.htalk("--as", "alice", "show", chosen)
+        self.assertEqual("submitted", before["submission"])
+        self.assertIsNotNone(before["notification_finished_at"])
+        self.kill(sending)
+        self.assertTrue(self.waits(), "SIGKILL must leave the registered poll behind")
+
+        for retry in self.two_retries(chosen):
+            self.assertEqual(("submitted", before["created_at"], before["notification_finished_at"]),
+                             (retry["submission"], retry["created_at"], retry["notification_finished_at"]))
+        answer = self.htalk("--as", "bob", "reply", chosen, "--message", "Answer")
+        self.assertEqual("submitted", answer["submission"])
+        self.assertIsNotNone(answer["notification_finished_at"])
+        recovered = self.htalk("--as", "alice", "wait", chosen, "--seconds", "0")
+        self.assertEqual(answer["id"], recovered["reply"]["id"])
+        self.assertEqual("submitted", recovered["submission"])
+        notices = self.calls("codex", ["queue"])
+        self.assertEqual([self.bob["session_id"], self.alice["session_id"]],
+                         [call["argv"][2] for call in notices])
+
+    def test_sigkill_during_cleanup_keeps_ack_and_allows_cleanup_retry(self):
+        self.configure(codex_app_server={"mode": "block"})
+        chosen = str(uuid.uuid4())
+        sent = self.htalk(*self.send_words(chosen))
+        acking = self.spawn("--as", "bob", "ack", chosen)
+        self.started("codex_delete")
+        before = self.htalk("--as", "bob", "show", chosen)
+        self.assertIsNotNone(before["ack_at"])
+        self.kill(acking)
+
+        self.configure(codex_app_server={})
+        recovered = self.htalk("--as", "bob", "ack", chosen)
+        self.assertEqual({"status": "removed", "queue_id": self.queue_id}, recovered["notification_cleanup"])
+        self.assertEqual((before["ack_at"], "submitted", sent["notification_finished_at"]),
+                         (recovered["ack_at"], recovered["submission"], recovered["notification_finished_at"]))
+        self.assertEqual(1, len(self.calls("codex", ["queue"])))
+
+    def test_concurrent_processes_save_one_request_and_refuse_conflicts(self):
+        for conflicting in (False, True):
+            with self.subTest(conflicting=conflicting):
+                for suffix in ("started", "release"):
+                    (self.state / ("codex_queue." + suffix)).unlink(missing_ok=True)
+                self.configure(codex_queue={"mode": "block"})
+                chosen = str(uuid.uuid4())
+                bodies = ["Changed?" if conflicting and i % 2 else "Question?" for i in range(32)]
+                before_calls = len(self.calls("codex", ["queue"]))
+                # Launch every sender before collecting any result. The winning
+                # client's gate keeps its notification unfinished during the race.
+                processes = [self.spawn(*self.send_words(chosen, body)) for body in bodies]
+                self.started("codex_queue")
+                wait_for(lambda: sum(process.poll() is not None for process in processes) == 31,
+                         message="all other senders to finish before releasing the notification")
+                unfinished = self.htalk("--as", "alice", "show", chosen)
+                self.assertIsNone(unfinished["notification_finished_at"])
+                self.release("codex_queue")
+                outputs = []
+                for process in processes:
+                    stdout, stderr = process.communicate(timeout=30)
+                    self.assertIn(process.returncode, (0, 2), stdout + stderr)
+                    outputs.append((process.returncode, json.loads(stdout)))
+                saved = self.htalk("--as", "alice", "show", chosen)
+                created = [result for _, result in outputs if result.get("created") is True]
+                self.assertEqual(1, len(created))
+                self.assertEqual([(1,)], self.sql("SELECT COUNT(*) FROM messages WHERE id=?", (chosen,)))
+                self.assertEqual(before_calls + 1, len(self.calls("codex", ["queue"])))
+                self.assertEqual(("submission_unknown", created[0]["created_at"]),
+                                 (saved["submission"], saved["created_at"]))
+                for body, (code, result) in zip(bodies, outputs):
+                    if body != saved["body"]:
+                        self.assertEqual((2, "message_id_conflict"), (code, result["error"]))
+                    else:
+                        self.assertEqual((chosen, body, saved["created_at"]),
+                                         (result["id"], result["body"], result["created_at"]))
+                        self.assertEqual(2 if result["created"] else 0, code)
+                        if not result["created"]:
+                            # A retry can observe the saved row before the winner
+                            # claims its notification, as well as after that claim.
+                            self.assertIn(result["submission"], ("not_submitted", "submission_unknown"))
+                            self.assertEqual(result["submission"] == "not_submitted",
+                                             result["notification_started_at"] is None)
+                            self.assertIsNone(result["notification_finished_at"])
+
+    def test_lookup_retry_and_ack_can_race_an_unfinished_notification(self):
+        self.configure(codex_queue={"mode": "block"})
+        chosen = str(uuid.uuid4())
+        sending = self.spawn(*self.send_words(chosen))
+        self.started("codex_queue")
+        lookup = self.spawn("--as", "alice", "show", chosen)
+        retries = [self.spawn(*self.send_words(chosen)) for _ in range(8)]
+        acking = self.spawn("--as", "bob", "ack", chosen)
+        self.assertEqual(chosen, self.finish(lookup)["id"])
+        for process in retries:
+            result = self.finish(process)
+            self.assertEqual((chosen, False, "submission_unknown"),
+                             (result["id"], result["created"], result["submission"]))
+        acknowledged = self.finish(acking)
+        self.assertEqual("pending", acknowledged["notification_cleanup"]["status"])
+        self.assertIsNotNone(acknowledged["ack_at"])
+        self.release("codex_queue")
+        # The saved ack makes this invocation successful even though the client
+        # never supplies a confirmed queue receipt.
+        final = self.finish(sending)
+        self.assertEqual(("submission_unknown", acknowledged["ack_at"]),
+                         (final["submission"], final["ack_at"]))
+        self.assertEqual(1, len(self.calls("codex", ["queue"])))
+
+
 class Discovery(HtalkCase):
     def test_native_metadata_reads_see_uncheckpointed_python_wal(self):
         peer = self.codex_recipient("wal_peer")
@@ -1042,6 +1224,79 @@ class Discovery(HtalkCase):
             with self.subTest(error=error):
                 self.error("peer", "discover", *words, error=error)
         self.assertFalse(self.db.parent.exists())
+
+
+class WriteAdmission(HtalkCase):
+    def setUp(self):
+        super().setUp()
+        self.add_peer("alice")
+        self.codex_recipient("bob")
+        self.turn = Path(str(self.db) + "-htalk-turn")
+
+    def hold(self, statement):
+        db = sqlite3.connect(self.db, isolation_level=None)
+        self.addCleanup(db.close)
+        db.execute(statement)
+        return db
+
+    def test_contended_send_keeps_the_first_message_file_contents(self):
+        body = self.tmp / "body.txt"
+        body.write_bytes(b"First\r\nSecond\rThird")
+        writer = self.hold("BEGIN IMMEDIATE")
+        proc = self.spawn("--as", "alice", "send", "bob", "--message-file", body, "--no-notify")
+        wait_for(self.turn.exists, message="send waiting after reading its body")
+        body.write_text("Changed while waiting")
+        writer.rollback()
+        sent = self.finish(proc)
+        self.assertEqual("First\nSecond\nThird", sent["body"])
+        self.assertEqual([(sent["id"], sent["body"])], self.sql("SELECT id,body FROM messages"))
+
+    def test_commit_wait_does_not_restart_the_write(self):
+        reader = self.hold("BEGIN")
+        reader.execute("SELECT * FROM peers").fetchall()
+        proc = self.spawn("--as", "alice", "send", "bob", "--message", "Held commit", "--no-notify")
+        wait_for(Path(str(self.db) + "-journal").exists, message="write reached its journal")
+        time.sleep(.1)
+        self.assertIsNone(proc.poll())
+        self.assertFalse(self.turn.exists())
+        reader.rollback()
+        sent = self.finish(proc)
+        self.assertEqual([(sent["id"],)], self.sql("SELECT id FROM messages"))
+
+    def test_interrupt_while_waiting_for_admission_saves_nothing(self):
+        self.turn.mkdir(mode=0o700)
+        holder = os.open(self.turn, os.O_RDONLY | os.O_DIRECTORY)
+        self.addCleanup(os.close, holder)
+        fcntl.flock(holder, fcntl.LOCK_EX)
+        writer = self.hold("BEGIN IMMEDIATE")
+        proc = self.spawn("--as", "alice", "send", "bob", "--message", "Interrupted", "--no-notify")
+        tasks = Path("/proc") / str(proc.pid) / "task"
+        wait_for(lambda: len(list(tasks.iterdir())) >= 2, message="admission helper waiting")
+        writer.rollback()
+        proc.send_signal(signal.SIGINT)
+        self.assertEqual("interrupted", self.finish(proc, code=130)["state"])
+        self.assertEqual([], self.sql("SELECT id FROM messages"))
+
+    def test_admission_is_released_before_the_notification_attempt(self):
+        ident = str(uuid.uuid4())
+        words = ["--as", "alice", "send", "bob", "--id", ident, "--message", "One notice"]
+        self.configure(codex_queue={"mode": "block"})
+        writer = self.hold("BEGIN IMMEDIATE")
+        proc = self.spawn(*words)
+        wait_for(self.turn.exists, message="send entered admission")
+        writer.rollback()
+        self.started("codex_queue")
+        holder = os.open(self.turn, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(holder)
+        (self.state / "codex_queue.release").touch()
+        self.assertEqual("submission_unknown", self.finish(proc, code=2)["submission"])
+        repeated = self.htalk(*words)
+        self.assertFalse(repeated["created"])
+        self.assertEqual("submission_unknown", repeated["submission"])
+        self.assertEqual(1, len(self.calls("codex", ["queue"])))
 
 
 if __name__ == "__main__":
