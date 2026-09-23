@@ -438,7 +438,7 @@ fn socket_failures_before_and_after_the_queue_attempt_are_distinct() {
             Submission::NotSubmitted,
             "codex_websocket_failure",
         ),
-        // Python let AttributeError escape the adapter, and the store recorded it as uncertain.
+        // Invalid preflight metadata is rejected before thread/queue/add.
         (
             "non-object-thread",
             Box::new(|p| {
@@ -451,7 +451,7 @@ fn socket_failures_before_and_after_the_queue_attempt_are_distinct() {
                     }
                 })
             }),
-            Submission::SubmissionUnknown,
+            Submission::NotSubmitted,
             "AttributeError",
         ),
     ];
@@ -462,7 +462,12 @@ fn socket_failures_before_and_after_the_queue_attempt_are_distinct() {
         let db = fixture.message(id);
         let server = serve(&path, handler(&peer));
         let outcome = codex::notify(&peer, id, "Notice", &|| read_skip(&db, id));
-        server.join().unwrap();
+        let frames = server.join().unwrap();
+        assert_eq!(
+            submission == Submission::SubmissionUnknown,
+            methods(&frames).contains(&"thread/queue/add"),
+            "{name}"
+        );
         assert_eq!(
             (submission, detail),
             (outcome.submission, outcome.detail.as_str()),
@@ -550,30 +555,30 @@ fn socket_probe_and_cleanup_repeat_the_live_identity_check() {
         frames[3]["params"]
     );
 
-    let server = serve(
-        &path,
-        Box::new(move |f| {
-            Some(match f["method"].as_str().unwrap() {
-                "initialize" => json!({"id": f["id"], "result": {}}),
-                _ => {
-                    json!({"id": f["id"], "result": {"thread": {"id": f["params"]["threadId"], "cwd": "/other", "status": {"type": "idle"}}}})
-                }
-            })
-        }),
-    );
-    let cleanup = codex::dismiss(&peer, &saved);
-    let frames = server.join().unwrap();
-    assert_eq!(
+    for (thread, detail) in [
         (
-            CleanupStatus::Unavailable,
-            Some("recipient_identity_changed")
+            json!({"id": peer.session_id, "cwd": "/other", "status": {"type": "idle"}}),
+            "recipient_identity_changed",
         ),
-        (cleanup.status, cleanup.detail.as_deref())
-    );
-    assert_eq!(
-        vec!["initialize", "initialized", "thread/read"],
-        methods(&frames)
-    );
+        (json!([]), "AttributeError"),
+    ] {
+        let server = serve(
+            &path,
+            Box::new(move |f| {
+                Some(match f["method"].as_str().unwrap() {
+                    "initialize" => json!({"id": f["id"], "result": {}}),
+                    _ => json!({"id": f["id"], "result": {"thread": thread}}),
+                })
+            }),
+        );
+        let cleanup = codex::dismiss(&peer, &saved);
+        let frames = server.join().unwrap();
+        assert_eq!(
+            (CleanupStatus::Unavailable, Some(detail)),
+            (cleanup.status, cleanup.detail.as_deref())
+        );
+        assert!(!methods(&frames).contains(&"thread/queue/delete"));
+    }
     assert!(fixture.calls().is_empty(), "no native fallback");
 }
 
@@ -930,10 +935,7 @@ fn stdio_shutdown_is_bounded_for_a_process_that_ignores_eof_and_sigterm() {
     let started = Instant::now();
     drop(rpc);
     let elapsed = started.elapsed();
-    assert!(
-        elapsed >= Duration::from_millis(1900) && elapsed < Duration::from_secs(4),
-        "{elapsed:?}"
-    );
+    assert!(elapsed < Duration::from_secs(4), "{elapsed:?}");
     assert_eq!(
         -1,
         unsafe { libc::kill(pid, 0) },

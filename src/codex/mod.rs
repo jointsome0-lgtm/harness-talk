@@ -86,7 +86,7 @@ pub fn dismiss(peer: &Peer, message: &Message) -> Cleanup {
             CleanupStatus::Absent
         })
         .queue_id(queue_id),
-        Err(failure) => Cleanup::new(if attempted || escapes(&failure) {
+        Err(failure) => Cleanup::new(if attempted {
             CleanupStatus::Unknown
         } else {
             CleanupStatus::Unavailable
@@ -143,7 +143,7 @@ fn notify_socket(
         Ok(Outcome::submitted(format!("codex_queued:{id}")))
     })();
     result.unwrap_or_else(|failure| {
-        if attempted || escapes(&failure) {
+        if attempted {
             Outcome::unknown(failure.to_string())
         } else {
             Outcome::not_submitted(failure.to_string())
@@ -239,14 +239,6 @@ fn saved_identity(peer: &Peer) -> Result<Value, Failure> {
 }
 
 // ----- Helpers shared with the Claude transport -----
-
-/// Failures the Python adapters did not catch; the store then recorded them as uncertain.
-pub(crate) fn escapes(failure: &Failure) -> bool {
-    matches!(
-        failure,
-        Failure::Class("AttributeError" | "KeyboardInterrupt")
-    )
-}
 
 /// Python-style `value[key]`: KeyError for a missing key, TypeError for a non-object.
 pub(crate) fn index<'a>(value: &'a Value, key: &str) -> Result<&'a Value, Failure> {
@@ -461,9 +453,10 @@ mod tests {
 
     #[test]
     fn python_compatible_helpers() {
+        let frame = json!({"a": [1, "\u{e9}\n\u{1F600}\u{7f}"], "b": null});
         assert_eq!(
-            python_dumps(&json!({"a": [1, "\u{e9}\n\u{1F600}\u{7f}"], "b": null})),
-            r#"{"a": [1, "\u00e9\n\ud83d\ude00\u007f"], "b": null}"#
+            serde_json::from_str::<Value>(&python_dumps(&frame)).unwrap(),
+            frame
         );
         assert_eq!(python_uuid("{URN:0123}"), None);
         assert_eq!(

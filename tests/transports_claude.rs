@@ -228,23 +228,23 @@ fn discovery_failures_are_not_submitted_and_uncertain_writes_are_unknown() {
             "FileNotFoundError",
         ),
         (json!(5), None, Submission::NotSubmitted, "TypeError"),
-        // Python let AttributeError escape the adapter, and the store recorded it as uncertain.
+        // Malformed discovery is still before any notification bytes are written.
         (
             json!([row, "text"]),
             None,
-            Submission::SubmissionUnknown,
+            Submission::NotSubmitted,
             "AttributeError",
         ),
         (
             json!({"sessionId": SESSION}),
             None,
-            Submission::SubmissionUnknown,
+            Submission::NotSubmitted,
             "AttributeError",
         ),
         (
             json!([row]),
             Some(json!(["list"])),
-            Submission::SubmissionUnknown,
+            Submission::NotSubmitted,
             "AttributeError",
         ),
     ];
@@ -274,15 +274,25 @@ fn discovery_failures_are_not_submitted_and_uncertain_writes_are_unknown() {
     );
 
     drop(fixture);
-    // After discovery succeeds, a refused connection is uncertain like any socket error.
+    // A refused connection cannot have delivered a notification frame.
     let fixture = Fixture::new("refused");
     fixture.live();
     drop(UnixListener::bind(fixture.socket()).unwrap());
     let refused = fixture.notify("Notice");
     assert_eq!(
-        (Submission::SubmissionUnknown, "ConnectionRefusedError"),
+        (Submission::NotSubmitted, "ConnectionRefusedError"),
         (refused.submission, refused.detail.as_str())
     );
+
+    // Once the write begins, even a broken connection leaves the outcome uncertain.
+    fs::remove_file(fixture.socket()).unwrap();
+    let listener = UnixListener::bind(fixture.socket()).unwrap();
+    let broken = claude::notify(&fixture.peer(), &message(), "Notice", &|| {
+        let (connection, _) = listener.accept().unwrap();
+        connection.shutdown(std::net::Shutdown::Both).unwrap();
+        Ok(None)
+    });
+    assert_eq!(Submission::SubmissionUnknown, broken.submission);
 }
 
 #[test]

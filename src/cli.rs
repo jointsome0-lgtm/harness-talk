@@ -16,7 +16,6 @@ use std::{
 
 struct Call {
     db: PathBuf,
-    explicit_db: bool,
     actor: Option<String>,
     command: String,
     peer_command: Option<String>,
@@ -26,7 +25,6 @@ struct Call {
 impl Call {
     fn new(mut matches: ArgMatches) -> Result<Self, Error> {
         let db = matches.remove_one::<String>("db").map(PathBuf::from);
-        let explicit_db = db.is_some();
         let db = db.unwrap_or_else(default_db);
         let actor = matches.remove_one::<String>("actor");
         let (command, mut options) = matches
@@ -43,7 +41,6 @@ impl Call {
         };
         Ok(Self {
             db,
-            explicit_db,
             actor,
             command,
             peer_command,
@@ -200,9 +197,6 @@ fn execute_once(call: &mut Call, context: &mut Context) -> Result<(Value, i32), 
         validate::wait(call.number("seconds"))?;
     }
     if call.command == "migrate" {
-        if !call.explicit_db {
-            return Err(Error::code("migrate_requires_explicit_db"));
-        }
         Store::migrate(&call.db)?;
         return Ok((
             json!({"state":"ready", "schema_version":crate::store::SCHEMA_VERSION,
@@ -517,9 +511,6 @@ fn failure(call: &Call, context: &Context, error: &Error) -> Value {
     }
     if call.command == "migrate" {
         let action = match error.as_str() {
-            "migrate_requires_explicit_db" => {
-                "This optional command requires --db PATH. Ordinary mailbox commands automatically prepare the database selected by --db, HTALK_DB or the default location. See htalk migrate --help."
-            }
             "unsupported_unversioned_database" => {
                 "No supported htalk schema version was found. The database was not changed. Verify that this is the intended mailbox and recover it with a matching client or a valid backup; do not assign a schema version manually."
             }

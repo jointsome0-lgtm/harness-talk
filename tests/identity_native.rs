@@ -166,14 +166,20 @@ fn refuses_commands_of_clients_nested_in_claude() {
 }
 
 #[test]
-fn every_intermediate_executable_is_read_until_a_client_is_found() {
+fn unavailable_ancestry_does_not_claim_claude_identity() {
     let f = Fixture::new();
-    // A client comm does not excuse its own unreadable executable.
-    f.process(90, 30, "codex", 100, "/opt/codex/codex");
+    // An ordinary process name cannot excuse unreadable executable evidence.
+    f.process(90, 30, "bash", 100, "/usr/bin/bash");
     f.shell(91, 90, "htalk");
     fs::remove_file(f.proc.join("90/exe")).unwrap();
-    assert_eq!("process_ancestry_unavailable", f.reason(91, &[]));
-    // A malformed stat entry between htalk and Claude is unavailable evidence, not a refusal.
+    assert!(matches!(
+        f.detect(91, &[]),
+        NativeSession::Unrecognized { .. }
+    ));
+    // A malformed stat entry between htalk and Claude cannot establish identity either.
     fs::write(f.proc.join("30/stat"), "30 (bash) S\n").unwrap();
-    assert_eq!("process_ancestry_unavailable", f.reason(40, &[]));
+    assert!(matches!(
+        f.detect(40, &[]),
+        NativeSession::Unrecognized { .. }
+    ));
 }

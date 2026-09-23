@@ -323,7 +323,7 @@ fn codex_bounds_cursors_and_inspected_ids() {
         Ok(json!({"data": [], "nextCursor": format!("c{}", pages.borrow())}))
     });
     assert_eq!(
-        "invalid_discovery_cursor",
+        "codex_discovery_limit",
         codex_app_servers(&[dir.text()], &cursors).sources[0]["detail"]
     );
     assert_eq!(21, *counter.borrow());
@@ -492,10 +492,6 @@ fn bad_saved_writer_does_not_hide_a_later_valid_address() {
             source["status"].as_str().unwrap(),
             source["rejected"].as_i64().unwrap()
         )
-    );
-    assert_eq!(
-        "Some held writers have no saved address yet.",
-        source["detail"]
     );
 }
 

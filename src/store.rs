@@ -526,7 +526,7 @@ impl Store {
             Some(reason) => Outcome::not_submitted(reason.as_str()),
             None => match self.peer(&message.row.recipient) {
                 Ok(peer) => notify(&peer, &message),
-                Err(e) => Outcome::unknown(failure_detail(e)),
+                Err(e) => Outcome::not_submitted(failure_detail(e)),
             },
         };
         // SIGINT leaves the durable claim unfinished, as a KeyboardInterrupt
