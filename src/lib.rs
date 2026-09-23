@@ -10,6 +10,7 @@ pub mod notify;
 pub mod opencode;
 pub mod os;
 mod parser;
+mod schema;
 pub mod store;
 pub mod validate;
 mod write_turn;

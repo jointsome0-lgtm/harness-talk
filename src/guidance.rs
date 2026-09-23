@@ -49,6 +49,9 @@ pub fn message_actions(db: &Path, actor: &str, message: &mut Value) {
     if message["notification_detail"] == "recipient_retired" {
         action.push_str(" The recipient peer is retired, so no client notice was sent.");
     }
+    if message["notification_detail"] == "pull_only" {
+        action.push_str(" The recipient uses pull delivery and must poll inbox; no client notice was attempted.");
+    }
     let cleanup = message["notification_cleanup"]["status"].as_str();
     if message["recipient"] == actor
         && matches!(cleanup, Some("pending" | "unknown" | "unavailable"))

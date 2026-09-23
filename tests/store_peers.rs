@@ -20,7 +20,10 @@ fn address_is_immutable_and_unique() {
             None,
         )
         .unwrap();
-    assert_eq!(bob.session_id, bob.session_id.to_lowercase());
+    assert_eq!(
+        bob.session_id,
+        bob.session_id.as_ref().map(|s| s.to_lowercase())
+    );
     // An identical registration is idempotent, in any accepted spelling.
     assert_eq!(
         bob,
@@ -28,7 +31,7 @@ fn address_is_immutable_and_unique() {
             .add_peer(
                 "bob",
                 Harness::Claude,
-                &bob.session_id.to_uppercase(),
+                &bob.session_id.as_deref().unwrap().to_uppercase(),
                 temp.workspace(),
                 None,
                 None
@@ -53,7 +56,7 @@ fn address_is_immutable_and_unique() {
         code(store.add_peer(
             "bob",
             Harness::Claude,
-            &bob.session_id,
+            bob.session_id.as_deref().unwrap(),
             elsewhere.to_str().unwrap(),
             None,
             None
@@ -64,7 +67,7 @@ fn address_is_immutable_and_unique() {
         code(store.add_peer(
             "other",
             Harness::Claude,
-            &bob.session_id,
+            bob.session_id.as_deref().unwrap(),
             temp.workspace(),
             None,
             None
@@ -75,7 +78,7 @@ fn address_is_immutable_and_unique() {
         .add_peer(
             "other",
             Harness::Codex,
-            &bob.session_id,
+            bob.session_id.as_deref().unwrap(),
             temp.workspace(),
             None,
             None,
@@ -84,13 +87,10 @@ fn address_is_immutable_and_unique() {
     assert_eq!(
         Some(bob.clone()),
         store
-            .session_peer(Harness::Claude, &bob.session_id)
+            .session_peer("claude", bob.session_id.as_deref().unwrap())
             .unwrap()
     );
-    assert_eq!(
-        None,
-        store.session_peer(Harness::Claude, &new_id()).unwrap()
-    );
+    assert_eq!(None, store.session_peer("claude", &new_id()).unwrap());
     assert_eq!(
         vec!["alice", "bob", "other"],
         store
@@ -193,7 +193,7 @@ fn registration_validates_and_normalizes_each_field() {
             None,
         )
         .unwrap();
-    assert_eq!(project.to_str().unwrap(), codex.workspace);
+    assert_eq!(project.to_str(), codex.workspace.as_deref());
     assert_eq!(
         temp.path().join("codex.sock").to_str().unwrap(),
         codex.socket.unwrap()
@@ -216,8 +216,8 @@ fn every_peer_row_carries_retired_at() {
             .add_peer(
                 "bob",
                 Harness::Claude,
-                &bob.session_id,
-                &bob.workspace,
+                bob.session_id.as_deref().unwrap(),
+                bob.workspace.as_deref().unwrap(),
                 None,
                 None
             )
@@ -227,7 +227,7 @@ fn every_peer_row_carries_retired_at() {
     assert_eq!(
         Some(first),
         store
-            .session_peer(Harness::Claude, &bob.session_id)
+            .session_peer("claude", bob.session_id.as_deref().unwrap())
             .unwrap()
             .unwrap()
             .retired_at

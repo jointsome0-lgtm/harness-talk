@@ -1,5 +1,6 @@
 //! Codex transports against real fixtures: a WebSocket app-server on a Unix socket, a fake
 //! `codex` executable for `queue` and `app-server --stdio`, and fixture SQLite state.
+use harness_talk::model::NativePeer as Peer;
 use harness_talk::{
     codex::{self, rpc::Rpc, state},
     error::Failure,

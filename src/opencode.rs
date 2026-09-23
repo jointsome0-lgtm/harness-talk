@@ -9,6 +9,7 @@
 //! at most 4 MiB of response body. `opencode_unreachable` is reported only when
 //! the TCP connection (and TLS handshake) failed before any request byte was
 //! written; every later failure is uncertain.
+use crate::model::NativePeer as Peer;
 use crate::{
     error::{Error, Failure},
     model::*,

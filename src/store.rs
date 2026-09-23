@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use std::{fs, io, thread};
 
-pub const SCHEMA_VERSION: i64 = 2;
+pub use crate::schema::SCHEMA_VERSION;
 /// An answer is skipped only on evidence: the recipient acknowledged it, or the
 /// recipient's own wait already returned it. A registered wait is merely a hint
 /// that such a receipt may arrive within WAIT_GRACE seconds; it never suppresses.
@@ -69,7 +69,8 @@ fn read_row(r: &rusqlite::Row) -> Result<Row, Error> {
 fn read_peer(r: &rusqlite::Row) -> Result<Peer, Error> {
     Ok(Peer {
         name: r.get("name")?,
-        harness: r.get::<_, String>("harness")?.parse()?,
+        harness: r.get("harness")?,
+        delivery: r.get::<_, String>("delivery")?.parse()?,
         session_id: r.get("session_id")?,
         workspace: r.get("workspace")?,
         socket: r.get("socket")?,
@@ -264,6 +265,12 @@ pub(crate) fn await_writer(path: &Path) -> bool {
 
 impl Store {
     pub fn open(path: &Path, create: bool) -> Result<Self, Error> {
+        let store = Self::prepare(path, create)?;
+        crate::schema::ensure(&mut store.connect()?, false)?;
+        Ok(store)
+    }
+
+    fn prepare(path: &Path, create: bool) -> Result<Self, Error> {
         let store = Store {
             path: os::resolve(path),
             create,
@@ -293,90 +300,13 @@ impl Store {
                 },
             );
         }
-        let mut db = store.connect()?;
-        // Check the complete additive schema in one read snapshot. Current
-        // databases need no writer lock just to open. End this snapshot before
-        // taking IMMEDIATE below; upgrading a stale read can return BUSY.
-        {
-            let tx = db.transaction_with_behavior(TransactionBehavior::Deferred)?;
-            let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-            if version == SCHEMA_VERSION {
-                let ready: bool = tx.query_row(
-                    "SELECT
-                        EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='peers')
-                        AND EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='messages')
-                        AND EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='waits')
-                        AND EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='retired_peers')
-                        AND EXISTS(SELECT 1 FROM pragma_table_info('peers') WHERE name='url')
-                        AND EXISTS(SELECT 1 FROM pragma_table_info('messages') WHERE name='wait_returned_at')",
-                    [],
-                    |r| r.get(0),
-                )?;
-                if ready {
-                    tx.commit()?;
-                    return Ok(store);
-                }
-            }
-            tx.rollback()?;
-        }
-        // One write transaction: concurrent first opens serialize here, so the
-        // schema check, table creation and column addition cannot interleave.
-        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        crate::write_turn::started_write();
-        let version: i64 = tx.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-        if !matches!(version, 0 | 1 | SCHEMA_VERSION) {
-            return Err(code("unsupported_database_version"));
-        }
-        tx.execute_batch(
-            "CREATE TABLE IF NOT EXISTS peers (
-                    name TEXT PRIMARY KEY, harness TEXT NOT NULL,
-                    session_id TEXT NOT NULL, workspace TEXT NOT NULL,
-                    socket TEXT, url TEXT, UNIQUE(harness, session_id))",
-        )?;
-        tx.execute_batch(
-            "CREATE TABLE IF NOT EXISTS messages (
-                    seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
-                    sender TEXT NOT NULL REFERENCES peers(name),
-                    recipient TEXT NOT NULL REFERENCES peers(name),
-                    in_reply_to TEXT UNIQUE REFERENCES messages(id),
-                    body TEXT NOT NULL, created_at REAL NOT NULL, ack_at REAL,
-                    submission TEXT NOT NULL CHECK(submission IN
-                        ('not_submitted', 'submission_unknown', 'submitted')),
-                    notification_started_at REAL, notification_finished_at REAL,
-                    notification_detail TEXT)",
-        )?;
-        let columns = |table: &str| -> Result<Vec<String>, Error> {
-            let mut stmt = tx.prepare(&format!("PRAGMA table_info({table})"))?;
-            let names = stmt
-                .query_map([], |r| r.get::<_, String>(1))?
-                .collect::<Result<_, _>>()?;
-            Ok(names)
-        };
-        // Version 2 adds the nullable OpenCode server URL. Rows, marks and
-        // addresses are untouched; 0.2 clients reject version 2 explicitly.
-        if !columns("peers")?.iter().any(|c| c == "url") {
-            tx.execute_batch("ALTER TABLE peers ADD COLUMN url TEXT")?;
-        }
-        // Additive, version unchanged: a 0.3.0 client ignores both, so its waits
-        // and replies behave as before. wait_returned_at records that the
-        // recipient's wait returned an answer; waits lists polls in progress.
-        if !columns("messages")?.iter().any(|c| c == "wait_returned_at") {
-            tx.execute_batch("ALTER TABLE messages ADD COLUMN wait_returned_at REAL")?;
-        }
-        tx.execute_batch(
-            "CREATE TABLE IF NOT EXISTS waits (
-                    token TEXT PRIMARY KEY, message_id TEXT NOT NULL REFERENCES messages(id),
-                    actor TEXT NOT NULL, until REAL NOT NULL)",
-        )?;
-        // Also additive: 0.3 clients ignore retirement, and their peers inserts keep six columns.
-        tx.execute_batch(
-            "CREATE TABLE IF NOT EXISTS retired_peers (
-                    name TEXT PRIMARY KEY REFERENCES peers(name), retired_at REAL NOT NULL)",
-        )?;
-        if version != SCHEMA_VERSION {
-            tx.execute_batch(&format!("PRAGMA user_version={SCHEMA_VERSION}"))?;
-        }
-        tx.commit()?;
+        Ok(store)
+    }
+
+    /// Explicit schema upgrade. Never called by ordinary message/read commands.
+    pub fn migrate(path: &Path) -> Result<Self, Error> {
+        let store = Self::prepare(path, false)?;
+        crate::schema::ensure(&mut store.connect()?, true)?;
         Ok(store)
     }
 
@@ -397,58 +327,33 @@ impl Store {
         Ok(db)
     }
 
-    pub fn add_peer(
-        &self,
-        name: &str,
-        harness: Harness,
-        session: &str,
-        workspace: &str,
-        socket: Option<&str>,
-        url: Option<&str>,
-    ) -> Result<Peer, Error> {
-        validate::peer_name(name)?;
-        // OpenCode identifiers are opaque; the other harnesses use UUIDs.
-        let session_id = if harness == Harness::Opencode {
-            validate::opencode_session_id(session)?
-        } else {
-            validate::uuid(session)?
-        };
-        let url = if harness == Harness::Opencode {
-            if socket.is_some() {
-                return Err(code("opencode_uses_a_server_url_not_a_socket"));
-            }
-            Some(validate::opencode_url(url)?)
-        } else if url.is_some() {
-            return Err(code("url_is_only_for_opencode"));
-        } else {
-            None
-        };
-        let workspace = os::resolve_strict(Path::new(workspace))?;
-        if !workspace.is_dir() {
-            return Err(code("workspace_must_be_a_directory"));
-        }
-        let workspace = workspace.to_string_lossy().into_owned();
-        let socket = socket.map(|s| os::resolve(Path::new(s)).to_string_lossy().into_owned());
-        if harness == Harness::Claude && socket.is_some() {
-            return Err(code("claude_socket_is_discovered_from_live_identity"));
-        }
+    pub fn register(&self, peer: &Peer) -> Result<Peer, Error> {
+        validate::peer_name(&peer.name)?;
+        validate::peer_name(&peer.harness).map_err(|_| code("invalid_harness_id"))?;
+        let name = &peer.name;
         let text = |v: &str| Sql::Text(v.to_owned());
         let optional = |v: &Option<String>| v.as_deref().map_or(Sql::Null, text);
         let values = vec![
             text(name),
-            text(harness.as_str()),
-            text(&session_id),
-            text(&workspace),
-            optional(&socket),
-            optional(&url),
+            text(&peer.harness),
+            optional(&peer.session_id),
+            optional(&peer.workspace),
+            optional(&peer.socket),
+            optional(&peer.url),
+            text(peer.delivery.as_str()),
         ];
         let mut db = self.connect()?;
         let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let existing = first(&tx, "SELECT * FROM peers WHERE name=?", [name], |r| {
-            Ok((0..r.as_ref().column_count())
-                .map(|i| r.get::<_, Sql>(i))
-                .collect::<Result<Vec<_>, _>>()?)
-        })?;
+        let existing = first(
+            &tx,
+            "SELECT name, harness, session_id, workspace, socket, url, delivery FROM peers WHERE name=?",
+            [name],
+            |r| {
+                Ok((0..r.as_ref().column_count())
+                    .map(|i| r.get::<_, Sql>(i))
+                    .collect::<Result<Vec<_>, _>>()?)
+            },
+        )?;
         match existing {
             Some(existing) => {
                 if existing != values {
@@ -459,7 +364,7 @@ impl Store {
                 if first(
                     &tx,
                     "SELECT 1 FROM peers WHERE harness=? AND session_id=?",
-                    [harness.as_str(), &session_id],
+                    params![peer.harness, peer.session_id],
                     |_| Ok(()),
                 )?
                 .is_some()
@@ -467,7 +372,7 @@ impl Store {
                     return Err(code("session_already_has_a_peer_name"));
                 }
                 tx.execute(
-                    "INSERT INTO peers VALUES (?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO peers (name, harness, session_id, workspace, socket, url, delivery) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     rusqlite::params_from_iter(&values),
                 )?;
             }
@@ -480,11 +385,11 @@ impl Store {
         peer_on(&self.connect()?, name)
     }
 
-    pub fn session_peer(&self, h: Harness, session: &str) -> Result<Option<Peer>, Error> {
+    pub fn session_peer(&self, harness: &str, session: &str) -> Result<Option<Peer>, Error> {
         first(
             &self.connect()?,
-            &format!("{PEER_ROWS} WHERE p.harness=? AND p.session_id=?"),
-            [h.as_str(), session],
+            &format!("{PEER_ROWS} WHERE p.delivery='native' AND p.harness=? AND p.session_id=?"),
+            [harness, session],
             read_peer,
         )
     }
@@ -530,7 +435,7 @@ impl Store {
         validate::text(body)?;
         let mut db = self.connect()?;
         peer_on(&db, sender)?;
-        peer_on(&db, recipient)?;
+        let recipient_peer = peer_on(&db, recipient)?;
         if sender == recipient {
             return Err(code("sender_and_recipient_must_differ"));
         }
@@ -584,9 +489,10 @@ impl Store {
         }
         tx.execute(
             "INSERT INTO messages
-                (id, sender, recipient, in_reply_to, body, created_at, submission)
-                VALUES (?, ?, ?, ?, ?, ?, 'not_submitted')",
-            params![id, sender, recipient, in_reply_to, body, os::now()],
+                (id, sender, recipient, in_reply_to, body, created_at, submission, notification_detail)
+                VALUES (?, ?, ?, ?, ?, ?, 'not_submitted', ?)",
+            params![id, sender, recipient, in_reply_to, body, os::now(),
+                (recipient_peer.delivery == Delivery::Pull).then_some("pull_only")],
         )?;
         tx.commit()?;
         Ok((load(&db, &id, None)?, true))
@@ -602,7 +508,8 @@ impl Store {
         let claimed = self.connect()?.execute(
             "UPDATE messages SET submission='submission_unknown',
                 notification_started_at=? WHERE id=? AND notification_started_at IS NULL
-                AND ack_at IS NULL",
+                AND ack_at IS NULL
+                AND recipient IN (SELECT name FROM peers WHERE delivery='native')",
             params![os::now(), id],
         )?;
         if claimed == 0 {

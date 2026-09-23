@@ -3,6 +3,7 @@
 mod fixture;
 
 use fixture::{Fake, Reply, closed_port, session};
+use harness_talk::model::NativePeer as Peer;
 use harness_talk::{error::Failure, model::*, opencode};
 use serde_json::{Value, json};
 use std::{

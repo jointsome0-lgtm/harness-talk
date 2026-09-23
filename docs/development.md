@@ -8,7 +8,9 @@ cargo test --locked
 python3 -B -m unittest discover -s tests -p test_cli_compat.py -v
 ```
 
-The CLI suite uses `target/debug/htalk`, temporary databases, fake client executables, Unix sockets and a loopback HTTP server. It never falls back to an installed `htalk`. To test a specific executable, set `HTALK_TEST_COMMAND` to a JSON argument list starting with its absolute path. `HTALK_TEST_VERSION` defaults to `0.5.1`; set it when testing another release.
+The CLI suite uses `target/debug/htalk`, temporary databases, fake client executables, Unix sockets and a loopback HTTP server. It never falls back to an installed `htalk`. To test a specific executable, set `HTALK_TEST_COMMAND` to a JSON argument list starting with its absolute path. `HTALK_TEST_VERSION` defaults to `0.6.0-dev.0`; set it when testing another release.
+
+Schema migration tests use synthetic version 1/2 fixtures; pull and mixed native/pull exchanges use isolated mailboxes. These checks do not migrate a working mailbox.
 
 The same CLI suite was first run against the Python 0.4 implementation, before running it against the Rust port. Native tests cover storage transactions and races, session recognition, discovery and all three transports. They replace the old tests that imported Python implementation details.
 

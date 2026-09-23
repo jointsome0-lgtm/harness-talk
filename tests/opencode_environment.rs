@@ -4,6 +4,7 @@
 mod fixture;
 
 use fixture::{Fake, session};
+use harness_talk::model::NativePeer as Peer;
 use harness_talk::{error::Failure, model::*, opencode};
 use serde_json::json;
 use std::{

@@ -5,6 +5,7 @@
 pub mod rpc;
 pub mod state;
 
+use crate::model::NativePeer as Peer;
 use crate::{error::Failure, model::*, os};
 use rpc::Rpc;
 use serde_json::{Value, json};

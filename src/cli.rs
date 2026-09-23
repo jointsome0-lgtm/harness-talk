@@ -1,7 +1,7 @@
 use crate::{
     error::Error,
     guidance, identity,
-    model::{Harness, NativeSession, Peer, SkipReason},
+    model::{Delivery, Harness, NativeSession, Peer, SkipReason},
     notify, os,
     store::Store,
     validate,
@@ -16,6 +16,7 @@ use std::{
 
 struct Call {
     db: PathBuf,
+    explicit_db: bool,
     actor: Option<String>,
     command: String,
     peer_command: Option<String>,
@@ -24,10 +25,9 @@ struct Call {
 }
 impl Call {
     fn new(mut matches: ArgMatches) -> Result<Self, Error> {
-        let db = matches
-            .remove_one::<String>("db")
-            .map(PathBuf::from)
-            .unwrap_or_else(default_db);
+        let db = matches.remove_one::<String>("db").map(PathBuf::from);
+        let explicit_db = db.is_some();
+        let db = db.unwrap_or_else(default_db);
         let actor = matches.remove_one::<String>("actor");
         let (command, mut options) = matches
             .remove_subcommand()
@@ -43,6 +43,7 @@ impl Call {
         };
         Ok(Self {
             db,
+            explicit_db,
             actor,
             command,
             peer_command,
@@ -198,6 +199,45 @@ fn execute_once(call: &mut Call, context: &mut Context) -> Result<(Value, i32), 
     if call.command == "wait" {
         validate::wait(call.number("seconds"))?;
     }
+    if call.command == "migrate" {
+        if !call.explicit_db {
+            return Err(Error::code("migrate_requires_explicit_db"));
+        }
+        Store::migrate(&call.db)?;
+        return Ok((
+            json!({"state":"ready", "schema_version":crate::store::SCHEMA_VERSION,
+            "resolved_path":os::resolve(&call.db)}),
+            0,
+        ));
+    }
+    let registration = if call.command == "peer" && call.peer_command.as_deref() == Some("add") {
+        let name = call.required("name")?;
+        let harness = call.required("harness")?;
+        if call.value("delivery") == Some("pull") {
+            if ["session", "workspace", "socket", "url"]
+                .iter()
+                .any(|key| call.value(key).is_some())
+            {
+                return Err(Error::code("pull_peer_has_no_native_address"));
+            }
+            let peer = Peer::pull(name, harness);
+            validate::peer_name(name)?;
+            validate::peer_name(harness).map_err(|_| Error::code("invalid_harness_id"))?;
+            Some(peer)
+        } else {
+            let harness = harness.parse()?;
+            Some(notify::native_peer(
+                name,
+                harness,
+                call.required("session")?,
+                call.required("workspace")?,
+                call.value("socket"),
+                call.value("url"),
+            )?)
+        }
+    } else {
+        None
+    };
     context.store = Some(Store::open(
         &call.db,
         call.command == "peer" && call.peer_command.as_deref() == Some("add"),
@@ -210,13 +250,10 @@ fn execute_once(call: &mut Call, context: &mut Context) -> Result<(Value, i32), 
         let value = match call.peer_command.as_deref() {
             Some("add") => {
                 let name = call.required("name")?;
-                let peer = store.add_peer(
-                    name,
-                    call.required("harness")?.parse()?,
-                    call.required("session")?,
-                    call.required("workspace")?,
-                    call.value("socket"),
-                    call.value("url"),
+                let peer = store.register(
+                    registration
+                        .as_ref()
+                        .ok_or_else(|| Error::code("invalid_arguments"))?,
                 )?;
                 let mut value = serde_json::to_value(&peer)?;
                 if peer.retired_at.is_some() {
@@ -261,7 +298,7 @@ fn execute_once(call: &mut Call, context: &mut Context) -> Result<(Value, i32), 
     } else {
         let native = native_session();
         if let NativeSession::Recognized { session_id, .. } = &native {
-            context.own = store.session_peer(Harness::Claude, session_id)?;
+            context.own = store.session_peer("claude", session_id)?;
         }
         context.native = Some(native);
         let own = context
@@ -283,14 +320,18 @@ fn execute_once(call: &mut Call, context: &mut Context) -> Result<(Value, i32), 
         .as_ref()
         .ok_or_else(|| Error::code("unknown_peer"))?;
     if let Some(id) = env::var("CODEX_THREAD_ID").ok().filter(|s| !s.is_empty())
-        && own.harness == Harness::Codex
-        && own.session_id != id
+        && own.delivery == Delivery::Native
+        && own.harness == "codex"
+        && own.session_id.as_deref() != Some(id.as_str())
     {
         return Err(Error::code("actor_conflicts_with_CODEX_THREAD_ID"));
     }
-    if context.actor_source != Some("native_session") && own.harness == Harness::Claude {
+    if context.actor_source != Some("native_session")
+        && own.delivery == Delivery::Native
+        && own.harness == "claude"
+    {
         let native = native_session();
-        let conflict = matches!(&native, NativeSession::Recognized { session_id, .. } if session_id != &own.session_id);
+        let conflict = matches!(&native, NativeSession::Recognized { session_id, .. } if Some(session_id.as_str()) != own.session_id.as_deref());
         context.native = Some(native);
         if conflict {
             return Err(Error::code("actor_conflicts_with_CLAUDE_CODE_SESSION_ID"));
@@ -454,9 +495,33 @@ fn failure(call: &Call, context: &Context, error: &Error) -> Value {
         return json!({"state":"error", "error":error, "resolved_path":os::resolve(&call.db),
             "next_action":"No database file exists at resolved_path. Check --db and HTALK_DB; every participant must use the same file. Only peer add creates a database: see htalk peer add --help."});
     }
+    if error == "database_migration_required" {
+        return json!({"state":"error", "error":error,
+            "next_action":"Stop all users of this mailbox, make a SQLite backup, and upgrade every client before migrating. Read htalk migrate --help. Schema 3 cannot be read by older clients; ordinary commands do not migrate it."});
+    }
+    if call.command == "migrate" {
+        let action = match error.as_str() {
+            "migrate_requires_explicit_db" => {
+                "Select the intended mailbox with --db PATH before migrate. HTALK_DB and the default mailbox are not migration targets. Read htalk migrate --help before changing a database."
+            }
+            "database_foreign_key_violation" => {
+                "Migration rolled back because the database contains broken references. Inspect PRAGMA foreign_key_check on a copy and repair the source or restore a valid backup before retrying. Do not change user_version manually."
+            }
+            "unsupported_unversioned_database" => {
+                "No supported htalk schema version was found. The database was not changed. Verify that this is the intended mailbox and recover it with a matching client or a valid backup; do not assign a schema version manually."
+            }
+            _ => {
+                "Migration did not report success. Inspect the error, schema version and database integrity on a copy before retrying. Do not change user_version manually."
+            }
+        };
+        return json!({"state":"error", "error":error, "resolved_path":os::resolve(&call.db), "next_action":action});
+    }
     let mut value = json!({"state":"error", "error":error, "recovery":{"peers":call.recovery(&["peer","list"],false)}});
     let actor = call.actor.as_deref().unwrap_or("");
     match error.as_str() {
+        "unsupported_harness" => {
+            value["next_action"] = "Native notification adapters are codex, claude and opencode. For another harness, register with --delivery pull and poll inbox.".into();
+        }
         "actor_conflicts_with_CODEX_THREAD_ID" | "actor_conflicts_with_CLAUDE_CODE_SESSION_ID" => {
             if let Some(own) = &context.own {
                 let codex = error == "actor_conflicts_with_CODEX_THREAD_ID";
@@ -473,9 +538,9 @@ fn failure(call: &Call, context: &Context, error: &Error) -> Value {
                 value["recovery"]["inbox_in_registered_session"] =
                     call.recovery(&["inbox"], true).into();
                 value["next_action"] = if codex {
-                    format!("Peer {actor} belongs to Codex session {}, not current session {current}. Use recovery.peers to find the peer registered to this session, or return to the registered session before running recovery.inbox_in_registered_session. The binding cannot be reassigned.",own.session_id)
+                    format!("Peer {actor} belongs to Codex session {}, not current session {current}. Use recovery.peers to find the peer registered to this session, or return to the registered session before running recovery.inbox_in_registered_session. The binding cannot be reassigned.",own.session_id.as_deref().unwrap_or(""))
                 } else {
-                    format!("Peer {actor} belongs to Claude session {}, not current session {current}. Check --as and HTALK_PEER. Use recovery.peers to find the peer registered to this session, which is selected when both are omitted, or return to the registered session before running recovery.inbox_in_registered_session. The binding cannot be reassigned.",own.session_id)
+                    format!("Peer {actor} belongs to Claude session {}, not current session {current}. Check --as and HTALK_PEER. Use recovery.peers to find the peer registered to this session, which is selected when both are omitted, or return to the registered session before running recovery.inbox_in_registered_session. The binding cannot be reassigned.",own.session_id.as_deref().unwrap_or(""))
                 }.into();
             }
         }
@@ -511,23 +576,26 @@ fn failure(call: &Call, context: &Context, error: &Error) -> Value {
                 if error == "peer_already_has_a_different_address" {
                     store.peer(call.value("name")?).ok()
                 } else {
-                    let harness = call.value("harness")?.parse().ok()?;
+                    let harness: Harness = call.value("harness")?.parse().ok()?;
                     let session = call.value("session")?;
                     let session = if harness == Harness::Opencode {
                         session.to_owned()
                     } else {
                         validate::uuid(session).ok()?
                     };
-                    store.session_peer(harness, &session).ok().flatten()
+                    store
+                        .session_peer(harness.as_str(), &session)
+                        .ok()
+                        .flatten()
                 }
             });
             if let Some(peer) = peer {
                 value["registered_peer"] = peer.name.clone().into();
                 value["registered_session_id"] = peer.session_id.clone().into();
                 value["next_action"] = if error == "peer_already_has_a_different_address" {
-                    format!("Peer {} is already bound to {} session {}. Inspect recovery.peers. Keep that address for the existing session; a separate session needs a different peer name.",peer.name,peer.harness,peer.session_id)
+                    format!("Peer {} is already bound to {} session {}. Inspect recovery.peers. Keep that address for the existing session; a separate session needs a different peer name.",peer.name,peer.harness,peer.session_id.as_deref().unwrap_or("(pull)"))
                 } else {
-                    format!("Session {} already uses peer {}. Use that name from its registered session. Inspect recovery.peers for the existing immutable addresses.",peer.session_id,peer.name)
+                    format!("Session {} already uses peer {}. Use that name from its registered session. Inspect recovery.peers for the existing immutable addresses.",peer.session_id.as_deref().unwrap_or("(pull)"),peer.name)
                 }.into();
                 retired_registration(call, &mut value, &peer);
                 if error == "session_already_has_a_peer_name" && peer.retired_at.is_some() {
@@ -622,6 +690,9 @@ pub fn main() -> i32 {
         .map_err(Error::from)
         .and_then(|_| execute(&mut call, &mut context));
     let (value, code) = match result {
+        // A migration that committed has a known result even if SIGINT arrived
+        // immediately after commit. Failed/interrupted transactions still use 130.
+        Ok(result) if call.command == "migrate" => result,
         _ if os::interrupted() => (interrupted(&call, &context), 130),
         Ok(result) => result,
         Err(Error::Interrupted) => (interrupted(&call, &context), 130),
