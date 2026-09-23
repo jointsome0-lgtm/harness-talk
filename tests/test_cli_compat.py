@@ -42,7 +42,7 @@ def words_of(command):
 class CommandSurface(HtalkCase):
     def test_version_and_help(self):
         version = self.run_raw("--version", db=False)
-        self.assertEqual((0, os.environ.get("HTALK_TEST_VERSION", "0.6.0-dev.0")), (version.code, version.stdout.strip()))
+        self.assertEqual((0, os.environ.get("HTALK_TEST_VERSION", "0.6.0")), (version.code, version.stdout.strip()))
         for words, expected in ((["--help"], ("peer", "send", "reply", "inbox", "sent", "wait", "ack", "show")),
                                 (["peer", "add", "--help"], ("--harness", "--session", "--workspace", "--socket", "--url")),
                                 (["send", "--help"], ("--id", "--message", "--message-file", "--no-notify", "--wait")),

@@ -6,7 +6,7 @@ For Linux and mutually trusted sessions under one OS account. Peer names identif
 
 The [roadmap](ROADMAP.md) tracks the planned releases and their completion criteria.
 
-> Unreleased 0.6 development source: adds pull participants and explicit schema 3 migration. Published 0.5.1 packages still use schema 2. Build this checkout to try the new core on a separate database.
+> Unreleased 0.6.0 candidate: adds pull participants and explicit schema 3 migration. Published 0.5.1 packages still use schema 2. Build this checkout to try the new core on a separate database.
 
 ## Install and share a database
 
