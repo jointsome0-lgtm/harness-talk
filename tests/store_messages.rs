@@ -7,18 +7,18 @@ use std::thread;
 use support::*;
 
 #[test]
-fn invalid_requests_do_not_wait_for_a_writer_and_keep_peer_error_precedence() {
+fn invalid_requests_do_not_wait_for_a_writer() {
     let temp = Temp::new();
     let store = store(&temp, &["alice", "bob"]);
     let writer = store.connect().unwrap();
     writer.execute_batch("BEGIN IMMEDIATE").unwrap();
     assert_eq!(
         "unknown_peer",
-        code(store.save("alice", "nobody", "Hi", Some("bad"), None))
+        code(store.save("alice", "nobody", "Hi", None, None))
     );
     assert_eq!(
         "sender_and_recipient_must_differ",
-        code(store.save("alice", "alice", "Hi", Some("bad"), None))
+        code(store.save("alice", "alice", "Hi", None, None))
     );
     assert_eq!(
         "badly formed hexadecimal UUID string",

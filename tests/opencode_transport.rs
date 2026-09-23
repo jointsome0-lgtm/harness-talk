@@ -68,7 +68,7 @@ fn health_hook(c: &Case, reply: impl Fn() -> Reply + Send + 'static) {
 fn probe_checks_exact_session_workspace_and_status() {
     let c = case();
     let result = opencode::probe(&c.peer).unwrap();
-    let keys: Vec<&str> = result
+    let keys: std::collections::BTreeSet<&str> = result
         .as_object()
         .unwrap()
         .keys()
@@ -76,7 +76,7 @@ fn probe_checks_exact_session_workspace_and_status() {
         .collect();
     assert_eq!(
         keys,
-        [
+        std::collections::BTreeSet::from([
             "harness",
             "session_id",
             "workspace",
@@ -85,7 +85,7 @@ fn probe_checks_exact_session_workspace_and_status() {
             "runtime_status",
             "transport",
             "authenticated"
-        ]
+        ])
     );
     assert_eq!(
         (
@@ -178,12 +178,10 @@ fn responses_follow_http_client_framing() {
             &body[5..]
         ),
         format!("HTTP/1.1 100 Continue\r\n\r\nHTTP/1.0 200 OK\r\n\r\n{body}"), // no length: read to close
-        format!("HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\n{body}"), // short body, as read(amt)
         format!(
             "HTTP/1.1  200\r\ncontent-length:{}\r\n\r\n\u{feff}{body}",
             body.len() + 3
         ),
-        format!("HTTP/1.1 200 OK\r\nContent-Length: nonsense\r\n\r\n{body}"),
     ];
     for response in responses {
         health_hook(&c, move || raw(&response));
@@ -191,6 +189,14 @@ fn responses_follow_http_client_framing() {
             opencode::probe(&c.peer).unwrap()["server_version"],
             "framed"
         );
+    }
+    for (length, expected) in [
+        ("1000", "opencode_IncompleteRead"),
+        ("nonsense", "opencode_invalid_response"),
+    ] {
+        let response = format!("HTTP/1.1 200 OK\r\nContent-Length: {length}\r\n\r\n{body}");
+        health_hook(&c, move || raw(&response));
+        assert_eq!(err(opencode::probe(&c.peer)), expected);
     }
 }
 
@@ -270,6 +276,14 @@ fn failures_after_the_request_is_written_are_uncertain() {
     );
     assert_eq!(
         post(|| raw("HTTP/1.1 400 Bad\r\nContent-Length: 3\r\n\r\n{x}")),
+        ("submission_unknown", "opencode_invalid_response".into())
+    );
+    assert_eq!(
+        post(|| raw("HTTP/1.1 400 Bad\r\nContent-Length: 1000\r\n\r\n{}")),
+        ("submission_unknown", "opencode_IncompleteRead".into())
+    );
+    assert_eq!(
+        post(|| raw("HTTP/1.1 400 Bad\r\nContent-Length: nonsense\r\n\r\n{}")),
         ("submission_unknown", "opencode_invalid_response".into())
     );
     assert_eq!(

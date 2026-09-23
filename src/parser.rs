@@ -155,7 +155,7 @@ pub fn command() -> Command {
         )
         .subcommand(Command::new("migrate")
             .about("Prepare this mailbox without another operation.")
-            .long_about("Ordinary mailbox commands automatically back up and upgrade schema 1/2 on first use. This optional command runs the same preparation and requires an explicit --db PATH. Verified backups are kept in PATH.backups. Older binaries reject schema 3. A failed migration rolls back; no automatic downgrade or backup restoration is performed.")
+            .long_about("Ordinary mailbox commands automatically back up and upgrade schema 1/2 on first use. This optional command runs the same preparation on the database selected by --db, HTALK_DB or the default location. Verified backups are kept in PATH.backups. Older binaries reject schema 3. A failed migration rolls back; no automatic downgrade or backup restoration is performed.")
         )
         .subcommand(
             Command::new("send")

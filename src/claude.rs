@@ -1,7 +1,7 @@
 //! Claude Code: exact live identity from `claude agents --json` and one frame on its messaging socket.
 use crate::codex::{
-    connect_unix, escapes, index, io_failure, owned_socket, python_dumps, same_workspace,
-    socket_failure, text_output,
+    connect_unix, index, io_failure, owned_socket, python_dumps, same_workspace, socket_failure,
+    text_output,
 };
 use crate::model::NativePeer as Peer;
 use crate::{error::Failure, model::*, os};
@@ -72,7 +72,6 @@ pub fn live_socket(peer: &Peer) -> Result<PathBuf, Failure> {
 pub fn notify(peer: &Peer, message: &Message, body: &str, skip: Skip<'_>) -> Outcome {
     let path = match live_socket(peer) {
         Ok(path) => path,
-        Err(failure) if escapes(&failure) => return Outcome::unknown(failure.to_string()),
         Err(failure) => return Outcome::not_submitted(failure.to_string()),
     };
     let id = &message.row.id;
@@ -81,10 +80,10 @@ pub fn notify(peer: &Peer, message: &Message, body: &str, skip: Skip<'_>) -> Out
         "message": {"role": "user", "content": body}});
     let mut connection = match connect_unix(&path, SOCKET_TIMEOUT) {
         Ok(connection) => connection,
-        Err(error) => return Outcome::unknown(io_failure(error).to_string()),
+        Err(error) => return Outcome::not_submitted(io_failure(error).to_string()),
     };
     if let Err(error) = connection.set_write_timeout(Some(SOCKET_TIMEOUT)) {
-        return Outcome::unknown(io_failure(error).to_string());
+        return Outcome::not_submitted(io_failure(error).to_string());
     }
     match skip() {
         Err(failure) => return Outcome::not_submitted(failure.to_string()),

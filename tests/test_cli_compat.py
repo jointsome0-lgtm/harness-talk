@@ -173,18 +173,21 @@ class SchemaCompatibility(HtalkCase):
         self.htalk("peer", "retire", "bob")
         self.assertEqual(2, len(self.htalk("peer", "list")["peers"]))
 
-    def test_migration_requires_explicit_path_and_resolves_tilde(self):
-        path = self.home / "old.sqlite3"
-        self.legacy_v1(path)
-        before = path.read_bytes()
-        self.error("migrate", db=False, env={"HTALK_DB": str(path)}, error="migrate_requires_explicit_db")
-        self.error("migrate", db=False, error="migrate_requires_explicit_db")
-        self.assertEqual(before, path.read_bytes())
-        self.htalk("peer", "list", db="~/old.sqlite3")
-        self.htalk("migrate", db="~/old.sqlite3")
-        self.assertEqual(1, len(self.backups(path)))
-        self.assert_current_schema(path)
-        self.assertEqual(3, len(self.htalk("peer", "list", db="~/old.sqlite3")["peers"]))
+    def test_migrate_uses_normal_database_selection(self):
+        selected = self.tmp / "selected.sqlite3"
+        for path, env in ((selected, {"HTALK_DB": str(selected)}),
+                          (self.home / ".local/share/harness-talk/mail.sqlite3", {})):
+            with self.subTest(path=path):
+                self.legacy_v1(path)
+                before = self.snapshot(path)
+                result = self.htalk("migrate", db=False, env=env)
+                self.assertEqual({"state": "ready", "schema_version": 3, "resolved_path": str(path)}, result)
+                backup, = self.backups(path)
+                self.assertEqual(before, self.snapshot(backup))
+                self.assert_current_schema(path)
+                self.htalk("migrate", db=path)
+                self.assertEqual([backup], self.backups(path))
+                self.assertEqual(3, len(self.htalk("peer", "list", db=path)["peers"]))
 
     def test_broken_references_stop_before_backups_and_explain_failure(self):
         self.legacy_v1(self.db)

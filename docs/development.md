@@ -14,6 +14,8 @@ Schema migration tests use synthetic version 1/2 fixtures and cover automatic fi
 
 The CLI suite covers registration, request/reply/ACK states, pagination, recovery, migration and native/pull exchanges. Rust tests cover storage races and adapter-specific identity, discovery and delivery failures. Keep a behavior in one layer when another test already exercises the same failure; retain separate tests for distinct races and transport boundaries.
 
+Check what each assertion protects for the caller before preserving it. Old Python behavior and a passing test do not establish a requirement. Compare JSON fields and values without requiring key order or spacing. Isolate invalid inputs unless error precedence itself affects recovery. Delivery outcomes must follow whether submission could have begun, not the exception class that happened to escape an older adapter.
+
 CI runs the full Rust and installed CLI suites once, on Python 3.14. Both Python 3.11 and 3.14 build and install the package, then run `htalk --version`, `htalk --help` and `pip check` outside the checkout. A separate job checks the minimum supported Rust version.
 
 For a local binary wheel:

@@ -6,9 +6,10 @@ use fixture::{Fake, closed_port, session};
 use harness_talk::opencode::discover_with;
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
+use std::collections::BTreeSet;
 use std::path::Path;
 
-fn keys(value: &Value) -> Vec<&str> {
+fn keys(value: &Value) -> BTreeSet<&str> {
     value
         .as_object()
         .unwrap()
@@ -79,9 +80,9 @@ fn malformed_server_records_preserve_valid_sessions_before_and_after() {
     let source = &result.sources[0];
     assert_eq!(
         keys(source),
-        [
+        BTreeSet::from([
             "harness", "source", "url", "status", "version", "error", "detail", "rejected"
-        ]
+        ])
     );
     assert_eq!(
         (
@@ -98,19 +99,6 @@ fn malformed_server_records_preserve_valid_sessions_before_and_after() {
         )
     );
     let last = &result.sessions[1];
-    assert_eq!(
-        keys(last),
-        [
-            "harness",
-            "session_id",
-            "workspace",
-            "runtime_status",
-            "runtime_reason",
-            "source",
-            "url",
-            "updated_at"
-        ]
-    );
     assert_eq!(
         last,
         &json!({"harness": "opencode", "session_id": "ses_last", "workspace": ws, "runtime_status": "retry",
@@ -291,9 +279,9 @@ fn malformed_saved_rows_preserve_valid_addresses_and_limit_diagnostics() {
     let source = &result.sources[0];
     assert_eq!(
         keys(source),
-        [
+        BTreeSet::from([
             "harness", "source", "path", "status", "error", "detail", "rejected"
-        ]
+        ])
     );
     assert_eq!(
         (

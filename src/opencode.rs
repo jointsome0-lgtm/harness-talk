@@ -4,9 +4,9 @@
 //! POST /session/{id}/prompt_async, which intentionally starts a turn in the
 //! existing session. No credential is stored.
 //!
-//! The HTTP/1.1 exchange follows Python's `http.client`, which 0.4.0 used: one
-//! connection per request, no redirects, no proxy, 5 s per socket operation and
-//! at most 4 MiB of response body. `opencode_unreachable` is reported only when
+//! The HTTP/1.1 exchange uses one connection per request, no redirects, no proxy,
+//! 5 s per socket operation and at most 4 MiB of response body.
+//! `opencode_unreachable` is reported only when
 //! the TCP connection (and TLS handshake) failed before any request byte was
 //! written; every later failure is uncertain.
 use crate::model::NativePeer as Peer;
@@ -578,7 +578,7 @@ fn read_chunked(r: &mut Reader, mut amt: usize) -> Result<Vec<u8>, &'static str>
     }
 }
 
-/// Status and the first MAX_RESPONSE + 1 body bytes, as `getresponse().read(MAX_RESPONSE + 1)`.
+/// Read a framed response, capped at MAX_RESPONSE + 1 to detect oversized bodies.
 fn read_response(r: &mut Reader) -> Result<(i128, Vec<u8>), &'static str> {
     let (version, status) = loop {
         let (version, status) = read_status(r)?;
@@ -593,28 +593,26 @@ fn read_response(r: &mut Reader) -> Result<(i128, Vec<u8>), &'static str> {
     let headers = parse_headers(&read_header_block(r)?);
     let chunked =
         header(&headers, "transfer-encoding").is_some_and(|t| t.eq_ignore_ascii_case("chunked"));
-    let mut length = if chunked {
+    let length = if status == 204 || status == 304 || (100..200).contains(&status) {
+        Some(0)
+    } else if chunked {
         None
     } else {
         header(&headers, "content-length")
-            .filter(|v| !v.is_empty())
-            .and_then(|v| {
-                if v.is_ascii() {
-                    py_int(v.as_bytes(), 10)
-                } else {
-                    None
+            .map(|v| {
+                let v = v.trim_matches([' ', '\t']);
+                if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
+                    return Err("invalid_response");
                 }
+                py_int(v.as_bytes(), 10).ok_or("invalid_response")
             })
-            .filter(|n| *n >= 0)
+            .transpose()?
     };
-    if status == 204 || status == 304 || (100..200).contains(&status) {
-        length = Some(0);
-    }
     let amt = MAX_RESPONSE + 1;
     let body = match length {
         Some(0) => Vec::new(),
         _ if chunked => read_chunked(r, amt)?,
-        Some(n) => r.read(usize::try_from(n).unwrap_or(usize::MAX).min(amt))?,
+        Some(n) => r.safe_read(usize::try_from(n).unwrap_or(usize::MAX).min(amt))?,
         None => r.read(amt)?,
     };
     Ok((status, body))
