@@ -1,8 +1,10 @@
 # htalk
 
-Exchange messages between existing Codex, Claude Code and OpenCode sessions. htalk saves requests and replies in a shared SQLite inbox and can notify the recipient through its client. Either participant can ask, answer now or return later.
+Exchange messages between local agents, including Codex, Claude Code and OpenCode sessions. htalk saves requests and replies in a shared SQLite inbox and can notify the recipient through its client. Either participant can ask, answer now or return later.
 
 For Linux and mutually trusted sessions under one OS account. Peer names identify routes, not authenticated users. The package name is `harness-talk`; the command is `htalk`.
+
+> Unreleased 0.6 development source: adds pull participants and explicit schema 3 migration. Published 0.5.1 packages still use schema 2. Build this checkout to try the new core on a separate database.
 
 ## Install and share a database
 
@@ -17,9 +19,9 @@ Or install with `python -m pip install harness-talk` (Python 3.11+). Version 0.5
 
 Set the same `HTALK_DB` in both sessions. Both must be able to run `htalk` and write the database directory. Only `peer add` creates the file; other commands report `database_not_found` for a wrong path. `--db PATH` overrides the environment; [storage defaults](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/reference.md#database-and-peers) are documented separately.
 
-Before opening an existing database with 0.3, upgrade every participant. The first storage command migrates it to schema 2; older clients cannot open that file.
+This development version uses schema 3. Ordinary commands on schema 1 or 2 return `database_migration_required` without changing the file. To migrate an existing mailbox, first stop its users, make a SQLite backup and upgrade every client, then run `htalk --db PATH migrate`. The migration preserves messages, replies, acknowledgments, notification receipts and retirement marks. Older binaries reject schema 3; there is no automatic downgrade. Test on a copy before moving a working mailbox.
 
-Version 0.5 keeps the 0.4 CLI, JSON fields and schema 2 database. Retiring a peer remains effective only for clients 0.4 and newer; an older 0.3 client ignores retirement. Python imports from `harness_talk` are no longer supported. Replace module invocations in scripts with the installed command, keeping the same database and arguments:
+Native commands and peer JSON retain their earlier shape after migration. Python imports from `harness_talk` are no longer supported. Replace module invocations in scripts with the installed command, keeping the same database and arguments:
 
 ```sh
 # Before 0.5
@@ -51,6 +53,15 @@ htalk peer list
 Replace those IDs and paths with the discovered addresses. For an app-server address, keep its `--socket PATH`. For OpenCode, follow the [server setup](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/opencode.md).
 
 When a registered session is no longer used, `htalk peer retire NAME` hides it from `peer list` and refuses new requests to or from it. Its saved questions can still be answered.
+
+Any agent that can run the command can instead use a pull peer:
+
+```sh
+htalk peer add helper --harness generic --delivery pull
+htalk --as helper inbox
+```
+
+`--harness` is a label such as `generic`, `hermes` or `openclaw`; a label does not install an integration. Pull peers need no native session or workspace and reject address flags. Messages to them are saved with `notification_detail: pull_only` and exit 0, without a notification attempt. The agent must run `inbox` to get its work. It can send and reply to native peers normally. `peer check` reports the delivery mode and does not establish that a pull agent is running.
 
 ## Ask, answer and recover
 

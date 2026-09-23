@@ -26,7 +26,7 @@ fn version(db: &rusqlite::Connection) -> i64 {
 }
 
 #[test]
-fn creation_is_private_and_writes_schema_version_two() {
+fn creation_is_private_and_writes_schema_version_three() {
     let temp = Temp::new();
     let path = temp.path().join("a/b/mail.sqlite3");
     let store = Store::open(&path, true).unwrap();
@@ -44,7 +44,7 @@ fn creation_is_private_and_writes_schema_version_two() {
         fs::metadata(&path).unwrap().permissions().mode() & 0o777
     );
     let db = raw(&path);
-    assert_eq!(2, version(&db));
+    assert_eq!(3, version(&db));
     assert_eq!(
         [
             "name",
@@ -52,7 +52,8 @@ fn creation_is_private_and_writes_schema_version_two() {
             "session_id",
             "workspace",
             "socket",
-            "url"
+            "url",
+            "delivery"
         ],
         columns(&db, "peers")[..]
     );
@@ -121,13 +122,13 @@ fn unsupported_versions_are_refused_untouched() {
     let temp = Temp::new();
     Store::open(&temp.db(), true).unwrap();
     raw(&temp.db())
-        .execute_batch("PRAGMA user_version=3")
+        .execute_batch("PRAGMA user_version=4")
         .unwrap();
     assert_eq!(
         "unsupported_database_version",
         code(Store::open(&temp.db(), false))
     );
-    assert_eq!(3, version(&raw(&temp.db())));
+    assert_eq!(4, version(&raw(&temp.db())));
 }
 
 #[test]
@@ -149,25 +150,31 @@ fn version_one_database_migrates_with_rows_intact() {
             notification_finished_at, notification_detail)
             VALUES ('{request}', 'alice', 'bob', 'Old', 10.5, 11.0, 'submitted', 10.6, 10.7, 'claude_socket_bytes_written');
         PRAGMA user_version=1;", ws = temp.workspace(), other = new_id())).unwrap();
-    let store = Store::open(&temp.db(), false).unwrap();
-    let db = raw(&temp.db());
-    assert_eq!(2, version(&db));
+    let before = fs::read(temp.db()).unwrap();
     assert_eq!(
-        Some("url"),
+        "database_migration_required",
+        code(Store::open(&temp.db(), false))
+    );
+    assert_eq!(before, fs::read(temp.db()).unwrap());
+    let store = Store::migrate(&temp.db()).unwrap();
+    let db = raw(&temp.db());
+    assert_eq!(3, version(&db));
+    assert_eq!(
+        Some("delivery"),
         columns(&db, "peers").last().map(String::as_str)
     );
     let alice = store.peer("alice").unwrap();
     assert_eq!(
         (
-            Harness::Codex,
-            session.as_str(),
+            "codex",
+            Some(session.as_str()),
             Some("/old.sock"),
             None,
             None
         ),
         (
-            alice.harness,
-            alice.session_id.as_str(),
+            alice.harness.as_str(),
+            alice.session_id.as_deref(),
             alice.socket.as_deref(),
             alice.url,
             alice.retired_at
@@ -198,7 +205,7 @@ fn version_one_database_migrates_with_rows_intact() {
 }
 
 #[test]
-fn older_version_two_databases_gain_additive_tables_and_stay_usable_by_older_clients() {
+fn older_version_two_requires_migration_and_preserves_messages() {
     let temp = Temp::new();
     let store = store(&temp, &["alice", "bob"]);
     let request = store
@@ -211,7 +218,12 @@ fn older_version_two_databases_gain_additive_tables_and_stay_usable_by_older_cli
         ALTER TABLE messages DROP COLUMN wait_returned_at",
         )
         .unwrap();
-    let reopened = Store::open(&temp.db(), false).unwrap();
+    schema_two(&temp.db());
+    assert_eq!(
+        "database_migration_required",
+        code(Store::open(&temp.db(), false))
+    );
+    let reopened = Store::migrate(&temp.db()).unwrap();
     assert_eq!(
         None,
         reopened
@@ -222,11 +234,11 @@ fn older_version_two_databases_gain_additive_tables_and_stay_usable_by_older_cli
     );
     reopened.retire("bob").unwrap();
     let db = raw(&temp.db());
-    assert_eq!(2, version(&db));
+    assert_eq!(3, version(&db));
     assert!(waits(&temp.db()).is_empty());
-    // The registration and request statements of htalk 0.3 still succeed.
+    // Existing native peers remain usable after the explicit upgrade.
     db.execute(
-        "INSERT INTO peers VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO peers (name, harness, session_id, workspace, socket, url) VALUES (?, ?, ?, ?, ?, ?)",
         rusqlite::params![
             "carol",
             "claude",
@@ -285,7 +297,7 @@ fn concurrent_first_opens_all_succeed() {
         handle.join().unwrap().unwrap();
     }
     let db = raw(&path);
-    assert_eq!(2, version(&db));
+    assert_eq!(3, version(&db));
     assert_eq!(
         1,
         columns(&db, "messages")
@@ -408,4 +420,86 @@ fn current_schema_opens_and_reads_while_another_connection_holds_writer_lock() {
     let reader = Store::open(&temp.db(), false).unwrap();
     assert_eq!("alice", reader.peers().unwrap()[0].name);
     writer.execute_batch("ROLLBACK").unwrap();
+}
+
+#[test]
+fn migration_preserves_receipts_replies_sequence_and_retirement() {
+    let temp = Temp::new();
+    let store = store(&temp, &["alice", "bob"]);
+    let request = store
+        .save("alice", "bob", "Question", None, None)
+        .unwrap()
+        .0;
+    store
+        .notify_once(
+            &request.row.id,
+            &|_, _| Outcome::unknown("uncertain"),
+            &skipped,
+        )
+        .unwrap();
+    let reply = store
+        .save("bob", "alice", "Answer", None, Some(&request.row.id))
+        .unwrap()
+        .0;
+    store.wait(&request.row.id, "alice", 0.0).unwrap();
+    store.ack(&request.row.id, "bob", &skipped).unwrap();
+    store.retire("bob").unwrap();
+    raw(&temp.db())
+        .execute(
+            "INSERT INTO waits VALUES ('poll', ?, 'alice', 1234.5)",
+            [&request.row.id],
+        )
+        .unwrap();
+    let before = serde_json::to_value(store.get(&request.row.id, None).unwrap()).unwrap();
+    let peers = store.peers().unwrap();
+    schema_two(&temp.db());
+    let migrated = Store::migrate(&temp.db()).unwrap();
+    assert_eq!(
+        before,
+        serde_json::to_value(migrated.get(&request.row.id, None).unwrap()).unwrap()
+    );
+    assert_eq!(peers, migrated.peers().unwrap());
+    assert_eq!(
+        vec![(request.row.id, "alice".into(), 1234.5)],
+        waits(&temp.db())
+    );
+    assert!(
+        raw(&temp.db())
+            .prepare("PRAGMA foreign_key_check")
+            .unwrap()
+            .query([])
+            .unwrap()
+            .next()
+            .unwrap()
+            .is_none()
+    );
+    migrated.restore("bob").unwrap();
+    assert!(
+        migrated
+            .save("alice", "bob", "Next", None, None)
+            .unwrap()
+            .0
+            .row
+            .seq
+            > reply.row.seq
+    );
+}
+
+#[test]
+fn invalid_legacy_references_roll_back_the_entire_migration() {
+    let temp = Temp::new();
+    let store = store(&temp, &["alice", "bob"]);
+    store.save("alice", "bob", "Question", None, None).unwrap();
+    schema_two(&temp.db());
+    raw(&temp.db())
+        .execute_batch("PRAGMA foreign_keys=OFF; DELETE FROM peers WHERE name='bob'")
+        .unwrap();
+    let before = fs::read(temp.db()).unwrap();
+    assert_eq!(
+        "database_foreign_key_violation",
+        code(Store::migrate(&temp.db()))
+    );
+    assert_eq!(before, fs::read(temp.db()).unwrap());
+    assert_eq!(2, version(&raw(&temp.db())));
+    assert!(!columns(&raw(&temp.db()), "peers").contains(&"delivery".into()));
 }

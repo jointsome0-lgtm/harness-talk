@@ -32,7 +32,7 @@ CREATE TABLE messages (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT
     notification_started_at REAL, notification_finished_at REAL, notification_detail TEXT);
 PRAGMA user_version=1;
 """
-PEER_COLUMNS = ["name", "harness", "session_id", "workspace", "socket", "url"]
+PEER_COLUMNS = ["name", "harness", "session_id", "workspace", "socket", "url", "delivery"]
 
 
 def words_of(command):
@@ -42,7 +42,7 @@ def words_of(command):
 class CommandSurface(HtalkCase):
     def test_version_and_help(self):
         version = self.run_raw("--version", db=False)
-        self.assertEqual((0, os.environ.get("HTALK_TEST_VERSION", "0.5.1")), (version.code, version.stdout.strip()))
+        self.assertEqual((0, os.environ.get("HTALK_TEST_VERSION", "0.6.0-dev.0")), (version.code, version.stdout.strip()))
         for words, expected in ((["--help"], ("peer", "send", "reply", "inbox", "sent", "wait", "ack", "show")),
                                 (["peer", "add", "--help"], ("--harness", "--session", "--workspace", "--socket", "--url")),
                                 (["send", "--help"], ("--id", "--message", "--message-file", "--no-notify", "--wait")),
@@ -131,17 +131,17 @@ class DatabaseSelection(HtalkCase):
         self.db.parent.mkdir()
         self.db.touch()
         self.assertEqual({"peers": [], "retired_hidden": 0}, self.htalk("peer", "list"))
-        self.assertEqual(2, self.user_version())
+        self.assertEqual(3, self.user_version())
         corrupt = self.tmp / "corrupt.sqlite3"
         corrupt.write_bytes(b"not a database" * 100)
         error = self.error("peer", "list", db=corrupt)
         self.assertNotEqual("database_not_found", error["error"])
         self.assertEqual(b"not a database" * 100, corrupt.read_bytes())
-        self.sql("PRAGMA user_version=3")
+        self.sql("PRAGMA user_version=4")
         self.error("peer", "list", error="unsupported_database_version")
         self.error("peer", "add", "bob", "--harness", "claude", "--session", str(uuid.uuid4()),
                    "--workspace", str(self.work), error="unsupported_database_version")
-        self.assertEqual(3, self.user_version())
+        self.assertEqual(4, self.user_version())
 
 
 class SchemaCompatibility(HtalkCase):
@@ -164,7 +164,7 @@ class SchemaCompatibility(HtalkCase):
         return ids
 
     def assert_current_schema(self, path=None):
-        self.assertEqual(2, self.user_version(path))
+        self.assertEqual(3, self.user_version(path))
         self.assertEqual(PEER_COLUMNS, self.columns("peers", path))
         self.assertEqual(ROW_KEYS, set(self.columns("messages", path)))
         self.assertEqual(["token", "message_id", "actor", "until"], self.columns("waits", path))
@@ -176,6 +176,12 @@ class SchemaCompatibility(HtalkCase):
 
     def test_version_1_database_migrates_and_preserves_rows(self):
         ids = self.legacy_v1(self.db)
+        before = self.db.read_bytes()
+        error = self.error("peer", "list", error="database_migration_required")
+        self.assertIn("migrate", error["next_action"])
+        self.assertNotIn("recovery", error)
+        self.assertEqual(before, self.db.read_bytes())
+        self.htalk("migrate")
         listed = self.htalk("peer", "list")["peers"]
         self.assert_current_schema()
         self.assertEqual(["alice", "bob", "builder"], [peer["name"] for peer in listed])
@@ -192,33 +198,105 @@ class SchemaCompatibility(HtalkCase):
         # An identical registration of a migrated peer is accepted unchanged.
         self.assertEqual(listed[0], self.add_peer("alice", "claude", ids["alice"]))
 
-    def test_additive_tables_are_restored_without_a_version_change_and_stay_usable_by_0_3(self):
-        self.add_peer("alice")
-        self.add_peer("bob")
-        request = self.htalk("--as", "alice", "send", "bob", "--message", "Before", "--no-notify")
-        # A schema 2 file last written by htalk 0.3.0 lacks the additive table, column and retirement marks.
-        with closing(sqlite3.connect(self.db)) as db, db:
-            db.execute("DROP TABLE waits")
-            db.execute("DROP TABLE retired_peers")
-            db.execute("ALTER TABLE messages DROP COLUMN wait_returned_at")
-        self.assertNotIn("wait_returned_at", self.columns("messages"))
-        self.assertIsNone(self.htalk("--as", "bob", "show", request["id"])["wait_returned_at"])
+    def test_early_version_two_migrates_explicitly(self):
+        ids = self.legacy_v1(self.db)
+        self.sql("ALTER TABLE peers ADD COLUMN url TEXT")
+        self.sql("PRAGMA user_version=2")
+        self.error("--as", "bob", "show", ids["q1"], error="database_migration_required")
+        self.assertEqual(2, self.user_version())
+        self.htalk("migrate")
         self.assert_current_schema()
+        self.assertIsNone(self.htalk("--as", "bob", "show", ids["q1"])["wait_returned_at"])
         self.htalk("peer", "retire", "bob")
-        # The registration and request statements of htalk 0.3 still succeed afterwards.
-        with closing(sqlite3.connect(self.db)) as db, db:
-            db.execute("INSERT INTO peers VALUES (?, ?, ?, ?, ?, ?)", ("carol", "claude", str(uuid.uuid4()), str(self.work), None, None))
-            db.execute("""INSERT INTO messages (id, sender, recipient, in_reply_to, body, created_at, submission)
-                VALUES (?, 'alice', 'bob', NULL, 'Sent by 0.3', ?, 'not_submitted')""", (str(uuid.uuid4()), time.time()))
-        self.assertEqual(["alice", "carol"], [peer["name"] for peer in self.htalk("peer", "list")["peers"]])
-        self.assertEqual(["Before", "Sent by 0.3"], [m["body"] for m in self.htalk("--as", "bob", "inbox")["messages"]])
+        self.assertEqual(2, len(self.htalk("peer", "list")["peers"]))
 
-    def test_concurrent_first_opens_migrate_once(self):
+    def test_concurrent_explicit_migrations_commit_once(self):
         self.legacy_v1(self.db)
-        processes = [self.spawn("peer", "list") for _ in range(6)]
+        processes = [self.spawn("migrate") for _ in range(6)]
         for process in processes:
-            self.assertEqual(3, len(self.finish(process)["peers"]))
+            self.assertEqual(3, self.finish(process)["schema_version"])
+        self.assertEqual(3, len(self.htalk("peer", "list")["peers"]))
         self.assert_current_schema()
+
+
+class GenericPeers(HtalkCase):
+    def pull(self, name, harness="future-harness"):
+        return self.htalk("peer", "add", name, "--delivery", "pull", "--harness", harness)
+
+    def test_pull_exchange_does_not_probe_clients_and_preserves_receipts(self):
+        alice = self.pull("alice", "codex")
+        self.pull("bob", "claude")
+        self.assertEqual("pull", alice["delivery"])
+        self.assertIsNone(alice["session_id"])
+        self.assertIsNone(alice["workspace"])
+        self.assertEqual(alice, self.pull("alice", "codex"))
+        self.assertEqual("pull_only", self.htalk("peer", "check", "bob")["status"])
+        identity = {"CODEX_THREAD_ID": str(uuid.uuid4()), "CLAUDE_CODE_SESSION_ID": str(uuid.uuid4())}
+        request = self.htalk("--as", "alice", "send", "bob", "--id", str(uuid.uuid4()), "--message", "Question", env=identity)
+        self.assertEqual(("not_submitted", "pull_only", None, None),
+            tuple(request[k] for k in ("submission", "notification_detail", "notification_started_at", "notification_finished_at")))
+        self.assertIsNone(self.htalk("--as", "bob", "show", request["id"])["ack_at"])
+        self.htalk("--as", "bob", "ack", request["id"])
+        self.assertEqual(1, self.htalk("--as", "bob", "inbox")["total"])
+        reply = self.htalk("--as", "bob", "reply", request["id"], "--message", "Answer", env=identity)
+        self.assertEqual("pull_only", reply["notification_detail"])
+        got = self.htalk("--as", "alice", "wait", request["id"], "--seconds", "0")
+        self.assertEqual(reply["id"], got["reply"]["id"])
+        self.htalk("--as", "alice", "ack", reply["id"])
+        self.assertEqual(0, self.htalk("--as", "alice", "inbox")["total"])
+        self.assertEqual([], self.calls())
+
+    def test_pull_recipient_can_reply_to_a_native_sender(self):
+        _, listener = self.claude_recipient("alice")
+        self.pull("bob", "hermes")
+        request = self.htalk("--as", "alice", "send", "bob", "--message", "Question")
+        self.assertEqual([], self.calls())
+        reply = self.htalk("--as", "bob", "reply", request["id"], "--message", "Answer")
+        self.assertEqual("submitted", reply["submission"])
+        self.assertEqual(1, len(listener.frames()))
+        self.assertEqual(reply["id"], self.htalk("--as", "bob", "reply", request["id"], "--message", "Answer")["id"])
+        self.assertEqual(1, len(listener.frames()))
+        self.htalk("--as", "alice", "ack", reply["id"])
+        reverse = self.htalk("--as", "bob", "send", "alice", "--message", "Reverse")
+        self.assertEqual("submitted", reverse["submission"])
+        self.assertEqual(2, len(listener.frames()))
+        self.htalk("--as", "alice", "ack", reverse["id"])
+        self.htalk("peer", "retire", "bob")
+        back = self.htalk("--as", "alice", "reply", reverse["id"], "--message", "Done")
+        self.assertEqual(("alice", "bob", reverse["id"]), (back["sender"], back["recipient"], back["in_reply_to"]))
+        self.assertEqual("pull_only", back["notification_detail"])
+        self.assertIsNone(back["notification_started_at"])
+        cleanup = self.htalk("--as", "bob", "ack", back["id"])["notification_cleanup"]
+        self.assertEqual("skipped", cleanup["status"])
+        self.error("--as", "alice", "send", "bob", "--message", "Retired", error="peer_retired")
+        self.htalk("peer", "restore", "bob")
+        self.assertEqual(2, len(listener.frames()))
+
+    def test_pull_rejects_native_address_flags_before_creating_database(self):
+        for flag, value in (("--session", str(uuid.uuid4())), ("--workspace", str(self.work)),
+                            ("--socket", "/tmp/test.sock"), ("--url", "http://127.0.0.1:4096")):
+            with self.subTest(flag=flag):
+                self.error("peer", "add", "bob", "--harness", "hermes", "--delivery", "pull", flag, value,
+                           error="pull_peer_has_no_native_address")
+                self.assertFalse(self.db.exists())
+
+    def test_unknown_native_adapter_keeps_mail_readable(self):
+        self.pull("alice")
+        self.add_peer("bob")
+        self.sql("UPDATE peers SET harness='unknown-future-adapter' WHERE name='bob'")
+        self.assertEqual(2, len(self.htalk("peer", "list")["peers"]))
+        self.error("peer", "check", "bob", error="adapter_unavailable")
+        message_id = str(uuid.uuid4())
+        request = self.htalk("--as", "alice", "send", "bob", "--message", "Question", "--id", message_id, code=2)
+        self.assertEqual("adapter_unavailable", request["notification_detail"])
+        self.assertEqual("not_submitted", request["submission"])
+        self.assertEqual(1, self.htalk("--as", "bob", "inbox")["total"])
+        self.assertEqual("Question", self.htalk("--as", "bob", "show", message_id)["body"])
+        retry = self.htalk("--as", "alice", "send", "bob", "--message", "Question", "--id", message_id)
+        self.assertFalse(retry["created"])
+        self.assertEqual(request["notification_started_at"], retry["notification_started_at"])
+        self.htalk("--as", "bob", "ack", message_id)
+        self.assertEqual([], self.calls())
 
 
 class Registration(HtalkCase):

@@ -66,6 +66,7 @@ impl std::str::FromStr for Submission {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkipReason {
+    PullOnly,
     AcknowledgedBeforeNotification,
     ReturnedByRecipientWait,
     RecipientRetired,
@@ -73,6 +74,7 @@ pub enum SkipReason {
 impl SkipReason {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::PullOnly => "pull_only",
             Self::AcknowledgedBeforeNotification => "acknowledged_before_notification",
             Self::ReturnedByRecipientWait => "returned_by_recipient_wait",
             Self::RecipientRetired => "recipient_retired",
@@ -80,6 +82,7 @@ impl SkipReason {
     }
     pub fn parse(s: &str) -> Option<Self> {
         match s {
+            "pull_only" => Some(Self::PullOnly),
             "acknowledged_before_notification" => Some(Self::AcknowledgedBeforeNotification),
             "returned_by_recipient_wait" => Some(Self::ReturnedByRecipientWait),
             "recipient_retired" => Some(Self::RecipientRetired),
@@ -110,6 +113,64 @@ pub enum CleanupStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Peer {
+    pub name: String,
+    pub harness: String,
+    pub session_id: Option<String>,
+    pub workspace: Option<String>,
+    pub socket: Option<String>,
+    pub url: Option<String>,
+    pub retired_at: Option<f64>,
+    // Existing native peer JSON keeps its original keys.
+    #[serde(default, skip_serializing_if = "Delivery::is_native")]
+    pub delivery: Delivery,
+}
+impl Peer {
+    pub fn pull(name: &str, harness: &str) -> Self {
+        Self {
+            name: name.into(),
+            harness: harness.into(),
+            delivery: Delivery::Pull,
+            session_id: None,
+            workspace: None,
+            socket: None,
+            url: None,
+            retired_at: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Delivery {
+    #[default]
+    Native,
+    Pull,
+}
+impl Delivery {
+    pub fn is_native(&self) -> bool {
+        *self == Self::Native
+    }
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Pull => "pull",
+        }
+    }
+}
+impl std::str::FromStr for Delivery {
+    type Err = crate::error::Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "native" => Ok(Self::Native),
+            "pull" => Ok(Self::Pull),
+            _ => Err(crate::error::Error::code("unsupported_delivery")),
+        }
+    }
+}
+
+/// Validated address passed to the built-in native notification adapters.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NativePeer {
     pub name: String,
     pub harness: Harness,
     pub session_id: String,

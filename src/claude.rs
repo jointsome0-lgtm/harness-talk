@@ -3,6 +3,7 @@ use crate::codex::{
     connect_unix, escapes, index, io_failure, owned_socket, python_dumps, same_workspace,
     socket_failure, text_output,
 };
+use crate::model::NativePeer as Peer;
 use crate::{error::Failure, model::*, os};
 use serde_json::{Map, Value, json};
 use std::{io::Write, path::PathBuf, time::Duration};

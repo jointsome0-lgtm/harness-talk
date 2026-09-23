@@ -122,3 +122,45 @@ pub fn bulk_requests(path: &Path, sender: &str, recipient: &str, count: usize) -
     tx.commit().unwrap();
     ids
 }
+
+// Native registration validation belongs to the adapter seam, not the store.
+pub trait NativeRegistration {
+    fn add_peer(
+        &self,
+        name: &str,
+        harness: Harness,
+        session: &str,
+        workspace: &str,
+        socket: Option<&str>,
+        url: Option<&str>,
+    ) -> Result<Peer, Error>;
+}
+impl NativeRegistration for Store {
+    fn add_peer(
+        &self,
+        name: &str,
+        harness: Harness,
+        session: &str,
+        workspace: &str,
+        socket: Option<&str>,
+        url: Option<&str>,
+    ) -> Result<Peer, Error> {
+        self.register(&harness_talk::notify::native_peer(
+            name, harness, session, workspace, socket, url,
+        )?)
+    }
+}
+
+/// Reconstruct the historical six-column peer table for migration fixtures.
+pub fn schema_two(path: &Path) {
+    raw(path)
+        .execute_batch(
+            "PRAGMA foreign_keys=OFF; CREATE TABLE peers_v2 (
+        name TEXT PRIMARY KEY, harness TEXT NOT NULL, session_id TEXT NOT NULL,
+        workspace TEXT NOT NULL, socket TEXT, url TEXT, UNIQUE(harness, session_id));
+        INSERT INTO peers_v2 SELECT name, harness, session_id, workspace, socket, url FROM peers;
+        DROP TABLE peers; ALTER TABLE peers_v2 RENAME TO peers;
+        PRAGMA user_version=2;",
+        )
+        .unwrap();
+}
