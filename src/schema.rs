@@ -51,6 +51,18 @@ fn integrity(db: &Connection) -> Result<(), Error> {
     Ok(())
 }
 
+fn foreign_keys(db: &Connection) -> Result<(), Error> {
+    if db
+        .prepare("PRAGMA foreign_key_check")?
+        .query([])?
+        .next()?
+        .is_some()
+    {
+        return Err(Error::code("database_foreign_key_violation"));
+    }
+    Ok(())
+}
+
 /// The caller holds BEGIN IMMEDIATE on the source until migration commits. A
 /// second read connection can copy the committed state without a write gap.
 fn backup(path: &Path, previous: i64) -> Result<(), Error> {
@@ -174,6 +186,10 @@ fn change(db: &mut Connection, path: &Path) -> Result<(), Error> {
             notification_detail TEXT, wait_returned_at REAL)",
         )?;
     } else {
+        // Reject broken legacy data before repeated ordinary opens can create
+        // a full backup on every attempt. These checks do not change the source.
+        foreign_keys(&tx)?;
+        integrity(&tx)?;
         backup(path, v).map_err(|error| match error {
             Error::Interrupted => error,
             _ => Error::code("database_backup_failed"),
@@ -200,17 +216,7 @@ fn change(db: &mut Connection, path: &Path) -> Result<(), Error> {
         CREATE TABLE IF NOT EXISTS retired_peers (
         name TEXT PRIMARY KEY REFERENCES peers(name), retired_at REAL NOT NULL)",
     )?;
-    if tx
-        .prepare("PRAGMA foreign_key_check")?
-        .query([])?
-        .next()?
-        .is_some()
-    {
-        return Err(Error::code("database_foreign_key_violation"));
-    }
-    if v != 0 {
-        integrity(&tx)?;
-    }
+    foreign_keys(&tx)?;
     if crate::os::interrupted() {
         return Err(Error::Interrupted);
     }

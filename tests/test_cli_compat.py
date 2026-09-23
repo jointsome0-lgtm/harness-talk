@@ -252,14 +252,29 @@ class SchemaCompatibility(HtalkCase):
         self.assert_current_schema(path)
         self.assertEqual(3, len(self.htalk("peer", "list", db="~/old.sqlite3")["peers"]))
 
-    def test_failed_migration_rolls_back_and_explains_broken_references(self):
+    def test_broken_references_stop_before_backups_and_explain_failure(self):
         self.legacy_v1(self.db)
         self.sql("DELETE FROM peers WHERE name='bob'")
         before = self.db.read_bytes()
-        error = self.error("peer", "list", error="database_foreign_key_violation")
-        self.assertIn("foreign_key_check", error["next_action"])
-        self.assertNotIn("recovery", error)
+        for _ in range(2):
+            error = self.error("peer", "list", error="database_foreign_key_violation")
+            self.assertIn("foreign_key_check", error["next_action"])
+            self.assertNotIn("recovery", error)
         self.assertEqual(before, self.db.read_bytes())
+        self.assertFalse(Path(str(self.db) + ".backups").exists())
+
+    def test_integrity_failure_stops_before_backups(self):
+        self.legacy_v1(self.db)
+        with closing(sqlite3.connect(self.db)) as db, db:
+            db.execute("PRAGMA ignore_check_constraints=ON")
+            db.execute("UPDATE messages SET submission='invalid'")
+        before = self.db.read_bytes()
+        for _ in range(2):
+            error = self.error("peer", "list", error="database_integrity_check_failed")
+            self.assertIn("integrity check failed", error["next_action"])
+            self.assertNotIn("recovery", error)
+        self.assertEqual(before, self.db.read_bytes())
+        self.assertFalse(Path(str(self.db) + ".backups").exists())
 
     def test_interrupted_migration_rolls_back_before_commit(self):
         self.legacy_v1(self.db)
@@ -275,6 +290,23 @@ class SchemaCompatibility(HtalkCase):
             self.finish(process, code=130)
         self.assertEqual(before, self.db.read_bytes())
         self.assertEqual(1, self.user_version())
+
+    def test_interrupt_after_backup_rolls_back_and_retains_verified_copy(self):
+        self.legacy_v1(self.db)
+        before = self.snapshot(self.db)
+        with closing(sqlite3.connect(self.db)) as reader:
+            reader.execute("BEGIN")
+            reader.execute("SELECT COUNT(*) FROM messages").fetchone()
+            process = self.spawn("peer", "list")
+            # A reader allows the backup but prevents the migration commit.
+            wait_for(lambda: self.backups(), message="verified migration backup")
+            self.assertIsNone(process.poll())
+            process.send_signal(signal.SIGINT)
+            self.finish(process, code=130)
+            reader.rollback()
+        self.assertEqual(before, self.snapshot(self.db))
+        backup, = self.backups()
+        self.assertEqual(before, self.snapshot(backup))
 
     def test_concurrent_first_opens_migrate_and_back_up_once(self):
         self.legacy_v1(self.db)

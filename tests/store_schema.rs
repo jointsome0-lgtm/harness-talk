@@ -495,7 +495,7 @@ fn migration_preserves_receipts_replies_sequence_and_retirement() {
 }
 
 #[test]
-fn invalid_legacy_references_roll_back_the_entire_migration() {
+fn invalid_legacy_references_fail_before_creating_backups() {
     let temp = Temp::new();
     let store = store(&temp, &["alice", "bob"]);
     store.save("alice", "bob", "Question", None, None).unwrap();
@@ -511,4 +511,5 @@ fn invalid_legacy_references_roll_back_the_entire_migration() {
     assert_eq!(before, fs::read(temp.db()).unwrap());
     assert_eq!(2, version(&raw(&temp.db())));
     assert!(!columns(&raw(&temp.db()), "peers").contains(&"delivery".into()));
+    assert!(!temp.path().join("mail.sqlite3.backups").exists());
 }

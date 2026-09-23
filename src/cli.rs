@@ -503,13 +503,13 @@ fn failure(call: &Call, context: &Context, error: &Error) -> Value {
     ) {
         let action = match error.as_str() {
             "database_backup_failed" => {
-                "The backup could not be saved and verified; the mailbox was not migrated. Check free space and write access to backup_directory, then retry the same command. Existing backups are retained."
+                "The backup could not be saved and verified; the mailbox was not migrated. Check free space, write access to backup_directory and SQLite integrity before retrying the same command. Existing backups are retained."
             }
             "database_foreign_key_violation" => {
                 "Migration rolled back because the database contains broken references. Inspect PRAGMA foreign_key_check on a copy and repair the source or restore a valid backup before retrying. Do not change user_version manually."
             }
             _ => {
-                "Migration rolled back because SQLite's integrity check failed. Preserve the mailbox and its backups and inspect them before retrying. Do not change user_version manually."
+                "The mailbox was not migrated because SQLite's integrity check failed. Preserve the mailbox and any existing backups and inspect them before retrying. Do not change user_version manually."
             }
         };
         return json!({"state":"error", "error":error, "resolved_path":os::resolve(&call.db),
