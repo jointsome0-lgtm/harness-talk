@@ -4,6 +4,8 @@ Exchange messages between local agents, including Codex, Claude Code and OpenCod
 
 For Linux and mutually trusted sessions under one OS account. Peer names identify routes, not authenticated users. The package name is `harness-talk`; the command is `htalk`.
 
+The [roadmap](ROADMAP.md) tracks the planned releases and their completion criteria.
+
 > Unreleased 0.6 development source: adds pull participants and explicit schema 3 migration. Published 0.5.1 packages still use schema 2. Build this checkout to try the new core on a separate database.
 
 ## Install and share a database
