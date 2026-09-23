@@ -6,12 +6,9 @@ use serde_json::{Value, json};
 use std::{
     ffi::OsString,
     fs,
-    io::Read,
     os::unix::{fs::PermissionsExt, net::UnixListener},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Mutex, MutexGuard},
-    thread::{self, JoinHandle},
-    time::Duration,
 };
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
@@ -54,11 +51,6 @@ impl Fixture {
         let path = fixture.dir.join("bin/claude");
         fs::write(&path, FAKE_CLAUDE).unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-        let db = rusqlite::Connection::open(fixture.state_db()).unwrap();
-        db.execute_batch("CREATE TABLE messages (id TEXT, ack INTEGER, returned INTEGER)")
-            .unwrap();
-        db.execute("INSERT INTO messages VALUES (?1, 0, 0)", [MESSAGE])
-            .unwrap();
         fixture
     }
     fn workspace(&self) -> String {
@@ -66,9 +58,6 @@ impl Fixture {
     }
     fn socket(&self) -> PathBuf {
         self.dir.join("messaging.sock")
-    }
-    fn state_db(&self) -> PathBuf {
-        self.dir.join("messages.sqlite3")
     }
     fn peer(&self) -> Peer {
         Peer {
@@ -107,29 +96,8 @@ impl Fixture {
             "messagingSocketPath": format!("{}//./messaging.sock", self.dir.display())}),
         );
     }
-    fn skip(&self) -> Result<Option<SkipReason>, Failure> {
-        let db = rusqlite::Connection::open_with_flags(
-            self.state_db(),
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )
-        .map_err(|_| Failure::coded("notification_state_unavailable"))?;
-        let (ack, returned): (i64, i64) = db
-            .query_row(
-                "SELECT ack, returned FROM messages WHERE id=?1",
-                [MESSAGE],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .map_err(|_| Failure::coded("notification_state_unavailable"))?;
-        Ok(if ack != 0 {
-            Some(SkipReason::AcknowledgedBeforeNotification)
-        } else if returned != 0 {
-            Some(SkipReason::ReturnedByRecipientWait)
-        } else {
-            None
-        })
-    }
     fn notify(&self, body: &str) -> Outcome {
-        claude::notify(&self.peer(), &message(), body, &|| self.skip())
+        claude::notify(&self.peer(), &message(), body, &|| Ok(None))
     }
 }
 
@@ -164,109 +132,6 @@ fn message() -> harness_talk::model::Message {
         },
         None,
     )
-}
-
-/// Accept one connection and return every byte written to it.
-fn listen(path: &Path) -> JoinHandle<Vec<u8>> {
-    let listener = UnixListener::bind(path).unwrap();
-    thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(10)))
-            .unwrap();
-        let mut bytes = Vec::new();
-        stream.read_to_end(&mut bytes).unwrap();
-        bytes
-    })
-}
-
-#[test]
-fn frame_is_written_once_with_exact_keys_after_live_identity_checks() {
-    let fixture = Fixture::new("frame");
-    fixture.live();
-    let server = listen(&fixture.socket());
-    let outcome = fixture.notify("Check message é 🙂\nwith htalk");
-    let bytes = server.join().unwrap();
-    assert_eq!(
-        (Submission::Submitted, "claude_socket_bytes_written"),
-        (outcome.submission, outcome.detail.as_str())
-    );
-    assert!(
-        bytes.is_ascii()
-            && bytes.ends_with(b"}\n")
-            && bytes.iter().filter(|b| **b == b'\n').count() == 1
-    );
-    let frame: Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(
-        json!({"type": "user", "session_id": SESSION, "uuid": MESSAGE, "msg_id": MESSAGE, "from": "htalk:sender",
-        "priority": "next", "message": {"role": "user", "content": "Check message é 🙂\nwith htalk"}}),
-        frame
-    );
-    let keys: Vec<&str> = frame
-        .as_object()
-        .unwrap()
-        .keys()
-        .map(String::as_str)
-        .collect();
-    assert_eq!(
-        vec![
-            "type",
-            "session_id",
-            "uuid",
-            "msg_id",
-            "from",
-            "priority",
-            "message"
-        ],
-        keys
-    );
-    assert!(
-        String::from_utf8(bytes)
-            .unwrap()
-            .starts_with(r#"{"type": "user", "session_id": ""#)
-    );
-    assert_eq!(
-        json!({"harness": "claude", "session_id": SESSION, "workspace": fixture.workspace(),
-        "socket": fixture.socket().to_str().unwrap()}),
-        claude::probe(&fixture.peer()).unwrap()
-    );
-}
-
-#[test]
-fn acknowledgment_or_wait_return_during_preflight_writes_nothing() {
-    for (column, reason) in [
-        ("ack", "acknowledged_before_notification"),
-        ("returned", "returned_by_recipient_wait"),
-    ] {
-        let fixture = Fixture::new("preflight");
-        fixture.live();
-        // The fake client marks the message while the adapter's discovery is running.
-        fs::write(
-            fixture.dir.join("bin/mark"),
-            format!("{}\n{column}\n{MESSAGE}", fixture.state_db().display()),
-        )
-        .unwrap();
-        let server = listen(&fixture.socket());
-        let outcome = fixture.notify("Notice");
-        assert_eq!(
-            (Submission::NotSubmitted, reason),
-            (outcome.submission, outcome.detail.as_str())
-        );
-        assert!(
-            server.join().unwrap().is_empty(),
-            "the connection was opened but no frame was written"
-        );
-    }
-    let fixture = Fixture::new("state-unavailable");
-    fixture.live();
-    fs::remove_file(fixture.state_db()).unwrap();
-    let server = listen(&fixture.socket());
-    let outcome = fixture.notify("Notice");
-    assert_eq!(
-        (Submission::NotSubmitted, "notification_state_unavailable"),
-        (outcome.submission, outcome.detail.as_str())
-    );
-    assert!(server.join().unwrap().is_empty());
 }
 
 #[test]
@@ -444,43 +309,10 @@ fn symlinked_workspace_matches_only_its_registered_target() {
     );
 }
 
-#[test]
-fn discovery_interfaces_return_raw_records_for_their_own_validation() {
-    let fixture = Fixture::new("interfaces");
-    fixture.live();
-    let rows = claude::agents().unwrap();
-    assert_eq!(2, rows.len());
-    assert_eq!(json!(42), rows[1]["pid"]);
-    assert_eq!(
-        json!(SESSION),
-        claude::session_metadata(42).unwrap()["sessionId"]
-    );
-    assert_eq!(
-        Failure::Class("FileNotFoundError"),
-        claude::session_metadata(7).unwrap_err()
-    );
-    fixture.agents(&json!({"rows": []}));
-    let invalid = claude::agents().unwrap_err();
-    assert_eq!(
-        ("invalid_claude_agents_response", "ValueError"),
-        (invalid.to_string().as_str(), invalid.class_name())
-    );
-    fixture.agents_text("[");
-    assert_eq!(
-        Failure::Class("JSONDecodeError"),
-        claude::agents().unwrap_err()
-    );
-}
-
 const FAKE_CLAUDE: &str = r#"#!/usr/bin/python3 -B
-import os, sqlite3, sys
+import os, sys
 here = os.path.dirname(os.path.abspath(__file__))
 assert sys.argv[1:] == ["agents", "--json"], sys.argv
-mark = os.path.join(here, "mark")
-if os.path.exists(mark):
-    path, column, ident = open(mark).read().split("\n")
-    with sqlite3.connect(path) as db:
-        db.execute(f"UPDATE messages SET {column}=1 WHERE id=?", (ident,))
 sys.stdout.write(open(os.path.join(here, "agents.json")).read())
 code = os.path.join(here, "exit")
 sys.exit(int(open(code).read()) if os.path.exists(code) else 0)

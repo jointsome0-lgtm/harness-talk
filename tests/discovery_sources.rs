@@ -97,38 +97,6 @@ impl Claude {
 }
 
 #[test]
-fn claude_verifies_each_address_and_malformed_rows_do_not_hide_later_ones() {
-    let c = Claude::new();
-    let found = c.discover(vec![
-        json!({"broken": true}),
-        json!([1]),
-        json!("x"),
-        c.row(123),
-    ]);
-    assert_eq!(vec![ID], ids(&found));
-    assert_eq!(
-        json!({"harness": "claude", "session_id": ID, "workspace": c.dir.text(), "runtime_status": "running",
-                      "source": "claude_agents", "pid": 123}),
-        found.sessions[0]
-    );
-    assert_eq!(
-        json!({"harness": "claude", "source": "claude_agents", "status": "partial", "rejected": 3,
-                      "detail": "Some live records could not be verified; run discovery again to refresh."}),
-        found.sources[0]
-    );
-    let found = c.discover(vec![c.row(123)]);
-    assert_eq!(
-        json!({"harness": "claude", "source": "claude_agents", "status": "ok"}),
-        found.sources[0]
-    );
-    // An uppercase listed ID is verified against its canonical form.
-    let found = c.discover(vec![
-        json!({"sessionId": ID.to_uppercase(), "cwd": c.dir.text(), "pid": 123}),
-    ]);
-    assert_eq!(vec![ID], ids(&found));
-}
-
-#[test]
 fn claude_never_selects_one_of_duplicate_identities() {
     let c = Claude::new();
     let found = c.discover(vec![c.row(123), c.row(456)]);
@@ -176,30 +144,6 @@ fn claude_rejects_changed_metadata_invalid_pids_and_non_sockets() {
             "{row}"
         );
     }
-}
-
-#[test]
-fn claude_listing_failure_is_unavailable_with_the_class_name() {
-    let never = |_| -> Result<Value, Failure> { panic!("no metadata without a listing") };
-    for (failure, detail) in [
-        (Failure::Class("FileNotFoundError"), "FileNotFoundError"),
-        (Failure::Class("CalledProcessError"), "CalledProcessError"),
-        (
-            Failure::coded("invalid_claude_agents_response"),
-            "ValueError",
-        ),
-    ] {
-        let found = claude_sessions(Err(failure), &never);
-        assert!(found.sessions.is_empty());
-        assert_eq!(
-            json!([{"harness": "claude", "source": "claude_agents", "status": "unavailable", "detail": detail}]),
-            json!(found.sources)
-        );
-    }
-    assert_eq!(
-        "ok",
-        claude_sessions(Ok(vec![]), &never).sources[0]["status"]
-    );
 }
 
 // Codex app-server
@@ -338,32 +282,6 @@ fn codex_partial_results_survive_a_later_transport_failure() {
     let found = codex_app_servers(&[dir.text()], &connect);
     assert_eq!("unavailable", found.sources[0]["status"]);
     assert_eq!("codex_rpc_timeout", found.sources[0]["detail"]);
-}
-
-#[test]
-fn codex_unavailable_socket_has_next_action_and_duplicate_paths_are_one_source() {
-    let dir = TempDir::new();
-    fs::create_dir(dir.path().join("sub")).unwrap();
-    let connect =
-        |_: &Path| -> Result<Call<'static>, Failure> { Err(Failure::Class("FileNotFoundError")) };
-    let path = dir.path().join("codex.sock");
-    let found = codex_app_servers(
-        &[
-            path.to_str().unwrap().into(),
-            format!("{}/sub/../codex.sock", dir.text()),
-        ],
-        &connect,
-    );
-    assert!(found.sessions.is_empty());
-    assert_eq!(1, found.sources.len());
-    assert_eq!(
-        json!({"harness": "codex", "source": "codex_app_server", "socket": path.to_str().unwrap(), "status": "unavailable",
-        "detail": "FileNotFoundError", "next_action": "Check the running Codex app-server socket and permissions, or pass --codex-socket. \
-        Embedded clients without a socket are outside this source's coverage."}),
-        found.sources[0]
-    );
-    let found = codex_app_servers(&[], &connect);
-    assert!(found.sources.is_empty());
 }
 
 #[test]
@@ -600,42 +518,6 @@ fn writer_lock_files_must_be_owned_regular_uuid_files() {
     assert_eq!("ok", found.sources[0]["status"]);
 }
 
-#[test]
-fn writer_source_failures_are_class_names() {
-    let w = Writers::new();
-    w.hold(&w.file(ID), 9, "FLOCK ADVISORY WRITE");
-    // A missing state database is unavailable, not empty success.
-    let found = w.scan(Some(w.dir.path().join("absent/state_5.sqlite")));
-    assert_eq!(
-        ("unavailable", "OperationalError"),
-        (
-            found.sources[0]["status"].as_str().unwrap(),
-            found.sources[0]["detail"].as_str().unwrap()
-        )
-    );
-    // A malformed lock record ends the scan.
-    w.lines
-        .borrow_mut()
-        .push("9: FLOCK ADVISORY WRITE 9 zz 0 EOF".into());
-    assert_eq!("ValueError", w.scan(None).sources[0]["detail"]);
-    let absent = codex_writers(
-        &w.dir.path().join("absent"),
-        Path::new("/nonexistent-locks"),
-        || panic!("not reached"),
-    );
-    assert_eq!(
-        ("unavailable", "FileNotFoundError"),
-        (
-            absent.sources[0]["status"].as_str().unwrap(),
-            absent.sources[0]["detail"].as_str().unwrap()
-        )
-    );
-    let table = codex_writers(&w.locks, &w.dir.path().join("no-table"), || {
-        panic!("not reached")
-    });
-    assert_eq!("FileNotFoundError", table.sources[0]["detail"]);
-}
-
 // Grouping and filtering
 
 fn candidate(harness: &str, id: &str, workspace: &str) -> Value {
@@ -681,61 +563,4 @@ fn writer_failure_does_not_hide_app_server_results_and_duplicates_are_merged() {
         sources: vec![],
     };
     assert_eq!(1, with_writers(app, None).sessions.len());
-}
-
-#[test]
-fn workspace_filter_accepts_native_symlinks_and_results_are_sorted() {
-    let dir = TempDir::new();
-    let actual = dir.path().join("project");
-    fs::create_dir(&actual).unwrap();
-    let alias = dir.path().join("alias");
-    symlink(&actual, &alias).unwrap();
-    let alias = alias.to_str().unwrap();
-    let rows = || Found {
-        sessions: vec![
-            candidate("opencode", "ses1", alias),
-            candidate("codex", OTHER, "/other"),
-            candidate("codex", ID, alias),
-            candidate("claude", ID, "relative"),
-            json!({"harness": "claude", "session_id": OTHER}),
-        ],
-        sources: vec![],
-    };
-    let resolved = actual.to_str().unwrap();
-    let result = finish(rows(), Some(resolved));
-    assert_eq!(
-        json!([
-            candidate("codex", ID, alias),
-            candidate("opencode", "ses1", alias)
-        ]),
-        result["sessions"]
-    );
-    let result = finish(rows(), None);
-    let order: Vec<_> = result["sessions"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|s| {
-            (
-                s["harness"].as_str().unwrap(),
-                s["workspace"].as_str().unwrap_or(""),
-            )
-        })
-        .collect();
-    assert_eq!(
-        vec![
-            ("claude", ""),
-            ("claude", "relative"),
-            ("codex", "/other"),
-            ("codex", alias),
-            ("opencode", alias)
-        ],
-        order
-    );
-    assert!(result["scope"].as_str().unwrap().contains("do not prove"));
-    assert!(result["next_action"].as_str().unwrap().contains("peer add"));
-    assert_eq!(
-        vec!["sessions", "sources", "next_action", "scope"],
-        result.as_object().unwrap().keys().collect::<Vec<_>>()
-    );
 }

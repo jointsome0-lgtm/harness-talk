@@ -16,10 +16,8 @@ use std::{
 pub struct Request {
     pub method: String,
     pub path: String,
-    pub target: String,
     pub query: BTreeMap<String, String>,
     pub headers: Vec<(String, String)>,
-    pub head: String,
     pub body: Vec<u8>,
 }
 impl Request {
@@ -28,9 +26,6 @@ impl Request {
             .iter()
             .find(|(n, _)| n.eq_ignore_ascii_case(name))
             .map(|(_, v)| v.as_str())
-    }
-    pub fn json(&self) -> Value {
-        serde_json::from_slice(&self.body).unwrap_or(Value::Null)
     }
 }
 
@@ -54,7 +49,6 @@ pub struct State {
 
 pub struct Fake {
     pub url: String,
-    pub port: u16,
     pub state: Arc<Mutex<State>>,
 }
 impl Fake {
@@ -78,7 +72,6 @@ impl Fake {
         });
         Self {
             url: format!("http://127.0.0.1:{port}"),
-            port,
             state,
         }
     }
@@ -172,10 +165,8 @@ fn read_request(stream: &mut TcpStream) -> Option<Request> {
     Some(Request {
         method,
         path: path.to_owned(),
-        target: target.clone(),
         query,
         headers,
-        head,
         body,
     })
 }

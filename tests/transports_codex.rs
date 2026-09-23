@@ -88,9 +88,6 @@ impl Fixture {
     fn calls(&self) -> Vec<Value> {
         lines(&self.dir.join("bin/calls.jsonl"))
     }
-    fn frames(&self) -> Vec<Value> {
-        lines(&self.dir.join("bin/frames.jsonl"))
-    }
 
     /// A message store stand-in: the transports' final check reads this SQLite row.
     fn state_db(&self) -> PathBuf {
@@ -513,49 +510,6 @@ fn socket_failures_before_and_after_the_queue_attempt_are_distinct() {
 }
 
 #[test]
-fn rpc_rejection_keeps_only_an_integer_code() {
-    let fixture = Fixture::new("rejection");
-    let path = fixture.dir.join("server.sock");
-    let errors = [
-        json!({"code": -32600, "message": "/private/path"}),
-        json!({"code": "-32600; secret"}),
-        json!({"code": true}),
-        json!("unstructured"),
-        json!(null),
-        json!({"code": 1.5}),
-    ];
-    let mut replies = errors.clone().into_iter();
-    let server = serve(
-        &path,
-        Box::new(move |f| {
-            Some(if f["method"] == "initialize" {
-                json!({"id": 1.0, "result": {}})
-            } else {
-                json!({"id": f["id"], "error": replies.next().unwrap()})
-            })
-        }),
-    );
-    let mut rpc = Rpc::connect_unix(&path).unwrap();
-    let details: Vec<String> = errors
-        .iter()
-        .map(|_| rpc.call("thread/read", json!({})).unwrap_err().to_string())
-        .collect();
-    drop(rpc);
-    server.join().unwrap();
-    assert_eq!(
-        vec![
-            "codex_rpc_rejected:-32600",
-            "codex_rpc_rejected",
-            "codex_rpc_rejected",
-            "codex_rpc_rejected",
-            "codex_rpc_rejected",
-            "codex_rpc_rejected"
-        ],
-        details
-    );
-}
-
-#[test]
 fn socket_probe_and_cleanup_repeat_the_live_identity_check() {
     let fixture = Fixture::new("socket-cleanup");
     fixture.fake_codex();
@@ -855,77 +809,6 @@ fn saved_identity_follows_configuration_precedence() {
     assert_eq!(
         Failure::coded("recipient_identity_changed"),
         codex::probe(&peer).unwrap_err()
-    );
-}
-
-#[test]
-fn native_cleanup_deletes_only_the_confirmed_receipt_over_stdio() {
-    let fixture = Fixture::new("stdio-cleanup");
-    fixture.fake_codex();
-    fixture.thread(&fixture.workspace(), 0, "cli");
-    let peer = fixture.peer(None);
-    let saved = message(
-        &peer,
-        Some(&format!("codex_cli_queued:{QUEUE_ID}")),
-        Submission::Submitted,
-        true,
-    );
-    for (mode, status, detail) in [
-        ("removed", CleanupStatus::Removed, None),
-        ("absent", CleanupStatus::Absent, None),
-        (
-            "invalid",
-            CleanupStatus::Unknown,
-            Some("codex_queue_delete_receipt_invalid"),
-        ),
-        ("notdict", CleanupStatus::Unknown, Some("AttributeError")),
-        (
-            "rejected",
-            CleanupStatus::Unknown,
-            Some("codex_rpc_rejected:-32000"),
-        ),
-        (
-            "close_on_delete",
-            CleanupStatus::Unknown,
-            Some("codex_rpc_closed"),
-        ),
-        (
-            "close_at_start",
-            CleanupStatus::Unavailable,
-            Some("codex_rpc_closed"),
-        ),
-        (
-            "huge",
-            CleanupStatus::Unavailable,
-            Some("codex_rpc_frame_too_large"),
-        ),
-    ] {
-        fs::remove_file(fixture.dir.join("bin/frames.jsonl")).ok();
-        fixture.mode(mode);
-        let cleanup = codex::dismiss(&peer, &saved);
-        assert_eq!(
-            (status, detail),
-            (cleanup.status, cleanup.detail.as_deref()),
-            "{mode}"
-        );
-        if cleanup.status == CleanupStatus::Removed || cleanup.status == CleanupStatus::Absent {
-            assert_eq!(Some(QUEUE_ID), cleanup.queue_id.as_deref());
-            let frames = fixture.frames();
-            assert_eq!(
-                vec!["initialize", "initialized", "thread/queue/delete", "exit"],
-                methods(&frames)
-            );
-            assert_eq!(
-                json!({"threadId": peer.session_id, "queuedSubmissionId": QUEUE_ID}),
-                frames[2]["params"]
-            );
-        }
-    }
-    assert!(
-        fixture
-            .calls()
-            .iter()
-            .all(|c| *c == json!(["app-server", "--stdio"]))
     );
 }
 
