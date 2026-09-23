@@ -761,6 +761,10 @@ impl Server {
         if raw.len() > MAX_RESPONSE {
             return Err(Req::After(coded("opencode_response_too_large")));
         }
+        // A completely framed rejection is meaningful even when its error body is not JSON.
+        if !(200..300).contains(&status) {
+            return Ok((status, None));
+        }
         let trimmed = raw.trim_ascii();
         if trimmed.is_empty() {
             return Ok((status, None));

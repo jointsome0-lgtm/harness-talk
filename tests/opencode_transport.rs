@@ -261,7 +261,7 @@ fn prompt_status_classification() {
 }
 
 #[test]
-fn failures_after_the_request_is_written_are_uncertain() {
+fn post_write_outcomes_require_complete_http_responses() {
     let c = case();
     let post = |reply: fn() -> Reply| {
         c.fake.hook(move |r| (r.method == "POST").then(reply));
@@ -276,7 +276,7 @@ fn failures_after_the_request_is_written_are_uncertain() {
     );
     assert_eq!(
         post(|| raw("HTTP/1.1 400 Bad\r\nContent-Length: 3\r\n\r\n{x}")),
-        ("submission_unknown", "opencode_invalid_response".into())
+        ("not_submitted", "opencode_http_400".into())
     );
     assert_eq!(
         post(|| raw("HTTP/1.1 400 Bad\r\nContent-Length: 1000\r\n\r\n{}")),

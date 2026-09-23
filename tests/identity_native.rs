@@ -166,10 +166,10 @@ fn refuses_commands_of_clients_nested_in_claude() {
 }
 
 #[test]
-fn unavailable_or_nested_ancestry_does_not_claim_claude_identity() {
+fn unavailable_ancestry_does_not_claim_claude_identity() {
     let f = Fixture::new();
-    // Either nested-client evidence or incomplete ancestry must prevent an identity claim.
-    f.process(90, 30, "codex", 100, "/opt/codex/codex");
+    // An ordinary process name cannot excuse unreadable executable evidence.
+    f.process(90, 30, "bash", 100, "/usr/bin/bash");
     f.shell(91, 90, "htalk");
     fs::remove_file(f.proc.join("90/exe")).unwrap();
     assert!(matches!(

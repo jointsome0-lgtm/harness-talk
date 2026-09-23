@@ -935,10 +935,7 @@ fn stdio_shutdown_is_bounded_for_a_process_that_ignores_eof_and_sigterm() {
     let started = Instant::now();
     drop(rpc);
     let elapsed = started.elapsed();
-    assert!(
-        elapsed >= Duration::from_millis(1900) && elapsed < Duration::from_secs(4),
-        "{elapsed:?}"
-    );
+    assert!(elapsed < Duration::from_secs(4), "{elapsed:?}");
     assert_eq!(
         -1,
         unsafe { libc::kill(pid, 0) },

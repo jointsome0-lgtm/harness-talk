@@ -412,9 +412,10 @@ fn scan_loaded(
         }
         match page.get("nextCursor") {
             None | Some(Value::Null) => break,
-            Some(Value::String(next))
-                if !seen_cursors.contains(next) && seen_cursors.len() < MAX_CURSORS =>
-            {
+            Some(Value::String(next)) if !seen_cursors.contains(next) => {
+                if seen_cursors.len() >= MAX_CURSORS {
+                    return Err(Failure::coded("codex_discovery_limit"));
+                }
                 seen_cursors.insert(next.clone());
                 cursor = json!(next);
             }
