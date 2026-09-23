@@ -155,7 +155,7 @@ pub fn command() -> Command {
         )
         .subcommand(Command::new("migrate")
             .about("Explicitly upgrade this mailbox to schema 3.")
-            .long_about("Stop mailbox users, make a SQLite backup, and upgrade all clients first. Older binaries reject schema 3. A failed migration rolls back; no automatic downgrade is provided.")
+            .long_about("Requires an explicit --db PATH before migrate. Stop mailbox users, make a SQLite backup, and upgrade all clients first. Older binaries reject schema 3. A failed migration rolls back; no automatic downgrade is provided.")
         )
         .subcommand(
             Command::new("send")

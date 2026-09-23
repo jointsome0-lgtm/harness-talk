@@ -265,6 +265,12 @@ pub(crate) fn await_writer(path: &Path) -> bool {
 
 impl Store {
     pub fn open(path: &Path, create: bool) -> Result<Self, Error> {
+        let store = Self::prepare(path, create)?;
+        crate::schema::ensure(&mut store.connect()?, false)?;
+        Ok(store)
+    }
+
+    fn prepare(path: &Path, create: bool) -> Result<Self, Error> {
         let store = Store {
             path: os::resolve(path),
             create,
@@ -294,19 +300,12 @@ impl Store {
                 },
             );
         }
-        crate::schema::ensure(&mut store.connect()?, false)?;
         Ok(store)
     }
 
     /// Explicit schema upgrade. Never called by ordinary message/read commands.
     pub fn migrate(path: &Path) -> Result<Self, Error> {
-        if !path.exists() {
-            return Err(code("database_not_found"));
-        }
-        let store = Self {
-            path: os::resolve(path),
-            create: false,
-        };
+        let store = Self::prepare(path, false)?;
         crate::schema::ensure(&mut store.connect()?, true)?;
         Ok(store)
     }

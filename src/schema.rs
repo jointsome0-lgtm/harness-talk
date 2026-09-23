@@ -126,6 +126,9 @@ fn change(db: &mut Connection, upgrade: bool) -> Result<(), Error> {
     {
         return Err(Error::code("database_foreign_key_violation"));
     }
+    if crate::os::interrupted() {
+        return Err(Error::Interrupted);
+    }
     tx.execute_batch(&format!("PRAGMA user_version={SCHEMA_VERSION}"))?;
     tx.commit()?;
     Ok(())

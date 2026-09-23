@@ -16,6 +16,7 @@ use std::{
 
 struct Call {
     db: PathBuf,
+    explicit_db: bool,
     actor: Option<String>,
     command: String,
     peer_command: Option<String>,
@@ -24,10 +25,9 @@ struct Call {
 }
 impl Call {
     fn new(mut matches: ArgMatches) -> Result<Self, Error> {
-        let db = matches
-            .remove_one::<String>("db")
-            .map(PathBuf::from)
-            .unwrap_or_else(default_db);
+        let db = matches.remove_one::<String>("db").map(PathBuf::from);
+        let explicit_db = db.is_some();
+        let db = db.unwrap_or_else(default_db);
         let actor = matches.remove_one::<String>("actor");
         let (command, mut options) = matches
             .remove_subcommand()
@@ -43,6 +43,7 @@ impl Call {
         };
         Ok(Self {
             db,
+            explicit_db,
             actor,
             command,
             peer_command,
@@ -199,6 +200,9 @@ fn execute_once(call: &mut Call, context: &mut Context) -> Result<(Value, i32), 
         validate::wait(call.number("seconds"))?;
     }
     if call.command == "migrate" {
+        if !call.explicit_db {
+            return Err(Error::code("migrate_requires_explicit_db"));
+        }
         Store::migrate(&call.db)?;
         return Ok((
             json!({"state":"ready", "schema_version":crate::store::SCHEMA_VERSION,
@@ -221,9 +225,7 @@ fn execute_once(call: &mut Call, context: &mut Context) -> Result<(Value, i32), 
             validate::peer_name(harness).map_err(|_| Error::code("invalid_harness_id"))?;
             Some(peer)
         } else {
-            let harness = harness
-                .parse()
-                .map_err(|_| Error::code("invalid_arguments"))?;
+            let harness = harness.parse()?;
             Some(notify::native_peer(
                 name,
                 harness,
@@ -495,11 +497,31 @@ fn failure(call: &Call, context: &Context, error: &Error) -> Value {
     }
     if error == "database_migration_required" {
         return json!({"state":"error", "error":error,
-            "next_action":format!("Stop all users of this mailbox and make a SQLite backup. Upgrade every client before explicitly running {}. Schema 3 cannot be read by older clients; ordinary commands do not migrate it.", call.recovery(&["migrate"],false))});
+            "next_action":"Stop all users of this mailbox, make a SQLite backup, and upgrade every client before migrating. Read htalk migrate --help. Schema 3 cannot be read by older clients; ordinary commands do not migrate it."});
+    }
+    if call.command == "migrate" {
+        let action = match error.as_str() {
+            "migrate_requires_explicit_db" => {
+                "Select the intended mailbox with --db PATH before migrate. HTALK_DB and the default mailbox are not migration targets. Read htalk migrate --help before changing a database."
+            }
+            "database_foreign_key_violation" => {
+                "Migration rolled back because the database contains broken references. Inspect PRAGMA foreign_key_check on a copy and repair the source or restore a valid backup before retrying. Do not change user_version manually."
+            }
+            "unsupported_unversioned_database" => {
+                "No supported htalk schema version was found. The database was not changed. Verify that this is the intended mailbox and recover it with a matching client or a valid backup; do not assign a schema version manually."
+            }
+            _ => {
+                "Migration did not report success. Inspect the error, schema version and database integrity on a copy before retrying. Do not change user_version manually."
+            }
+        };
+        return json!({"state":"error", "error":error, "resolved_path":os::resolve(&call.db), "next_action":action});
     }
     let mut value = json!({"state":"error", "error":error, "recovery":{"peers":call.recovery(&["peer","list"],false)}});
     let actor = call.actor.as_deref().unwrap_or("");
     match error.as_str() {
+        "unsupported_harness" => {
+            value["next_action"] = "Native notification adapters are codex, claude and opencode. For another harness, register with --delivery pull and poll inbox.".into();
+        }
         "actor_conflicts_with_CODEX_THREAD_ID" | "actor_conflicts_with_CLAUDE_CODE_SESSION_ID" => {
             if let Some(own) = &context.own {
                 let codex = error == "actor_conflicts_with_CODEX_THREAD_ID";
@@ -668,6 +690,9 @@ pub fn main() -> i32 {
         .map_err(Error::from)
         .and_then(|_| execute(&mut call, &mut context));
     let (value, code) = match result {
+        // A migration that committed has a known result even if SIGINT arrived
+        // immediately after commit. Failed/interrupted transactions still use 130.
+        Ok(result) if call.command == "migrate" => result,
         _ if os::interrupted() => (interrupted(&call, &context), 130),
         Ok(result) => result,
         Err(Error::Interrupted) => (interrupted(&call, &context), 130),

@@ -58,6 +58,8 @@ class CommandSurface(HtalkCase):
     def test_parse_errors_exit_2_without_touching_a_database(self):
         session, missing = str(uuid.uuid4()), self.tmp / "absent.txt"
         cases = ([], ["bogus"], ["peer"], ["peer", "bogus"],
+                 ["peer", "add", "x", "--harness", "codex"],
+                 ["peer", "add", "x", "--harness", "claude", "--session", session],
                  ["peer", "add", "x", "--harness", "nope", "--session", session, "--workspace", str(self.work)],
                  ["peer", "add", "x", "--session", session, "--workspace", str(self.work)],
                  ["peer", "discover", "--harness", "nope"],
@@ -85,7 +87,7 @@ class CommandSurface(HtalkCase):
 class DatabaseSelection(HtalkCase):
     def test_only_peer_add_creates_the_database(self):
         message_id = str(uuid.uuid4())
-        commands = (["peer", "list"], ["peer", "list", "--all"], ["peer", "check", "bob"], ["peer", "retire", "bob"],
+        commands = (["migrate"], ["peer", "list"], ["peer", "list", "--all"], ["peer", "check", "bob"], ["peer", "retire", "bob"],
                     ["peer", "restore", "bob"], ["inbox"], ["--as", "alice", "inbox"], ["--as", "alice", "sent"],
                     ["--as", "alice", "send", "bob", "--message", "Hello"],
                     ["--as", "alice", "reply", message_id, "--message", "Hello"],
@@ -210,6 +212,42 @@ class SchemaCompatibility(HtalkCase):
         self.htalk("peer", "retire", "bob")
         self.assertEqual(2, len(self.htalk("peer", "list")["peers"]))
 
+    def test_migration_requires_explicit_path_and_resolves_tilde(self):
+        path = self.home / "old.sqlite3"
+        self.legacy_v1(path)
+        before = path.read_bytes()
+        self.error("migrate", db=False, env={"HTALK_DB": str(path)}, error="migrate_requires_explicit_db")
+        self.error("migrate", db=False, error="migrate_requires_explicit_db")
+        self.assertEqual(before, path.read_bytes())
+        self.error("peer", "list", db="~/old.sqlite3", error="database_migration_required")
+        self.htalk("migrate", db="~/old.sqlite3")
+        self.assert_current_schema(path)
+        self.assertEqual(3, len(self.htalk("peer", "list", db="~/old.sqlite3")["peers"]))
+
+    def test_failed_migration_rolls_back_and_explains_broken_references(self):
+        self.legacy_v1(self.db)
+        self.sql("DELETE FROM peers WHERE name='bob'")
+        before = self.db.read_bytes()
+        error = self.error("migrate", error="database_foreign_key_violation")
+        self.assertIn("foreign_key_check", error["next_action"])
+        self.assertNotIn("recovery", error)
+        self.assertEqual(before, self.db.read_bytes())
+
+    def test_interrupted_migration_rolls_back_before_commit(self):
+        self.legacy_v1(self.db)
+        before = self.db.read_bytes()
+        with closing(sqlite3.connect(self.db)) as holder:
+            holder.execute("BEGIN IMMEDIATE")
+            process = self.spawn("migrate")
+            time.sleep(0.2)
+            self.assertIsNone(process.poll())
+            process.send_signal(signal.SIGINT)
+            time.sleep(0.1)
+            holder.rollback()
+            self.finish(process, code=130)
+        self.assertEqual(before, self.db.read_bytes())
+        self.assertEqual(1, self.user_version())
+
     def test_concurrent_explicit_migrations_commit_once(self):
         self.legacy_v1(self.db)
         processes = [self.spawn("migrate") for _ in range(6)]
@@ -279,6 +317,12 @@ class GenericPeers(HtalkCase):
                 self.error("peer", "add", "bob", "--harness", "hermes", "--delivery", "pull", flag, value,
                            error="pull_peer_has_no_native_address")
                 self.assertFalse(self.db.exists())
+
+    def test_unknown_native_registration_explains_pull_option(self):
+        error = self.error("peer", "add", "bob", "--harness", "hermes", "--session", str(uuid.uuid4()),
+                           "--workspace", str(self.work), error="unsupported_harness")
+        self.assertIn("--delivery pull", error["next_action"])
+        self.assertFalse(self.db.exists())
 
     def test_unknown_native_adapter_keeps_mail_readable(self):
         self.pull("alice")
