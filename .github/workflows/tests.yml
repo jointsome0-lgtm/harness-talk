@@ -25,21 +25,24 @@ jobs:
         run: |
           rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
       - name: Check and test Rust
+        if: matrix.python == '3.14'
         run: |
           cargo fmt --check
           cargo clippy --locked --all-targets -- -D warnings
           cargo test --locked
-          cargo build --locked
-      - name: Test the CLI contract
-        run: python -B -m unittest discover -s tests -p test_cli_compat.py -v
       - name: Test source installation outside the checkout
         run: |
           python -m pip install .
+          cd "$RUNNER_TEMP"
+          htalk --version
+          htalk --help
           python -m pip check
+      - name: Test the installed CLI contract
+        if: matrix.python == '3.14'
+        run: |
           export HTALK_TEST_COMMAND="$(python -c 'import json, shutil; print(json.dumps([shutil.which("htalk")]))')"
           cp tests/compat_support.py tests/test_cli_compat.py "$RUNNER_TEMP/"
           cd "$RUNNER_TEMP"
-          htalk --version
           python -B -m unittest test_cli_compat -v
 
   msrv:

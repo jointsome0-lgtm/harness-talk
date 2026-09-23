@@ -8,11 +8,13 @@ cargo test --locked
 python3 -B -m unittest discover -s tests -p test_cli_compat.py -v
 ```
 
-The CLI suite uses `target/debug/htalk`, temporary databases, fake client executables, Unix sockets and a loopback HTTP server. It never falls back to an installed `htalk`. To test a specific executable, set `HTALK_TEST_COMMAND` to a JSON argument list starting with its absolute path. `HTALK_TEST_VERSION` defaults to `0.6.1`; set it when testing another release.
+The CLI suite uses `target/debug/htalk`, temporary databases, fake client executables, Unix sockets and a loopback HTTP server. It never falls back to an installed `htalk`. To test a specific executable, set `HTALK_TEST_COMMAND` to a JSON argument list starting with its absolute path.
 
 Schema migration tests use synthetic version 1/2 fixtures and cover automatic first opens, backup contents and permissions, concurrent writers, and rollback on failure. Pull and mixed native/pull exchanges use isolated mailboxes. These checks do not migrate a working mailbox.
 
-The same CLI suite was first run against the Python 0.4 implementation, before running it against the Rust port. Native tests cover storage transactions and races, session recognition, discovery and all three transports. They replace the old tests that imported Python implementation details.
+The CLI suite covers registration, request/reply/ACK states, pagination, recovery, migration and native/pull exchanges. Rust tests cover storage races and adapter-specific identity, discovery and delivery failures. Keep a behavior in one layer when another test already exercises the same failure; retain separate tests for distinct races and transport boundaries.
+
+CI runs the full Rust and installed CLI suites once, on Python 3.14. Both Python 3.11 and 3.14 build and install the package, then run `htalk --version`, `htalk --help` and `pip check` outside the checkout. A separate job checks the minimum supported Rust version.
 
 For a local binary wheel:
 

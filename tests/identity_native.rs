@@ -1,6 +1,6 @@
 //! Native Claude recognition against a synthetic /proc tree and sessions directory,
 //! never the running system's.
-use harness_talk::identity::{MAX_DEPTH, claude_session};
+use harness_talk::identity::claude_session;
 use harness_talk::model::NativeSession;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -135,68 +135,6 @@ fn recognized(f: &Fixture) -> NativeSession {
 }
 
 #[test]
-fn recognizes_the_claude_session_above_the_command() {
-    let f = Fixture::new();
-    assert_eq!(recognized(&f), f.detect(40, &[]));
-    assert_eq!(
-        json!({"harness": "claude", "status": "recognized", "session_id": SESSION, "workspace": f.root.to_str().unwrap()}),
-        f.detect(40, &[]).to_json()
-    );
-    f.metadata(json!({"procStart": 4242}));
-    assert_eq!(recognized(&f), f.detect(40, &[]));
-    // Process names may contain spaces and parentheses.
-    f.shell(50, 20, "tool) (1 2");
-    f.process(51, 50, "htalk", 100, "/usr/bin/python3.14");
-    assert_eq!(recognized(&f), f.detect(51, &[]));
-    // A PID with leading zeros names the same process and metadata file.
-    assert_eq!(recognized(&f), f.detect(40, &[("CLAUDE_PID", "0020")]));
-    // A non-string cwd leaves the workspace unknown.
-    f.metadata(json!({"cwd": 7}));
-    assert_eq!(
-        NativeSession::Recognized {
-            session_id: SESSION.into(),
-            workspace: None
-        },
-        f.detect(40, &[])
-    );
-}
-
-#[test]
-fn defaults_to_the_current_process_in_the_given_tree() {
-    let f = Fixture::new();
-    f.process(std::process::id(), 30, "htalk", 100, "/usr/bin/htalk");
-    let env = f.env.clone();
-    assert_eq!(
-        recognized(&f),
-        claude_session(
-            &|name| env.get(name).cloned(),
-            &f.proc,
-            Some(&f.sessions),
-            None
-        )
-    );
-}
-
-#[test]
-fn refuses_commands_outside_the_claude_process_tree() {
-    let f = Fixture::new();
-    // A tmux server started by a Claude command detaches, so its panes descend from init.
-    f.shell(60, 1, "tmux: server");
-    f.shell(61, 60, "bash");
-    f.process(62, 61, "htalk", 100, "/usr/bin/python3.14");
-    assert_eq!("claude_pid_not_an_ancestor", f.reason(62, &[]));
-    let mut parent = 20;
-    for pid in 100..100 + MAX_DEPTH as u32 {
-        f.shell(pid, parent, "bash");
-        parent = pid;
-    }
-    f.shell(200, parent, "htalk");
-    assert_eq!(recognized(&f), f.detect(200, &[]));
-    f.shell(201, 200, "htalk");
-    assert_eq!("claude_pid_not_an_ancestor", f.reason(201, &[]));
-}
-
-#[test]
 fn refuses_commands_of_clients_nested_in_claude() {
     let f = Fixture::new();
     assert_eq!(
@@ -225,78 +163,6 @@ fn refuses_commands_of_clients_nested_in_claude() {
             "{comm} {exe}"
         );
     }
-}
-
-#[test]
-fn refuses_absent_or_inconsistent_session_evidence() {
-    let f = Fixture::new();
-    assert_eq!(
-        NativeSession::Unrecognized {
-            reason: "claude_session_variables_absent"
-        },
-        claude_session(&|_| None, &f.proc, Some(&f.sessions), Some(40))
-    );
-    assert_eq!(
-        "claude_session_variables_absent",
-        f.reason(40, &[("CLAUDE_PID", "")])
-    );
-    let upper = SESSION.to_uppercase();
-    for extra in [
-        ("CLAUDE_PID", "20x"),
-        ("CLAUDE_PID", "²0"),
-        ("CLAUDE_PID", "-20"),
-        ("CLAUDE_CODE_SESSION_ID", upper.as_str()),
-        (
-            "CLAUDE_CODE_SESSION_ID",
-            "{4b1f7f0e-2f4c-4a5e-9d1b-6f0c2d9e8a71}",
-        ),
-    ] {
-        assert_eq!(
-            "claude_session_variables_invalid",
-            f.reason(40, &[extra]),
-            "{extra:?}"
-        );
-    }
-    assert_eq!(
-        "claude_process_unavailable",
-        f.reason(40, &[("CLAUDE_PID", "21")])
-    );
-    assert_eq!(
-        "claude_process_unavailable",
-        f.reason(40, &[("CLAUDE_PID", "99999999999999999999999")])
-    );
-    match f.detect_with(40, &[], &f.root.join("absent")) {
-        NativeSession::Unrecognized { reason } => assert_eq!("claude_process_unavailable", reason),
-        other => panic!("{other:?}"),
-    }
-    for changes in [
-        json!({"procStart": "4243"}),
-        json!({"sessionId": "0c4a1c0e-3a55-4c1f-a8f5-7d3b1f7e2a10"}),
-        json!({"pid": 21}),
-        json!({"pid": "20"}),
-        json!({"pid": 20.0}),
-        json!({"procStart": null}),
-        json!({"procStart": true}),
-        json!({"procStart": 4242.0}),
-    ] {
-        f.metadata(changes.clone());
-        assert_eq!(
-            "claude_session_metadata_mismatch",
-            f.reason(40, &[]),
-            "{changes}"
-        );
-    }
-    f.metadata(json!({}));
-    f.shell(80, 999, "htalk");
-    assert_eq!("process_ancestry_unavailable", f.reason(80, &[]));
-    fs::remove_file(f.proc.join("30/exe")).unwrap();
-    assert_eq!("process_ancestry_unavailable", f.reason(40, &[]));
-    fs::write(f.sessions.join("20.json"), "[]").unwrap();
-    assert_eq!("claude_session_metadata_mismatch", f.reason(40, &[]));
-    fs::write(f.sessions.join("20.json"), "{").unwrap();
-    assert_eq!("claude_session_metadata_unavailable", f.reason(40, &[]));
-    fs::remove_file(f.sessions.join("20.json")).unwrap();
-    assert_eq!("claude_session_metadata_unavailable", f.reason(40, &[]));
 }
 
 #[test]

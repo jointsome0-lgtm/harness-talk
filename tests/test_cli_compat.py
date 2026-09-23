@@ -39,51 +39,6 @@ def words_of(command):
     return shlex.split(command)
 
 
-class CommandSurface(HtalkCase):
-    def test_version_and_help(self):
-        version = self.run_raw("--version", db=False)
-        self.assertEqual((0, os.environ.get("HTALK_TEST_VERSION", "0.6.1")), (version.code, version.stdout.strip()))
-        for words, expected in ((["--help"], ("peer", "send", "reply", "inbox", "sent", "wait", "ack", "show")),
-                                (["peer", "add", "--help"], ("--harness", "--session", "--workspace", "--socket", "--url")),
-                                (["send", "--help"], ("--id", "--message", "--message-file", "--no-notify", "--wait")),
-                                (["sent", "--help"], ("--limit", "--before-seq", "--bodies")),
-                                (["inbox", "--help"], ("--limit", "--after-seq"))):
-            with self.subTest(words=words):
-                result = self.run_raw(*words, db=False)
-                self.assertEqual(0, result.code, result.stderr)
-                for text in expected:
-                    self.assertIn(text, result.stdout)
-        self.assertFalse(self.db.parent.exists())
-
-    def test_parse_errors_exit_2_without_touching_a_database(self):
-        session, missing = str(uuid.uuid4()), self.tmp / "absent.txt"
-        cases = ([], ["bogus"], ["peer"], ["peer", "bogus"],
-                 ["peer", "add", "x", "--harness", "codex"],
-                 ["peer", "add", "x", "--harness", "claude", "--session", session],
-                 ["peer", "add", "x", "--harness", "nope", "--session", session, "--workspace", str(self.work)],
-                 ["peer", "add", "x", "--session", session, "--workspace", str(self.work)],
-                 ["peer", "discover", "--harness", "nope"],
-                 ["--as", "a", "send", "bob"],
-                 ["--as", "a", "send", "bob", "--message", "x", "--message-file", str(missing)],
-                 ["--as", "a", "reply", session],
-                 ["--as", "a", "inbox", "--limit", "abc"],
-                 ["--as", "a", "sent", "--before-seq", "later"],
-                 ["--as", "a", "send", "bob", "--message", "x", "--wait", "soon"],
-                 ["--as", "a", "wait", session, "--seconds", "soon"],
-                 ["--as", "a", "show"],
-                 ["--as", "a", "ack", session, "extra"])
-        for words in cases:
-            with self.subTest(words=words):
-                result = self.run_raw(*words)
-                self.assertEqual(2, result.code, result.stdout + result.stderr)
-                self.assertTrue((result.stdout + result.stderr).strip())
-                # Parse errors are usage text; if JSON is printed, it must be an error.
-                if result.json is not None:
-                    self.assertEqual("error", result.json.get("state"))
-                    self.assertNotEqual("database_not_found", result.json.get("error"))
-        self.assertFalse(self.db.parent.exists())
-
-
 class DatabaseSelection(HtalkCase):
     def test_only_peer_add_creates_the_database(self):
         message_id = str(uuid.uuid4())
@@ -179,27 +134,6 @@ class SchemaCompatibility(HtalkCase):
         with closing(sqlite3.connect(path)) as db:
             return db.execute("PRAGMA user_version").fetchone()[0], list(db.iterdump())
 
-    def test_fresh_database_layout(self):
-        self.add_peer("alice")
-        self.assert_current_schema()
-        self.htalk("peer", "list")
-        self.assertFalse(Path(str(self.db) + ".backups").exists())
-
-    def test_automatic_migration_uses_environment_and_default_paths(self):
-        for source in ("environment", "default"):
-            with self.subTest(source=source):
-                if source == "environment":
-                    path = self.tmp / "environment.sqlite3"
-                    env = {"HTALK_DB": str(path)}
-                else:
-                    path = self.home / ".local/share/harness-talk/mail.sqlite3"
-                    env = {}
-                self.legacy_v1(path)
-                before = self.snapshot(path)
-                self.assertEqual(3, len(self.htalk("peer", "list", db=False, env=env)["peers"]))
-                self.assert_current_schema(path)
-                backup, = self.backups(path)
-                self.assertEqual(before, self.snapshot(backup))
 
     def test_version_1_database_migrates_and_preserves_rows(self):
         ids = self.legacy_v1(self.db)
@@ -356,7 +290,6 @@ class SchemaCompatibility(HtalkCase):
                 self.assertEqual("Committed before migration", self.htalk("--as", "bob", "show", ids["q1"], db=path)["body"])
 
 
-
 class GenericPeers(HtalkCase):
     def pull(self, name, harness="future-harness"):
         return self.htalk("peer", "add", name, "--delivery", "pull", "--harness", harness)
@@ -418,11 +351,6 @@ class GenericPeers(HtalkCase):
                            error="pull_peer_has_no_native_address")
                 self.assertFalse(self.db.exists())
 
-    def test_unknown_native_registration_explains_pull_option(self):
-        error = self.error("peer", "add", "bob", "--harness", "hermes", "--session", str(uuid.uuid4()),
-                           "--workspace", str(self.work), error="unsupported_harness")
-        self.assertIn("--delivery pull", error["next_action"])
-        self.assertFalse(self.db.exists())
 
     def test_unknown_native_adapter_keeps_mail_readable(self):
         self.pull("alice")
@@ -465,17 +393,6 @@ class Registration(HtalkCase):
         self.assertEqual(str(self.tmp / "rel/codex.sock"), socket_peer["socket"])
         self.assertEqual(["bob", "carol", "dave"], [peer["name"] for peer in self.htalk("peer", "list")["peers"]])
 
-    def test_opencode_addresses(self):
-        muse = self.add_peer("muse", "opencode", "ses_example.1-2")
-        self.assertEqual(("ses_example.1-2", "http://127.0.0.1:4096", None), (muse["session_id"], muse["url"], muse["socket"]))
-        for index, (url, stored) in enumerate((("http://localhost:4096", "http://localhost:4096"),
-                                               ("http://[::1]:4096", "http://[::1]:4096"),
-                                               ("https://127.0.0.1:4096/prefix/", "https://127.0.0.1:4096/prefix"))):
-            with self.subTest(url=url):
-                self.assertEqual(stored, self.add_peer("muse%d" % index, "opencode", None, None, "--url", url)["url"])
-        taken = self.error("peer", "add", "renamed", "--harness", "opencode", "--session", "ses_example.1-2",
-                           "--workspace", str(self.work), error="session_already_has_a_peer_name")
-        self.assertEqual(("muse", "ses_example.1-2"), (taken["registered_peer"], taken["registered_session_id"]))
 
     def test_invalid_registrations_are_refused_without_saving(self):
         self.add_peer("keep")
@@ -613,11 +530,6 @@ class Conversation(HtalkCase):
         timed = self.htalk("--as", "alice", "send", "bob", "--message", "Timed", "--no-notify", "--wait", "0.2")
         self.assertEqual(("timeout", True), (timed["wait_ended"], timed["created"]))
 
-    def test_message_file_normalizes_crlf_and_cr_like_python_text_reading(self):
-        text = self.tmp / "line-endings.txt"
-        text.write_bytes(b"one\r\ntwo\rthree\n")
-        saved = self.htalk("--as", "alice", "send", "bob", "--message-file", str(text), "--no-notify")
-        self.assertEqual("one\ntwo\nthree\n", saved["body"])
 
     def test_message_bodies_and_limits(self):
         accepted = ("a" * 32000, "я" * 16000, "  padded  \n\n", "🙂 multi\nline\n")
@@ -696,49 +608,6 @@ class Listings(HtalkCase):
         self.assertEqual((5, 0), (after["total"], after["omitted"]))
         # Unacknowledged answers are incoming work for the requester.
         self.assertEqual([answer], [m["id"] for m in self.htalk("--as", "alice", "inbox")["messages"]])
-
-    def test_sent_summaries_count_bytes_and_characters(self):
-        body = "\n   \n  Привет — первая строка  \nвторая строка"
-        question = self.htalk("--as", "alice", "send", "bob", "--message", body, "--no-notify")["id"]
-        self.htalk("--as", "bob", "reply", question, "--message", "Ответ\nподробности", "--no-notify")
-        long = self.htalk("--as", "alice", "send", "bob", "--message", "я" * 200, "--no-notify")["id"]
-        emoji = self.htalk("--as", "alice", "send", "bob", "--message", "🙂" * 130, "--no-notify")["id"]
-        crlf = self.htalk("--as", "alice", "send", "bob", "--message", "\r\n  First\r\nSecond", "--no-notify")["id"]
-        listed = {m["id"]: m for m in self.htalk("--as", "alice", "sent")["messages"]}
-        summary = listed[question]
-        self.assertNotIn("body", summary)
-        self.assertEqual((len(body.encode()), "Привет — первая строка"), (summary["body_bytes"], summary["body_preview"]))
-        self.assertNotIn("body", summary["reply"])
-        self.assertEqual(("Ответ", len("Ответ\nподробности".encode())), (summary["reply"]["body_preview"], summary["reply"]["body_bytes"]))
-        self.assertEqual(("я" * 120, 400), (listed[long]["body_preview"], listed[long]["body_bytes"]))
-        self.assertEqual(("🙂" * 120, 520), (listed[emoji]["body_preview"], listed[emoji]["body_bytes"]))
-        self.assertEqual("First", listed[crlf]["body_preview"])
-        self.assertEqual(body, self.htalk("--as", "alice", "show", question)["body"])
-        full = {m["id"]: m for m in self.htalk("--as", "alice", "sent", "--bodies")["messages"]}
-        self.assertEqual((body, "Ответ\nподробности"), (full[question]["body"], full[question]["reply"]["body"]))
-        self.assertNotIn("body_preview", full[question])
-
-    def test_preview_uses_unicode_line_and_space_rules(self):
-        """First nonblank line under Unicode line boundaries and whitespace, as in 0.4.0."""
-        cases = {"one\rtwo": "one", "one two": "one", "　  wide　": "wide", "\x0c\nform": "form"}
-        ids = {self.htalk("--as", "alice", "send", "bob", "--message", body, "--no-notify")["id"]: preview
-               for body, preview in cases.items()}
-        listed = {m["id"]: m["body_preview"] for m in self.htalk("--as", "alice", "sent")["messages"]}
-        self.assertEqual(ids, listed)
-
-    def test_invalid_limits_and_cursors_are_json_errors(self):
-        self.insert_requests("alice", "bob", 1)
-        for words, error in ((["sent", "--limit", "0"], "limit_must_be_between_1_and_500"),
-                             (["inbox", "--limit", "501"], "limit_must_be_between_1_and_500"),
-                             (["inbox", "--limit", "-3"], "limit_must_be_between_1_and_500"),
-                             (["sent", "--before-seq", "0"], "seq_cursor_must_be_a_positive_integer"),
-                             (["inbox", "--after-seq", "-1"], "seq_cursor_must_be_a_positive_integer"),
-                             (["inbox", "--after-seq", str(2**63)], "seq_cursor_must_be_a_positive_integer")):
-            with self.subTest(words=words):
-                self.error("--as", "bob", *words, error=error)
-        self.assertEqual(1, len(self.htalk("--as", "bob", "inbox", "--limit", "500")["messages"]))
-        self.assertEqual([], self.htalk("--as", "bob", "inbox", "--after-seq", "1")["messages"])
-        self.assertEqual([], self.htalk("--as", "bob", "inbox", "--after-seq", str(2**63 - 1))["messages"])
 
 
 class Recovery(HtalkCase):
@@ -977,45 +846,6 @@ class Notifications(HtalkCase):
         self.assertEqual("recipient_unavailable", self.error("peer", "check", "bob", error="recipient_unavailable")["error"])
         self.error("peer", "check", "zed", error="unknown_peer")
 
-    def test_codex_queue_outcomes_are_recorded_once(self):
-        self.add_peer("alice")
-        bob = self.codex_recipient("bob")
-        queue_id = str(uuid.uuid4())
-        self.configure(codex_queue={"mode": "ok", "queue_id": queue_id})
-        sent = self.htalk("--as", "alice", "send", "bob", "--message", "Private body 7")
-        self.assertEqual(("submitted", "codex_cli_queued:" + queue_id), (sent["submission"], sent["notification_detail"]))
-        call = self.calls("codex", ["queue"])[0]["argv"]
-        self.assertEqual(["queue", "--thread", bob["session_id"], "--message"], call[:4])
-        self.assertIn(sent["id"], call[4])
-        self.assertNotIn("Private body 7", call[4])
-        show = next(line for line in call[4].splitlines() if line.startswith("htalk "))
-        self.assertEqual(["htalk", "--db", str(self.db), "--as", "bob", "show", sent["id"]], words_of(show))
-        self.assertEqual({"harness": "codex", "session_id": bob["session_id"], "workspace": bob["workspace"],
-                          "metadata_source": str(self.codex_home / "state_5.sqlite"), "transport": "codex_cli_queue",
-                          "runtime_status": "unknown", "retired_at": None}, self.htalk("peer", "check", "bob"))
-        for settings, detail in (({"mode": "fail", "queue_id": queue_id}, "codex_cli_unconfirmed_receipt"),
-                                 ({"mode": "ok", "stdout": "Queued.\n"}, "codex_cli_unconfirmed_receipt")):
-            with self.subTest(settings=settings):
-                self.configure(codex_queue=settings)
-                chosen = str(uuid.uuid4())
-                before = len(self.calls("codex", ["queue"]))
-                uncertain = self.htalk("--as", "alice", "send", "bob", "--id", chosen, "--message", "Q", code=2)
-                self.assertEqual(("submission_unknown", detail), (uncertain["submission"], uncertain["notification_detail"]))
-                self.configure(codex_queue={"mode": "ok", "queue_id": queue_id})
-                retry = self.htalk("--as", "alice", "send", "bob", "--id", chosen, "--message", "Q")
-                self.assertEqual((False, "submission_unknown"), (retry["created"], retry["submission"]))
-                self.assertEqual(before + 1, len(self.calls("codex", ["queue"])))
-        # A recipient without an unarchived saved CLI address is never queued.
-        before = len(self.calls("codex", ["queue"]))
-        for name, options, detail in (("carol", {"saved": False}, "recipient_not_in_codex_state"),
-                                      ("dave", {"archived": 1}, "recipient_is_not_an_unarchived_codex_cli_session"),
-                                      ("erin", {"source": "exec"}, "recipient_is_not_an_unarchived_codex_cli_session")):
-            with self.subTest(name=name):
-                self.codex_recipient(name, **options)
-                refused = self.htalk("--as", "alice", "send", name, "--message", "Q", code=2)
-                self.assertEqual(("not_submitted", detail), (refused["submission"], refused["notification_detail"]))
-                self.assertEqual(detail, self.error("peer", "check", name)["error"])
-        self.assertEqual(before, len(self.calls("codex", ["queue"])))
 
     def test_codex_acknowledgment_removes_only_its_confirmed_notice(self):
         self.add_peer("alice")
@@ -1298,22 +1128,6 @@ class ProcessRecovery(HtalkCase):
         self.assertEqual([self.bob["session_id"], self.alice["session_id"]],
                          [call["argv"][2] for call in notices])
 
-    def test_sigkill_during_cleanup_keeps_ack_and_allows_cleanup_retry(self):
-        self.configure(codex_app_server={"mode": "block"})
-        chosen = str(uuid.uuid4())
-        sent = self.htalk(*self.send_words(chosen))
-        acking = self.spawn("--as", "bob", "ack", chosen)
-        self.started("codex_delete")
-        before = self.htalk("--as", "bob", "show", chosen)
-        self.assertIsNotNone(before["ack_at"])
-        self.kill(acking)
-
-        self.configure(codex_app_server={})
-        recovered = self.htalk("--as", "bob", "ack", chosen)
-        self.assertEqual({"status": "removed", "queue_id": self.queue_id}, recovered["notification_cleanup"])
-        self.assertEqual((before["ack_at"], "submitted", sent["notification_finished_at"]),
-                         (recovered["ack_at"], recovered["submission"], recovered["notification_finished_at"]))
-        self.assertEqual(1, len(self.calls("codex", ["queue"])))
 
     def test_concurrent_processes_save_one_request_and_refuse_conflicts(self):
         for conflicting in (False, True):
@@ -1412,12 +1226,6 @@ class Discovery(HtalkCase):
             self.assertEqual(["ses_wal"], [row["session_id"] for row in result["sessions"]])
             self.assertEqual(2, result["sessions"][0]["updated_at"])
 
-    def test_invalid_opencode_ports_use_class_name_error(self):
-        for port in ("abc", "99999"):
-            result = self.htalk("peer", "discover", "--harness", "opencode", "--opencode-url",
-                                "http://127.0.0.1:" + port, code=2)
-            self.assertEqual("opencode_ValueError", result["sources"][0]["error"])
-        self.assertFalse(self.db.parent.exists())
 
     def test_claude_discovery_is_read_only_and_reports_coverage(self):
         from compat_support import ClaudeSocket

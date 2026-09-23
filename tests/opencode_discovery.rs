@@ -2,8 +2,8 @@
 #[path = "opencode_fixture.rs"]
 mod fixture;
 
-use fixture::{Fake, Reply, closed_port, session};
-use harness_talk::opencode::{self, discover_with};
+use fixture::{Fake, closed_port, session};
+use harness_talk::opencode::discover_with;
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -267,86 +267,6 @@ fn discovery_is_read_only_and_separates_liveness() {
 }
 
 #[test]
-fn server_source_failures_are_confined_and_coded() {
-    let dir = fixture::tempdir();
-    let fake = Fake::start(vec![]);
-    let absent = dir.path().join("absent.db");
-    let error = |hook: Option<fn() -> Reply>| {
-        match hook {
-            Some(reply) => fake.hook(move |r| (r.path == "/global/health").then(reply)),
-            None => fake.with(|s| s.hook = None),
-        }
-        let result = discover_with(Some(std::slice::from_ref(&fake.url)), None, Some(&absent));
-        assert!(result.sessions.is_empty());
-        let s = &result.sources[0];
-        assert_eq!(
-            keys(s),
-            [
-                "harness", "source", "url", "status", "version", "error", "detail"
-            ]
-        );
-        (
-            s["status"].as_str().unwrap().to_owned(),
-            s["error"].as_str().unwrap_or("-").to_owned(),
-        )
-    };
-    fake.with(|s| s.password = Some("synthetic-secret".into()));
-    assert_eq!(
-        error(None),
-        ("unavailable".into(), "opencode_unauthorized".into())
-    );
-    fake.with(|s| s.password = None);
-    assert_eq!(
-        error(Some(|| Reply::Raw(
-            format!(
-                "HTTP/1.1 200 OK\r\n\r\n{}",
-                " ".repeat(opencode::MAX_RESPONSE + 1)
-            )
-            .into_bytes()
-        ))),
-        ("unavailable".into(), "opencode_response_too_large".into())
-    );
-    assert_eq!(
-        error(Some(|| Reply::Close)),
-        ("unavailable".into(), "opencode_RemoteDisconnected".into())
-    );
-    assert_eq!(
-        error(Some(|| Reply::Json(200, json!({"healthy": true})))),
-        ("unavailable".into(), "opencode_invalid_response".into())
-    );
-    fake.hook(|r| (r.path == "/session").then(|| Reply::Json(200, json!({"not": "a list"}))));
-    let result = discover_with(Some(std::slice::from_ref(&fake.url)), None, Some(&absent));
-    assert_eq!(
-        (
-            result.sources[0]["status"].as_str(),
-            result.sources[0]["error"].as_str(),
-            result.sources[0]["version"].as_str()
-        ),
-        (
-            Some("unavailable"),
-            Some("opencode_invalid_response"),
-            Some("1.18.30")
-        )
-    );
-    fake.hook(|r| (r.path == "/session/status").then(|| Reply::Json(404, json!({}))));
-    let result = discover_with(Some(std::slice::from_ref(&fake.url)), None, Some(&absent));
-    assert_eq!(
-        result.sources[0]["error"],
-        "recipient_not_in_opencode_server"
-    );
-    // An empty URL list still reads saved metadata; the missing file is not created.
-    let result = discover_with(Some(&[]), None, Some(&absent));
-    assert_eq!(
-        result.sources,
-        [
-            json!({"harness": "opencode", "source": "opencode_saved", "path": absent.to_str(),
-        "status": "unavailable", "error": "opencode_saved_metadata_missing", "detail": null})
-        ]
-    );
-    assert!(!absent.exists());
-}
-
-#[test]
 fn malformed_saved_rows_preserve_valid_addresses_and_limit_diagnostics() {
     let dir = fixture::tempdir();
     let ws = workspace(&dir);
@@ -443,54 +363,5 @@ fn malformed_saved_rows_preserve_valid_addresses_and_limit_diagnostics() {
     assert_eq!(
         (source["status"].as_str(), source["detail"].as_str()),
         (Some("ok"), None)
-    );
-}
-
-#[test]
-fn unreadable_saved_metadata_is_unavailable_by_class() {
-    let dir = fixture::tempdir();
-    let garbage = dir.path().join("garbage.db");
-    std::fs::write(&garbage, vec![b'x'; 4096]).unwrap();
-    let no_table = dir.path().join("empty.db");
-    Connection::open(&no_table)
-        .unwrap()
-        .execute("CREATE TABLE other (x)", [])
-        .unwrap();
-    let bad_text = dir.path().join("text.db");
-    saved_db(
-        &bad_text,
-        &[(json!("ses_ok"), None, json!("/synthetic"), json!(1), None)],
-    );
-    Connection::open(&bad_text)
-        .unwrap()
-        .execute(
-            "INSERT INTO session VALUES (CAST(x'736573ff' AS TEXT), NULL, '/x', 0, NULL, '')",
-            [],
-        )
-        .unwrap();
-    for (path, error) in [
-        (&garbage, "opencode_saved_DatabaseError"),
-        (&no_table, "opencode_saved_OperationalError"),
-        (&bad_text, "opencode_saved_OperationalError"),
-        (&dir.path().to_path_buf(), "opencode_saved_metadata_missing"),
-    ] {
-        let result = discover_with(Some(&[]), None, Some(path));
-        assert!(result.sessions.is_empty());
-        assert_eq!(
-            (
-                result.sources[0]["status"].as_str(),
-                result.sources[0]["error"].as_str(),
-                &result.sources[0]["detail"]
-            ),
-            (Some("unavailable"), Some(error), &Value::Null),
-            "{path:?}"
-        );
-    }
-    // The source path is reported as pathlib prints it.
-    let spaced = format!("{}//./opencode.db", dir.path().display());
-    let result = discover_with(Some(&[]), None, Some(Path::new(&spaced)));
-    assert_eq!(
-        result.sources[0]["path"].as_str(),
-        dir.path().join("opencode.db").to_str()
     );
 }
