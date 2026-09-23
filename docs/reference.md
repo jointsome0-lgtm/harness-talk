@@ -60,7 +60,7 @@ Run `peer check` in the scope that will send. `recipient_unavailable` can mean r
 | `submission_unknown` | Claimed for one attempt, with an uncertain outcome. |
 | `submitted` | Claude socket bytes written, Codex queue accepted, or OpenCode `prompt_async` accepted. |
 
-None proves model receipt. `ack_at` records explicit acknowledgment. A saved answer is a separate message with `in_reply_to` pointing to its request; the request becomes `reply_received` regardless of notification outcome. Acknowledged questions remain in the inbox until answered. Acknowledged answers leave the inbox. A short decline also counts as an answer.
+None proves model receipt. `ack_at` records the recipient's explicit acknowledgment; it does not prove understanding or use of the message. A saved answer is a separate message with `in_reply_to` pointing to its request; the request becomes `reply_received` regardless of notification outcome. Neither an acknowledgment nor an answer proves task completion: the requester must check the result against the task's requirements. Acknowledged questions remain in the inbox until answered. Acknowledged answers leave the inbox. A short decline also counts as an answer.
 
 `ack` saves the acknowledgment first, then tries to remove that message's pending Codex notification by its confirmed queue ID. Reading with `show`, `inbox` or `wait` does not remove it. If acknowledgment arrives during submission, the sender also tries removal when the queue receipt is saved.
 
@@ -83,6 +83,8 @@ If the sending process stops before saving its completion receipt, `pending` can
 `wait REQUEST_UUID --seconds N` polls only the database for 0 to 45 seconds and records an answer before returning it. A later notification check skips an answer carrying that record. Resume the wait after timeout or interruption. It never resends or acknowledges. `--no-notify` saves a message for polling only. `--message-file PATH` supplies a multiline body, including paths to artifacts the recipient should inspect.
 
 For repeatable automation, generate and retain a UUID before `send --id UUID`. Identical retries return the saved request; differing contents are rejected. The same applies to an identical `reply` retry. There is no notification replay command. After interrupted output, inspect `recovery`, `message_id` and `persistence`; `unknown` persistence requires checking the database before deciding what happened.
+
+Deduplication depends on the saved message in the selected database. A different mailbox or a restored backup that lacks that message cannot recognize the earlier request, so the same ID can create a new message. Reconcile the earlier exchange before retrying after a database replacement or restore.
 
 ## Exit codes
 

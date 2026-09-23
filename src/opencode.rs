@@ -598,14 +598,26 @@ fn read_response(r: &mut Reader) -> Result<(i128, Vec<u8>), &'static str> {
     } else if chunked {
         None
     } else {
-        header(&headers, "content-length")
-            .map(|v| {
-                let v = v.trim_matches([' ', '\t']);
-                if v.is_empty() || !v.bytes().all(|b| b.is_ascii_digit()) {
-                    return Err("invalid_response");
-                }
-                py_int(v.as_bytes(), 10).ok_or("invalid_response")
-            })
+        let mut length: Option<&str> = None;
+        for value in headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            .flat_map(|(_, value)| value.split(','))
+        {
+            let value = value.trim_matches([' ', '\t']);
+            if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+                return Err("invalid_response");
+            }
+            // Compare full values before the bounded integer conversion.
+            let value = value.trim_start_matches('0');
+            let value = if value.is_empty() { "0" } else { value };
+            if length.is_some_and(|previous| previous != value) {
+                return Err("invalid_response");
+            }
+            length = Some(value);
+        }
+        length
+            .map(|value| py_int(value.as_bytes(), 10).ok_or("invalid_response"))
             .transpose()?
     };
     let amt = MAX_RESPONSE + 1;
