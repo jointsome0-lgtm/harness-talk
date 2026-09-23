@@ -6,7 +6,7 @@ For Linux and mutually trusted sessions under one OS account. Peer names identif
 
 The [roadmap](ROADMAP.md) tracks the planned releases and their completion criteria.
 
-> Unreleased: older mailboxes now back up and migrate on first use. The published 0.6.0 package still needs the [explicit migration procedure](https://github.com/jointsome0-lgtm/harness-talk/blob/v0.6.0/docs/reference.md#database-and-peers).
+> Version 0.6.1 candidate: older mailboxes now back up and migrate on first use. The published 0.6.0 package still needs the [explicit migration procedure](https://github.com/jointsome0-lgtm/harness-talk/blob/v0.6.0/docs/reference.md#database-and-peers).
 
 ## Install and share a database
 
@@ -21,7 +21,7 @@ Or install with `python -m pip install harness-talk` (Python 3.11+). Since versi
 
 Set the same `HTALK_DB` in both sessions. Both must be able to run `htalk` and write the database directory. Only `peer add` creates the file; other commands report `database_not_found` for a wrong path. `--db PATH` overrides the environment; [storage defaults](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/reference.md#database-and-peers) are documented separately.
 
-With the unreleased update, install the new version and continue using the same commands. The first command that opens a schema 1 or 2 mailbox saves and checks a private SQLite backup in `PATH.backups`, then upgrades it to schema 3 in one transaction. Messages, replies, acknowledgments, notification receipts and retirement marks are preserved. If backup or migration fails, the command stops and the mailbox stays on its previous schema. No separate migration command is needed; see [migration and recovery](docs/reference.md#database-and-peers).
+From version 0.6.1, install the new version and continue using the same commands. The first command that opens a schema 1 or 2 mailbox saves and checks a private SQLite backup in `PATH.backups`, then upgrades it to schema 3 in one transaction. Messages, replies, acknowledgments, notification receipts and retirement marks are preserved. If backup or migration fails, the command stops and the mailbox stays on its previous schema. No separate migration command is needed; see [migration and recovery](docs/reference.md#database-and-peers).
 
 Update every htalk installation that uses the mailbox: clients 0.5.1 and earlier reject schema 3. There is no automatic downgrade or backup restoration.
 

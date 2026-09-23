@@ -23,7 +23,7 @@ htalk peer add muse --harness opencode --session ses_XXXXXXXX \
 
 OpenCode session identifiers are opaque strings beginning with `ses`; they are not UUIDs and are stored as given. `--url` is optional and defaults to the documented address; it must be an `http` or `https` URL whose host is `localhost` or a literal loopback IP address, without credentials, query or fragment. Names such as `127.attacker.example` are rejected, so an environment-provided password can only ever be sent to the local machine. Addresses remain immutable and unique per harness and session. `--socket` is rejected for OpenCode, and `--url` is rejected for other harnesses.
 
-Opening a database first checks its schema in a read transaction. A complete current schema needs no writer lock. New databases use schema 3. The unreleased update automatically backs up and upgrades schema 1 or 2 on first use; the published 0.6.0 package still requires explicit migration. See [migration and recovery](reference.md#database-and-peers). Update every installation sharing the mailbox: clients 0.5.1 and earlier reject schema 3.
+Opening a database first checks its schema in a read transaction. A complete current schema needs no writer lock. New databases use schema 3. Version 0.6.1 automatically backs up and upgrades schema 1 or 2 on first use; the published 0.6.0 package still requires explicit migration. See [migration and recovery](reference.md#database-and-peers). Update every installation sharing the mailbox: clients 0.5.1 and earlier reject schema 3.
 
 ## Authentication
 
