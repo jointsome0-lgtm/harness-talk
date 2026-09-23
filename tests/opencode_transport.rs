@@ -182,6 +182,12 @@ fn responses_follow_http_client_framing() {
             "HTTP/1.1  200\r\ncontent-length:{}\r\n\r\n\u{feff}{body}",
             body.len() + 3
         ),
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\ncontent-length: 0{}, {}\r\n\r\n{body}",
+            body.len(),
+            body.len(),
+            body.len()
+        ),
     ];
     for response in responses {
         health_hook(&c, move || raw(&response));
@@ -284,6 +290,14 @@ fn post_write_outcomes_require_complete_http_responses() {
     );
     assert_eq!(
         post(|| raw("HTTP/1.1 400 Bad\r\nContent-Length: nonsense\r\n\r\n{}")),
+        ("submission_unknown", "opencode_invalid_response".into())
+    );
+    assert_eq!(
+        post(|| raw("HTTP/1.1 400 Bad\r\nContent-Length: 0\r\nContent-Length: 1000\r\n\r\n")),
+        ("submission_unknown", "opencode_invalid_response".into())
+    );
+    assert_eq!(
+        post(|| raw("HTTP/1.1 400 Bad\r\nContent-Length: 0, 1000\r\n\r\n")),
         ("submission_unknown", "opencode_invalid_response".into())
     );
     assert_eq!(
