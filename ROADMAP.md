@@ -14,9 +14,11 @@ Release checks completed:
 - Explicit migration from schema 1/2 preserves messages and receipts. Ordinary commands leave old databases unchanged, and old binaries refuse schema 3.
 - Package installation, automated tests and the documented [release checks](docs/releasing.md) pass, with unchecked live clients identified in the report.
 
-### 0.6.1 candidate: automatic mailbox upgrades
+### 0.6.1: automatic mailbox upgrades
 
-Updating htalk should let an agent continue with its usual commands. On first use, a known legacy schema gets a verified, private SQLite backup and a transactional migration. Keep the explicit `migrate` command available for maintenance. A backup or migration failure must leave the old mailbox usable by its matching version; concurrent opens must produce one completed migration. Verify legacy data preservation, backup contents, failure rollback and commands already in flight before release. Include the upgrade behavior and recovery instructions in the release notes.
+Released as [0.6.1](https://github.com/jointsome0-lgtm/harness-talk/releases/tag/v0.6.1) on 2026-09-23. Implementation: [PR #19](https://github.com/jointsome0-lgtm/harness-talk/pull/19).
+
+The first ordinary command on schema 1 or 2 now validates the source, creates and verifies a private SQLite backup, and migrates in one transaction. The explicit `migrate` command remains available. Backup or migration failures stop the command; htalk never restores an old backup automatically. Checks covered legacy data preservation, backup contents, concurrent opens and failure rollback. The publication wheel also completed native exchanges after upgrading a mailbox created by 0.5.1. [Release notes](https://github.com/jointsome0-lgtm/harness-talk/releases/tag/v0.6.1) contain update commands and recovery limits.
 
 ## 0.7: more local harness integrations
 
