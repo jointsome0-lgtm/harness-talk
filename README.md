@@ -6,7 +6,7 @@ For Linux and mutually trusted sessions under one OS account. Peer names identif
 
 The [roadmap](ROADMAP.md) tracks the planned releases and their completion criteria.
 
-> Unreleased 0.6.0 candidate: adds pull participants and explicit schema 3 migration. Published 0.5.1 packages still use schema 2. Build this checkout to try the new core on a separate database.
+> Version 0.6.0 adds pull participants and explicit schema 3 migration. Before upgrading a shared mailbox, stop its users, back it up and upgrade every participant; see [migration](docs/reference.md#database-and-peers).
 
 ## Install and share a database
 
@@ -17,11 +17,11 @@ uv tool install harness-talk
 export HTALK_DB=/absolute/shared/directory/mail.sqlite3
 ```
 
-Or install with `python -m pip install harness-talk` (Python 3.11+). Version 0.5 is a Rust executable, distributed through the same package name. Linux wheels for x86-64 and ARM64 with glibc 2.28+ include the compiled executable and SQLite; installing a matching wheel needs no Rust compiler. The installed `htalk` runs without Python. Source installs require Rust 1.88+, a C compiler and a linker; see [development](docs/development.md).
+Or install with `python -m pip install harness-talk` (Python 3.11+). Since version 0.5, htalk is a Rust executable, distributed through the same package name. Linux wheels for x86-64 and ARM64 with glibc 2.28+ include the compiled executable and SQLite; installing a matching wheel needs no Rust compiler. The installed `htalk` runs without Python. Source installs require Rust 1.88+, a C compiler and a linker; see [development](docs/development.md).
 
 Set the same `HTALK_DB` in both sessions. Both must be able to run `htalk` and write the database directory. Only `peer add` creates the file; other commands report `database_not_found` for a wrong path. `--db PATH` overrides the environment; [storage defaults](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/reference.md#database-and-peers) are documented separately.
 
-This development version uses schema 3. Ordinary commands on schema 1 or 2 return `database_migration_required` without changing the file. To migrate an existing mailbox, first stop its users, make a SQLite backup and upgrade every client, then run `htalk --db PATH migrate`. Migration requires an explicit `--db PATH`; it never selects a target from `HTALK_DB` or the default location. The migration preserves messages, replies, acknowledgments, notification receipts and retirement marks. Older binaries reject schema 3; there is no automatic downgrade. Test on a copy before moving a working mailbox.
+Version 0.6 uses schema 3. Ordinary commands on schema 1 or 2 return `database_migration_required` without changing the file. To migrate an existing mailbox, first stop its users, make a SQLite backup and upgrade every client, then run `htalk --db PATH migrate`. Migration requires an explicit `--db PATH`; it never selects a target from `HTALK_DB` or the default location. The migration preserves messages, replies, acknowledgments, notification receipts and retirement marks. Older binaries reject schema 3; there is no automatic downgrade. Test on a copy before moving a working mailbox.
 
 Native commands and peer JSON retain their earlier shape after migration. Python imports from `harness_talk` are no longer supported. Replace module invocations in scripts with the installed command, keeping the same database and arguments:
 

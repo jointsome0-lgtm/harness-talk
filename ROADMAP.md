@@ -4,11 +4,11 @@ Ship the common core first, then local harness integrations, communication betwe
 
 ## 0.6: common mailbox core
 
-In review in [PR #17](https://github.com/jointsome0-lgtm/harness-talk/pull/17). The source version is `0.6.0`; it is a release candidate and has not been published.
+Released as [0.6.0](https://github.com/jointsome0-lgtm/harness-talk/releases/tag/v0.6.0) on 2026-09-23. Implementation: [PR #17](https://github.com/jointsome0-lgtm/harness-talk/pull/17).
 
 Any local agent that can run `htalk` can register a pull peer without a native session or workspace. The mailbox owns persistence, request IDs, replies, acknowledgments and retirement. Native adapters own address validation and notifications. Adding a harness should not require changing message storage.
 
-Ready to release when:
+Release checks completed:
 
 - Pull peers and existing native peers complete exchanges in both directions, with retries preserving the original message and notification attempt.
 - Explicit migration from schema 1/2 preserves messages and receipts. Ordinary commands leave old databases unchanged, and old binaries refuse schema 3.
