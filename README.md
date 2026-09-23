@@ -6,7 +6,7 @@ For Linux and mutually trusted sessions under one OS account. Peer names identif
 
 The [roadmap](ROADMAP.md) tracks the planned releases and their completion criteria.
 
-> Version 0.6.1 candidate: older mailboxes now back up and migrate on first use. The published 0.6.0 package still needs the [explicit migration procedure](https://github.com/jointsome0-lgtm/harness-talk/blob/v0.6.0/docs/reference.md#database-and-peers).
+> [Version 0.6.1 is released](https://github.com/jointsome0-lgtm/harness-talk/releases/tag/v0.6.1). Older mailboxes now back up and migrate on first use; see [migration and recovery](docs/reference.md#database-and-peers).
 
 ## Install and share a database
 
