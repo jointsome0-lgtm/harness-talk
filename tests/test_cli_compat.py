@@ -172,19 +172,45 @@ class SchemaCompatibility(HtalkCase):
         self.assertEqual(["token", "message_id", "actor", "until"], self.columns("waits", path))
         self.assertEqual(["name", "retired_at"], self.columns("retired_peers", path))
 
+    def backups(self, path=None):
+        return sorted(Path(str(path or self.db) + ".backups").glob("*.sqlite3"))
+
+    def snapshot(self, path):
+        with closing(sqlite3.connect(path)) as db:
+            return db.execute("PRAGMA user_version").fetchone()[0], list(db.iterdump())
+
     def test_fresh_database_layout(self):
         self.add_peer("alice")
         self.assert_current_schema()
+        self.htalk("peer", "list")
+        self.assertFalse(Path(str(self.db) + ".backups").exists())
+
+    def test_automatic_migration_uses_environment_and_default_paths(self):
+        for source in ("environment", "default"):
+            with self.subTest(source=source):
+                if source == "environment":
+                    path = self.tmp / "environment.sqlite3"
+                    env = {"HTALK_DB": str(path)}
+                else:
+                    path = self.home / ".local/share/harness-talk/mail.sqlite3"
+                    env = {}
+                self.legacy_v1(path)
+                before = self.snapshot(path)
+                self.assertEqual(3, len(self.htalk("peer", "list", db=False, env=env)["peers"]))
+                self.assert_current_schema(path)
+                backup, = self.backups(path)
+                self.assertEqual(before, self.snapshot(backup))
 
     def test_version_1_database_migrates_and_preserves_rows(self):
         ids = self.legacy_v1(self.db)
-        before = self.db.read_bytes()
-        error = self.error("peer", "list", error="database_migration_required")
-        self.assertIn("migrate", error["next_action"])
-        self.assertNotIn("recovery", error)
-        self.assertEqual(before, self.db.read_bytes())
-        self.htalk("migrate")
-        listed = self.htalk("peer", "list")["peers"]
+        before = self.snapshot(self.db)
+        result = self.htalk("peer", "list")
+        self.assertEqual({"peers", "retired_hidden"}, set(result))
+        listed = result["peers"]
+        backup, = self.backups()
+        self.assertEqual(before, self.snapshot(backup))
+        self.assertEqual(0o600, backup.stat().st_mode & 0o777)
+        self.assertEqual(0o700, backup.parent.stat().st_mode & 0o777)
         self.assert_current_schema()
         self.assertEqual(["alice", "bob", "builder"], [peer["name"] for peer in listed])
         self.assertEqual([None] * 3, [peer["url"] for peer in listed])
@@ -200,13 +226,14 @@ class SchemaCompatibility(HtalkCase):
         # An identical registration of a migrated peer is accepted unchanged.
         self.assertEqual(listed[0], self.add_peer("alice", "claude", ids["alice"]))
 
-    def test_early_version_two_migrates_explicitly(self):
+    def test_early_version_two_migrates_on_ordinary_read(self):
         ids = self.legacy_v1(self.db)
         self.sql("ALTER TABLE peers ADD COLUMN url TEXT")
         self.sql("PRAGMA user_version=2")
-        self.error("--as", "bob", "show", ids["q1"], error="database_migration_required")
-        self.assertEqual(2, self.user_version())
-        self.htalk("migrate")
+        before = self.snapshot(self.db)
+        self.htalk("--as", "bob", "show", ids["q1"])
+        backup, = self.backups()
+        self.assertEqual(before, self.snapshot(backup))
         self.assert_current_schema()
         self.assertIsNone(self.htalk("--as", "bob", "show", ids["q1"])["wait_returned_at"])
         self.htalk("peer", "retire", "bob")
@@ -219,8 +246,9 @@ class SchemaCompatibility(HtalkCase):
         self.error("migrate", db=False, env={"HTALK_DB": str(path)}, error="migrate_requires_explicit_db")
         self.error("migrate", db=False, error="migrate_requires_explicit_db")
         self.assertEqual(before, path.read_bytes())
-        self.error("peer", "list", db="~/old.sqlite3", error="database_migration_required")
+        self.htalk("peer", "list", db="~/old.sqlite3")
         self.htalk("migrate", db="~/old.sqlite3")
+        self.assertEqual(1, len(self.backups(path)))
         self.assert_current_schema(path)
         self.assertEqual(3, len(self.htalk("peer", "list", db="~/old.sqlite3")["peers"]))
 
@@ -228,7 +256,7 @@ class SchemaCompatibility(HtalkCase):
         self.legacy_v1(self.db)
         self.sql("DELETE FROM peers WHERE name='bob'")
         before = self.db.read_bytes()
-        error = self.error("migrate", error="database_foreign_key_violation")
+        error = self.error("peer", "list", error="database_foreign_key_violation")
         self.assertIn("foreign_key_check", error["next_action"])
         self.assertNotIn("recovery", error)
         self.assertEqual(before, self.db.read_bytes())
@@ -248,13 +276,53 @@ class SchemaCompatibility(HtalkCase):
         self.assertEqual(before, self.db.read_bytes())
         self.assertEqual(1, self.user_version())
 
-    def test_concurrent_explicit_migrations_commit_once(self):
+    def test_concurrent_first_opens_migrate_and_back_up_once(self):
         self.legacy_v1(self.db)
-        processes = [self.spawn("migrate") for _ in range(6)]
+        before = self.snapshot(self.db)
+        processes = [self.spawn("peer", "list") for _ in range(6)]
         for process in processes:
-            self.assertEqual(3, self.finish(process)["schema_version"])
-        self.assertEqual(3, len(self.htalk("peer", "list")["peers"]))
+            self.assertEqual(3, len(self.finish(process)["peers"]))
         self.assert_current_schema()
+        backup, = self.backups()
+        self.assertEqual(before, self.snapshot(backup))
+        self.htalk("migrate")
+        self.assertEqual([backup], self.backups())
+
+    def test_backup_failure_leaves_legacy_mailbox_unchanged(self):
+        self.legacy_v1(self.db)
+        before = self.db.read_bytes()
+        blocked = Path(str(self.db) + ".backups")
+        blocked.write_text("not a directory")
+        error = self.error("peer", "list", error="database_backup_failed")
+        self.assertEqual(str(blocked), error["backup_directory"])
+        self.assertIn("not migrated", error["next_action"])
+        self.assertNotIn("recovery", error)
+        self.assertEqual(before, self.db.read_bytes())
+        self.assertEqual("not a directory", blocked.read_text())
+
+    def test_backup_includes_writer_that_commits_before_migration(self):
+        for journal in ("delete", "wal"):
+            with self.subTest(journal=journal):
+                path = self.tmp / journal / "mail.sqlite3"
+                ids = self.legacy_v1(path)
+                with closing(sqlite3.connect(path)) as writer:
+                    self.assertEqual(journal, writer.execute("PRAGMA journal_mode=" + journal).fetchone()[0])
+                    writer.execute("BEGIN IMMEDIATE")
+                    writer.execute("UPDATE messages SET body='Committed before migration' WHERE id=?", (ids["q1"],))
+                    before = (writer.execute("PRAGMA user_version").fetchone()[0], list(writer.iterdump()))
+                    process = self.spawn("peer", "list", db=path)
+                    time.sleep(0.1)
+                    self.assertIsNone(process.poll())
+                    self.assertEqual([], self.backups(path))
+                    writer.commit()
+                    self.assertEqual(3, len(self.finish(process)["peers"]))
+                backup, = self.backups(path)
+                self.assertEqual(before, self.snapshot(backup))
+                with closing(sqlite3.connect(backup)) as copied:
+                    self.assertEqual("ok", copied.execute("PRAGMA integrity_check").fetchone()[0])
+                    self.assertEqual("Committed before migration", copied.execute("SELECT body FROM messages WHERE id=?", (ids["q1"],)).fetchone()[0])
+                self.assertEqual("Committed before migration", self.htalk("--as", "bob", "show", ids["q1"], db=path)["body"])
+
 
 
 class GenericPeers(HtalkCase):

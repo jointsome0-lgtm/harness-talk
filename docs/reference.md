@@ -11,7 +11,17 @@ Choose one writable directory shared by the participants. SQLite writers need di
 3. `$XDG_DATA_HOME/harness-talk/mail.sqlite3`
 4. `~/.local/share/harness-talk/mail.sqlite3`
 
-A checkout is never the default database location. Version 0.6 creates schema 3 databases. Ordinary commands refuse schema 1 or 2 with `database_migration_required`; they do not upgrade them. Stop all users, make a SQLite backup and upgrade every client before explicitly running `htalk --db PATH migrate`. Migration requires an explicit `--db PATH`; it never selects a target from `HTALK_DB` or the default location. Migration is one transaction and preserves existing peers as native, all messages and receipts, replies, wait registrations and retirements. A failure rolls back; repeating a completed migration changes nothing. Clients 0.5.1 and earlier cannot use schema 3. Restore a backup with matching clients if rollback is necessary; there is no downgrade command. Discovery does not open the database.
+A checkout is never the default database location. New databases use schema 3. Discovery and `--help` do not open the database.
+
+**Unreleased automatic migration:** the first ordinary mailbox command backs up and upgrades schema 1 or 2, including databases selected through `HTALK_DB` or the default location. No extra command is needed. The published 0.6.0 package still uses the [explicit procedure documented with that release](https://github.com/jointsome0-lgtm/harness-talk/blob/v0.6.0/docs/reference.md#database-and-peers).
+
+Before changing a legacy mailbox, htalk takes SQLite's write reservation, rechecks its version and creates a consistent backup. It verifies the backup's schema and integrity and syncs it to disk. Backups are retained beside the mailbox as `PATH.backups/schema-OLD-before-3-UUID.sqlite3`; new backup directories have mode 0700 and files have mode 0600. Migration then runs in one transaction, checks integrity and foreign keys, and preserves existing peers as native, messages and receipts, replies, wait registrations and retirements. The original command continues after the migration commits, with its usual JSON result.
+
+Concurrent first opens coordinate through SQLite: one client performs the migration, and the others use the resulting schema. A database already on schema 3 needs no migration backup or writer lock on open. Unknown schema versions are refused without migration. `htalk --db PATH migrate` remains an optional way to prepare a mailbox; it uses the same backup and migration path and still requires an explicit `--db PATH`.
+
+If a backup cannot be completed, `database_backup_failed` reports its directory and the mailbox is not migrated. Fix the reported storage or access problem and retry the original command. Failed schema or integrity checks roll back the migration; any completed backup is retained. A failed migration does not run the requested mailbox operation. There is no automatic restore: replacing a mailbox with an older backup could discard messages saved since that backup. If manual recovery is necessary, stop access, preserve the current database with SQLite's backup API, and use a verified backup with matching clients.
+
+Update every htalk installation sharing the mailbox. Clients 0.5.1 and earlier reject schema 3 when starting a command. An older command already in flight may complete against the migrated mailbox; that does not make the older binary compatible with pull peers or future schemas.
 
 Only `peer add` creates a missing database file and its directory. Other commands, including `migrate`, report `database_not_found` with `resolved_path`. An existing empty file is initialized on first open. Access and corruption errors are reported separately.
 

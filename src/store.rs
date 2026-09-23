@@ -266,7 +266,7 @@ pub(crate) fn await_writer(path: &Path) -> bool {
 impl Store {
     pub fn open(path: &Path, create: bool) -> Result<Self, Error> {
         let store = Self::prepare(path, create)?;
-        crate::schema::ensure(&mut store.connect()?, false)?;
+        crate::schema::ensure(&mut store.connect()?, &store.path)?;
         Ok(store)
     }
 
@@ -303,11 +303,9 @@ impl Store {
         Ok(store)
     }
 
-    /// Explicit schema upgrade. Never called by ordinary message/read commands.
+    /// Run the same automatic upgrade without another mailbox operation.
     pub fn migrate(path: &Path) -> Result<Self, Error> {
-        let store = Self::prepare(path, false)?;
-        crate::schema::ensure(&mut store.connect()?, true)?;
-        Ok(store)
+        Self::open(path, false)
     }
 
     pub fn path(&self) -> &Path {

@@ -495,17 +495,30 @@ fn failure(call: &Call, context: &Context, error: &Error) -> Value {
         return json!({"state":"error", "error":error, "resolved_path":os::resolve(&call.db),
             "next_action":"No database file exists at resolved_path. Check --db and HTALK_DB; every participant must use the same file. Only peer add creates a database: see htalk peer add --help."});
     }
-    if error == "database_migration_required" {
-        return json!({"state":"error", "error":error,
-            "next_action":"Stop all users of this mailbox, make a SQLite backup, and upgrade every client before migrating. Read htalk migrate --help. Schema 3 cannot be read by older clients; ordinary commands do not migrate it."});
+    if matches!(
+        error.as_str(),
+        "database_backup_failed"
+            | "database_foreign_key_violation"
+            | "database_integrity_check_failed"
+    ) {
+        let action = match error.as_str() {
+            "database_backup_failed" => {
+                "The backup could not be saved and verified; the mailbox was not migrated. Check free space and write access to backup_directory, then retry the same command. Existing backups are retained."
+            }
+            "database_foreign_key_violation" => {
+                "Migration rolled back because the database contains broken references. Inspect PRAGMA foreign_key_check on a copy and repair the source or restore a valid backup before retrying. Do not change user_version manually."
+            }
+            _ => {
+                "Migration rolled back because SQLite's integrity check failed. Preserve the mailbox and its backups and inspect them before retrying. Do not change user_version manually."
+            }
+        };
+        return json!({"state":"error", "error":error, "resolved_path":os::resolve(&call.db),
+            "backup_directory":crate::schema::backup_directory(&os::resolve(&call.db)), "next_action":action});
     }
     if call.command == "migrate" {
         let action = match error.as_str() {
             "migrate_requires_explicit_db" => {
-                "Select the intended mailbox with --db PATH before migrate. HTALK_DB and the default mailbox are not migration targets. Read htalk migrate --help before changing a database."
-            }
-            "database_foreign_key_violation" => {
-                "Migration rolled back because the database contains broken references. Inspect PRAGMA foreign_key_check on a copy and repair the source or restore a valid backup before retrying. Do not change user_version manually."
+                "This optional command requires --db PATH. Ordinary mailbox commands automatically prepare the database selected by --db, HTALK_DB or the default location. See htalk migrate --help."
             }
             "unsupported_unversioned_database" => {
                 "No supported htalk schema version was found. The database was not changed. Verify that this is the intended mailbox and recover it with a matching client or a valid backup; do not assign a schema version manually."
