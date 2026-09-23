@@ -150,13 +150,26 @@ fn version_one_database_migrates_with_rows_intact() {
             notification_finished_at, notification_detail)
             VALUES ('{request}', 'alice', 'bob', 'Old', 10.5, 11.0, 'submitted', 10.6, 10.7, 'claude_socket_bytes_written');
         PRAGMA user_version=1;", ws = temp.workspace(), other = new_id())).unwrap();
-    let before = fs::read(temp.db()).unwrap();
+    let store = Store::open(&temp.db(), false).unwrap();
+    let backup_path = fs::read_dir(temp.path().join("mail.sqlite3.backups"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
     assert_eq!(
-        "database_migration_required",
-        code(Store::open(&temp.db(), false))
+        0o600,
+        fs::metadata(&backup_path).unwrap().permissions().mode() & 0o777
     );
-    assert_eq!(before, fs::read(temp.db()).unwrap());
-    let store = Store::migrate(&temp.db()).unwrap();
+    let backup = raw(&backup_path);
+    assert_eq!(1, version(&backup));
+    assert_eq!(5, columns(&backup, "peers").len());
+    assert_eq!(
+        "Old",
+        backup
+            .query_row("SELECT body FROM messages", [], |r| r.get::<_, String>(0))
+            .unwrap()
+    );
     let db = raw(&temp.db());
     assert_eq!(3, version(&db));
     assert_eq!(
@@ -205,7 +218,7 @@ fn version_one_database_migrates_with_rows_intact() {
 }
 
 #[test]
-fn older_version_two_requires_migration_and_preserves_messages() {
+fn older_version_two_upgrades_on_open_and_preserves_messages() {
     let temp = Temp::new();
     let store = store(&temp, &["alice", "bob"]);
     let request = store
@@ -219,11 +232,7 @@ fn older_version_two_requires_migration_and_preserves_messages() {
         )
         .unwrap();
     schema_two(&temp.db());
-    assert_eq!(
-        "database_migration_required",
-        code(Store::open(&temp.db(), false))
-    );
-    let reopened = Store::migrate(&temp.db()).unwrap();
+    let reopened = Store::open(&temp.db(), false).unwrap();
     assert_eq!(
         None,
         reopened
@@ -236,7 +245,7 @@ fn older_version_two_requires_migration_and_preserves_messages() {
     let db = raw(&temp.db());
     assert_eq!(3, version(&db));
     assert!(waits(&temp.db()).is_empty());
-    // Existing native peers remain usable after the explicit upgrade.
+    // Existing native peers remain usable after the automatic upgrade.
     db.execute(
         "INSERT INTO peers (name, harness, session_id, workspace, socket, url) VALUES (?, ?, ?, ?, ?, ?)",
         rusqlite::params![
@@ -486,7 +495,7 @@ fn migration_preserves_receipts_replies_sequence_and_retirement() {
 }
 
 #[test]
-fn invalid_legacy_references_roll_back_the_entire_migration() {
+fn invalid_legacy_references_fail_before_creating_backups() {
     let temp = Temp::new();
     let store = store(&temp, &["alice", "bob"]);
     store.save("alice", "bob", "Question", None, None).unwrap();
@@ -502,4 +511,5 @@ fn invalid_legacy_references_roll_back_the_entire_migration() {
     assert_eq!(before, fs::read(temp.db()).unwrap());
     assert_eq!(2, version(&raw(&temp.db())));
     assert!(!columns(&raw(&temp.db()), "peers").contains(&"delivery".into()));
+    assert!(!temp.path().join("mail.sqlite3.backups").exists());
 }

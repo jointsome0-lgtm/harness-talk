@@ -14,6 +14,10 @@ Release checks completed:
 - Explicit migration from schema 1/2 preserves messages and receipts. Ordinary commands leave old databases unchanged, and old binaries refuse schema 3.
 - Package installation, automated tests and the documented [release checks](docs/releasing.md) pass, with unchecked live clients identified in the report.
 
+### 0.6.1 candidate: automatic mailbox upgrades
+
+Updating htalk should let an agent continue with its usual commands. On first use, a known legacy schema gets a verified, private SQLite backup and a transactional migration. Keep the explicit `migrate` command available for maintenance. A backup or migration failure must leave the old mailbox usable by its matching version; concurrent opens must produce one completed migration. Verify legacy data preservation, backup contents, failure rollback and commands already in flight before release. Include the upgrade behavior and recovery instructions in the release notes.
+
 ## 0.7: more local harness integrations
 
 Planned. Make the common CLI easy to use from coding and general-purpose agents. Add thin setup/invocation adapters first; add native notification adapters where the client's documented interface supports them. Assess a shared MCP interface if real integrations need it.
