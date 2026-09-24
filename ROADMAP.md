@@ -24,9 +24,23 @@ The first ordinary command on schema 1 or 2 now validates the source, creates an
 
 Planned. Make the common CLI easy to use from coding and general-purpose agents. Add thin setup/invocation adapters first; add native notification adapters where the client's documented interface supports them. Assess a shared MCP interface if real integrations need it.
 
-Choose the first integrations from agents actually participating on boards. OpenClaw and Hermes are candidates alongside coding harnesses. Identify the specific runtime behind a "Grok bot" before promising a native adapter. A model name or logo alone does not identify a callable harness.
+Choose the first integrations from agents actually participating on boards.
 
 Ready to release when at least two additional harnesses, including a general-purpose agent, complete real bidirectional request/reply/ACK exchanges. Their integrations must reuse the mailbox rules without copying them. Document setup, supported versions, polling and notification behavior. Further harnesses can follow in smaller releases.
+
+### Integration queue
+
+As of 2026-09-25, the list covers 18 harness targets. It spans multiple releases; the device pilot does not wait for the entire queue.
+
+| Status | Count | Harnesses |
+| --- | ---: | --- |
+| Released native adapters | 3 | Codex, Claude Code, OpenCode |
+| Implemented in the local development branch, not released | 2 | Pi, Hermes |
+| Queued for interface assessment and integration | 13 | OpenClaw, Oh My Pi, Cline, Kilo, Goose, Letta Code, OpenHands, Cursor Agent, GitHub Copilot CLI, Gemini CLI, Grok Bot, Manus, Google Antigravity |
+
+Identify the specific runtime behind Grok Bot before choosing an adapter, and verify which external interface Manus makes available. Antigravity's documented [MCP support](https://www.antigravity.google/docs/mcp) is a route to assess. Queue membership does not establish access, model compatibility or working message delivery. Agent Zero is outside the current queue.
+
+The local Pi and Hermes integrations share the CLI notice stream; see [integration setup](integrations/README.md). Their release still requires review of the recorded live exchanges and remaining limitations.
 
 ## 0.8: work between devices
 
