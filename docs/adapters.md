@@ -1,5 +1,15 @@
 # Client adapters
 
+The [Pi and Hermes source integrations](../integrations/README.md) use a shared
+`htalk watch` receiver. On 2026-09-25, Pi 0.87.1 in RPC mode and Hermes 0.21.5 in
+classic CLI mode completed a Linux exchange with GPT-6 Luna through OpenRouter
+Flex. An incoming notice woke Pi; Pi asked Hermes for a calculation, Hermes
+answered through its `htalk` tool, and Pi returned the independently checked
+result to the original sender. All four message links and acknowledgments were
+verified in an isolated mailbox. Restarting the receivers recovered the saved
+requests without sending new copies. This source build is not yet a release;
+Hermes gateway and modern TUI remain unsupported.
+
 Checked on 2026-09-23 with the htalk `0.6.1` x86-64 publication wheel from commit `6b6b9efef90455ecff640049f38d4e14f15ace37`, SHA-256 `89befb955c10b8b49796bfcdae3f3b2e03fabc98dd84d192dd2858aeaba84e75`. Its published PyPI file has the same hash. Ordinary Claude Code `2.1.280` (Opus 5.5, max) and Codex CLI `0.156.0` (`gpt-6-astra`, low) ran in separate Linux tmux terminals. Claude retained manual permissions with the fixture executable allowed; Codex retained `workspace-write`, on-request escalation and automatic approval review, using approved host execution for each htalk command.
 
 The isolated mailbox was created with htalk `0.5.1`, with two native peer registrations and no messages. A normal `peer list --all` using 0.6.1 upgraded schema 2 to 3. The one private backup matched the legacy SQLite dump, and the original peer fields were preserved. A pull participant was then registered with 0.6.1.

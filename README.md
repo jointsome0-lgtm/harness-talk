@@ -6,6 +6,10 @@ For Linux and mutually trusted sessions under one OS account. Peer names identif
 
 The [roadmap](ROADMAP.md) tracks the planned releases and their completion criteria.
 
+This checkout also includes [Pi and Hermes receivers](integrations/README.md)
+for existing sessions, using a shared `htalk watch` stream. They require a source
+build until the next release.
+
 > [Version 0.6.1 is released](https://github.com/jointsome0-lgtm/harness-talk/releases/tag/v0.6.1). Older mailboxes now back up and migrate on first use; see [migration and recovery](docs/reference.md#database-and-peers).
 
 ## Install and share a database

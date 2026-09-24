@@ -1,0 +1,3 @@
+name: htalk-notice
+version: "0.1.0"
+description: Receive local htalk mail in the Hermes classic CLI

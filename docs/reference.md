@@ -86,6 +86,24 @@ For repeatable automation, generate and retain a UUID before `send --id UUID`. I
 
 Deduplication depends on the saved message in the selected database. A different mailbox or a restored backup that lacks that message cannot recognize the earlier request, so the same ID can create a new message. Reconcile the earlier exchange before retrying after a database replacement or restore.
 
+## Notice stream
+
+`htalk --as NAME watch` emits JSON lines for a harness extension. It first emits
+`{"event":"ready","peer":"NAME"}`, then `message` events with `id`, `seq` and
+`notification`. The notification contains a copyable `show` command and the same
+peer-input boundary used by native adapters, without the peer's body.
+
+It reads all open inbox pages and polls locally once per second. Each ID appears
+once in that process; restarting replays still-open work. It neither acknowledges
+messages nor changes notification receipts. Transient SQLite busy errors retry
+the read. Other errors produce the usual error JSON and stop; SIGINT exits 130.
+Closing the receiving pipe also stops the watcher, including while idle.
+
+Use one receiver per peer. An emitted event proves only that a notice was written
+to the pipe. The receiving harness still has to queue it and the agent has to read,
+answer and acknowledge through the existing CLI. See the [Pi and Hermes
+setup](../integrations/README.md) for session lifecycle and recovery behavior.
+
 ## Exit codes
 
 | Code | Meaning |

@@ -280,6 +280,13 @@ pub fn command() -> Command {
                 )
         )
         .subcommand(
+            Command::new("watch")
+                .disable_help_subcommand(true)
+                .about("Stream incoming message notices as JSON lines until interrupted.")
+                .long_about("Emit ready, then a message event for each open inbox item. Polls locally without model calls. Reading changes no acknowledgments or delivery receipts.")
+                .after_help("Example: htalk --as bob watch\nUse for a harness extension that queues notices into its current session.\nEach event contains an id and notification text, not the peer's message body.\nOpen messages appear once per watcher; restarting replays unfinished work.\nAlways show the current message before acting. Run one receiver per peer.")
+        )
+        .subcommand(
             Command::new("sent")
                 .disable_help_subcommand(true)
                 .about("List outgoing messages and recover their IDs.")

@@ -1,7 +1,7 @@
 use crate::{
     error::Error,
     guidance, identity,
-    model::{Delivery, Harness, NativeSession, Peer, SkipReason},
+    model::{Delivery, Harness, Message, NativeSession, Peer, SkipReason},
     notify, os,
     store::Store,
     validate,
@@ -11,7 +11,9 @@ use serde_json::{Value, json};
 use std::{
     env,
     io::{self, Write},
+    os::fd::AsRawFd,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
 struct Call {
@@ -333,6 +335,7 @@ fn execute_once(call: &mut Call, context: &mut Context) -> Result<(Value, i32), 
     }
     let mut attempted_notification = false;
     let mut value = match call.command.as_str() {
+        "watch" => return watch(store, own, &call.db),
         "send" | "reply" => {
             let body = if let Some(body) = &call.message_body {
                 body.clone()
@@ -656,7 +659,50 @@ fn failure(call: &Call, context: &Context, error: &Error) -> Value {
 fn output(value: &Value) -> io::Result<()> {
     let mut bytes = serde_json::to_vec(value)?;
     bytes.push(b'\n');
-    io::stdout().lock().write_all(&bytes)
+    let mut stdout = io::stdout().lock();
+    stdout.write_all(&bytes)?;
+    stdout.flush()
+}
+
+fn watch(store: &Store, peer: &Peer, db: &Path) -> Result<(Value, i32), Error> {
+    let mut after_seq = None;
+    output(&json!({"event":"ready", "peer":peer.name}))?;
+    loop {
+        if os::interrupted() {
+            return Err(Error::Interrupted);
+        }
+        // An unloaded/crashed extension closes its read end, even if no new
+        // mail arrives. Do not leave an idle watcher behind in that case.
+        let mut sink = libc::pollfd {
+            fd: io::stdout().as_raw_fd(),
+            events: 0,
+            revents: 0,
+        };
+        if unsafe { libc::poll(&mut sink, 1, 0) } > 0
+            && sink.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0
+        {
+            return Err(io::Error::from(io::ErrorKind::BrokenPipe).into());
+        }
+        let page = match store.inbox(&peer.name, 100, after_seq) {
+            Ok(page) => page,
+            Err(Error::Db(rusqlite::Error::SqliteFailure(e, _)))
+                if e.code == rusqlite::ErrorCode::DatabaseBusy =>
+            {
+                std::thread::sleep(Duration::from_secs(1));
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        for value in page.messages {
+            let message: Message = serde_json::from_value(value)?;
+            output(&json!({"event":"message", "id":message.row.id,
+                "seq":message.row.seq, "notification":notify::notification(peer, &message, db)}))?;
+            after_seq = Some(message.row.seq);
+        }
+        if page.omitted == 0 {
+            std::thread::sleep(Duration::from_secs(1));
+        }
+    }
 }
 
 pub fn main() -> i32 {
