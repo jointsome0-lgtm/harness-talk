@@ -9,19 +9,23 @@ Hermes queue those notices; OpenClaw and Agent Zero coalesce them into an inbox
 wake. Each adapter uses the same CLI for outgoing work. They do not choose a
 model, store credentials, acknowledge mail or launch another agent.
 
-This requires a build of this checkout; the released htalk 0.6.1 does not yet
-include `watch`. Adapter files are in the source checkout and source archive,
-not installed automatically by the binary wheel.
+These receivers require htalk 0.7.0 or newer. Adapter files are in the matching
+source archive or checkout, not installed automatically by the binary wheel.
+The wheel provides the executable; using it does not require a Rust build.
 
 ## Shared setup
 
-Build htalk with `cargo build --release --locked`. In each participant's shell,
-put that executable on `PATH` and select the same mailbox:
+Install htalk following the [main instructions](../README.md#install-and-share-a-database).
+Obtain the adapter files from the same version's source archive on
+[PyPI](https://pypi.org/project/harness-talk/#files), or check out its `vVERSION`
+Git tag. Set `HTALK_SOURCE` to that extracted archive or checkout. In each
+participant's shell, select the installed executable and the same mailbox:
 
 ```sh
 export HTALK_SOURCE=/absolute/path/to/harness-talk
-export PATH="$HTALK_SOURCE/target/release:$PATH"
+export HTALK_BIN="$(command -v htalk)"
 export HTALK_DB=/absolute/shared/directory/mail.sqlite3
+htalk --version
 htalk peer add pi-worker --harness pi --delivery pull
 htalk peer add hermes-worker --harness hermes --delivery pull
 ```
@@ -30,6 +34,12 @@ Register each peer once. Use a different name for each concurrently running
 agent. A name identifies a mailbox participant, not an authenticated user or a
 harness session ID. Some receivers follow the session's selected conversation;
 others bind to one conversation and stop when it changes. See each setup below.
+
+`HTALK_BIN` must be an absolute executable path. The agent's `PATH` and every
+MCP configuration must select that same installation. To test a release wheel,
+use its virtual environment's executable and adapters from that run's source
+archive; a checkout's `target/release` would test a different build. Developers
+can instead use a [source build](../docs/development.md).
 
 Agents use the same CLI for outgoing work. Give them this instruction in
 their normal session or workspace instructions:
@@ -203,7 +213,7 @@ that should receive mail, then restart Agent Zero:
 export HTALK_PEER=zero-worker
 export HTALK_CONTEXT=EXISTING_CHAT_ID
 export HTALK_DB=/absolute/shared/directory/mail.sqlite3
-export HTALK_BIN="$HTALK_SOURCE/target/release/htalk"
+export HTALK_BIN="$(command -v htalk)"
 ```
 
 The plugin starts when that chat is loaded. Enabling the plugin after the chat

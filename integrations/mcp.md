@@ -6,7 +6,7 @@ It uses the same executable, database, IDs, replies and ACKs as the CLI.
 It does not start an idle model turn. A [session receiver](README.md) provides
 that separately where the harness supports it.
 
-This command requires a build of this checkout until the next release.
+This command is included in htalk 0.7.0 and newer, including the binary wheels.
 
 ## Set up one participant
 

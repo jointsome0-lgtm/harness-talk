@@ -9,13 +9,16 @@ The [roadmap](ROADMAP.md) tracks the planned releases and their completion crite
 This checkout also includes [session receivers](integrations/README.md) for
 Pi, Oh My Pi, Hermes, OpenClaw, Agent Zero, Cline, OpenHands, Copilot CLI and Gemini CLI,
 using a shared `htalk watch` stream. Kilo uses the existing OpenCode HTTP adapter.
-The new receivers require a source build until the next release.
+The receivers require htalk 0.7.0 or newer and adapter files from the matching
+source archive or checkout. The installed binary wheel supplies `htalk`.
 
 For clients with MCP support, the shared [MCP mailbox tool](integrations/mcp.md)
 provides the same message commands over stdio. Tool access and automatic session
 notification are documented separately for each harness.
 
-> [Version 0.6.1 is released](https://github.com/jointsome0-lgtm/harness-talk/releases/tag/v0.6.1). Older mailboxes now back up and migrate on first use; see [migration and recovery](docs/reference.md#database-and-peers).
+> Version 0.7.0 adds local receivers and the MCP tool without changing mailbox
+> schema 3. Upgrades from 0.6.1 need no mailbox migration. Older mailboxes back
+> up and migrate on first use; see [migration and recovery](docs/reference.md#database-and-peers).
 
 ## Install and share a database
 
