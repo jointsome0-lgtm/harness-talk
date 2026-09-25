@@ -93,14 +93,14 @@ These rows do not establish that every client can use every model provider.
 | Harness | Configuration | Highest completed native check |
 | --- | --- | --- |
 | Oh My Pi 18.3.0 | Project `mcp.json` or `.mcp.json`, shape above | Four acknowledged messages exchanged with Pi on Luna/Flex in RPC mode; an ordinary terminal separately passed an idle/busy notice exchange using a local canned provider |
-| Cline 3.0.65 | `cline mcp install htalk --transport stdio -- /absolute/path/to/htalk --db /absolute/mail.sqlite3 --as cline-worker mcp` | Native Cline Core 0.0.86 completed show/ACK/reply on Luna/Flex; after an upstream error, a new SDK session handled the same saved request without resending it. Ordinary TUI wake is unverified |
-| Kilo 7.7.9 | `kilo.json`, shape below | Existing OpenCode adapter submitted the notice; the same session completed show/ACK/reply on Luna/Flex after a local permission-configuration correction |
+| Cline 3.0.65 | `cline mcp install htalk --transport stdio -- /absolute/path/to/htalk --db /absolute/mail.sqlite3 --as cline-worker mcp` | [Hub receiver](README.md#cline) passed idle/busy native TUI MCP exchanges with a canned provider and a separate normal-exit check. The prior Luna/Flex exchange used Core 0.0.86 SDK |
+| Kilo 7.7.9 | `kilo.json`, shape below | [Ordinary attached TUI](README.md#kilo) passed queued delivery and native MCP handling of two saved requests with a canned provider. A separate same-session Luna/Flex exchange completed earlier |
 | Goose 1.52.0 | Stdio extension, command below | Retained native ACP session woke from a watch notice and completed show/ACK/reply on Luna/Flex |
-| Letta Code 0.33.0 | Local agent MCP server settings, shape below | Native headless session completed show/ACK/reply on Luna/Flex through Bash and Letta's own MCP CLI; ordinary TUI wake is unverified |
-| OpenHands CLI/SDK 1.21.0 | `openhands mcp add htalk --transport stdio /absolute/path/to/htalk -- --db /absolute/mail.sqlite3 --as hands-worker mcp` | Retained native SDK conversation completed show/ACK/reply on Luna/Flex and finished normally |
+| Letta Code 0.33.0 | Local agent MCP server settings, shape below | Native headless session completed show/ACK/reply on Luna/Flex through Bash and Letta's own MCP CLI. The ordinary TUI mod-send check persisted history but did not display its turn |
+| OpenHands CLI 1.16.0 / SDK 1.21.0 | `openhands mcp add htalk --transport stdio /absolute/path/to/htalk -- --db /absolute/mail.sqlite3 --as hands-worker mcp` | [TUI launcher](README.md#openhands) passed idle/busy native MCP exchanges, visible answers and normal exit with a canned provider. A separate SDK conversation completed show/ACK/reply on Luna/Flex |
 | Cursor Agent 2026.09.23-86fc751 | `~/.cursor/mcp.json`, shape above | `mcp list-tools htalk` discovered `htalk(args)` |
-| GitHub Copilot CLI 1.0.88 | `~/.copilot/mcp-config.json`, shape above | Native headless session completed a request/reply/ACK exchange on Luna/Flex |
-| Gemini CLI 0.61.0 | `.gemini/settings.json` or user settings, shape above | Native noninteractive CLI completed show/ACK/reply on Luna/Flex through an external provider translator; normal finish and both ACKs verified. Idle TUI wake is unverified |
+| GitHub Copilot CLI 1.0.88 | `~/.copilot/mcp-config.json`, shape above | [Notification hooks](README.md#github-copilot-cli) passed idle/busy ordinary-TUI exchanges, rearming and normal exit with a canned provider. A separate headless session completed a request/reply/ACK exchange on Luna/Flex |
+| Gemini CLI 0.61.0 | `.gemini/settings.json` or user settings, shape above | [TUI launcher](README.md#gemini-cli) passed idle/busy native MCP exchanges, draft preservation and normal exit with a canned provider. A separate noninteractive CLI completed show/ACK/reply on Luna/Flex through an external provider translator |
 | Google Antigravity CLI 1.2.10 / Python SDK 0.1.18 | CLI: `~/.gemini/config/mcp_config.json`; SDK: `McpStdioServer`, below | SDK completed show/ACK/reply on Luna/Flex with the provider adaptation described below; the CLI only listed its configuration |
 
 Oh My Pi exposes MCP tools as devices. Write `{"args":[...]}` to
@@ -199,8 +199,15 @@ normally. Both messages were acknowledged. The first attempt had stopped at
 an overly strict test permission rule. After correcting that rule, a fresh
 local agent handled the same saved request without resending it or importing
 the earlier chat. This establishes recovery by mailbox ID, not resumption of
-the earlier agent. A separate headless process does not establish a safe wake
-route into an open TUI; no receiver for that UI is included here.
+the earlier agent.
+
+A separate ordinary-TUI check used a local canned provider and a Letta mod's
+`ctx.conversation.sendMessageStream`. The send persisted in the active
+conversation, but neither the input nor the answer appeared in the terminal,
+and the mod's turn events did not fire. A later human turn saw that history.
+This backend method bypasses the visible TUI turn path; the installed mod guide
+also warns against overlapping a busy turn. No ordinary-TUI receiver is included
+until the host exposes a queue that preserves that path.
 
 Cursor, Copilot and Antigravity's tested listing commands read user settings;
 a project file alone in a plain directory was not sufficient in those checks.
@@ -226,13 +233,16 @@ The controller independently read and acknowledged the answer. No request
 was resent or old chat imported. The CLI finished normally. A model-free check
 also covered the scheduling flag set to true, false and absent. These checks
 trusted only disposable workspaces; they do not establish resumption of the
-earlier native session or automatic wake into an idle Gemini terminal.
+earlier native session. Ordinary idle/busy TUI delivery was checked separately
+through the [version-pinned launcher](README.md#gemini-cli) with a canned native
+Gemini-protocol endpoint.
 
 The OpenHands check used its installed `Conversation` and `Agent` SDK classes,
 the MCP htalk tool and its native finish tool. An external controller forwarded
 the notice into the existing idle conversation; the same conversation finished
-after replying. This does not establish an idle receiver for an ordinary
-OpenHands CLI process. Its model traffic used the provider's Responses API.
+after replying. Its model traffic used the provider's Responses API. Ordinary
+TUI delivery was checked separately through the version-pinned
+[receiver launcher](README.md#openhands), using a canned local provider.
 
 For Antigravity's Python SDK, add a stdio server to the existing agent config's
 `mcp_servers` list:

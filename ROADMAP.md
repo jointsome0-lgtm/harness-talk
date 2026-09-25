@@ -35,13 +35,15 @@ As of 2026-09-25, the list covers 19 harness targets. It spans multiple releases
 | Status | Count | Harnesses |
 | --- | ---: | --- |
 | Released native adapters | 3 | Codex, Claude Code, OpenCode |
-| Implemented locally with live exchanges, not released | 5 | Pi, Hermes, OpenClaw, Agent Zero, Oh My Pi |
-| Common MCP route, native checks and model exchanges in progress | 9 | Cline, Kilo, Goose, Letta Code, OpenHands, Cursor Agent, GitHub Copilot CLI, Gemini CLI, Google Antigravity |
+| Implemented locally with native session exchanges, not released | 10 | Pi, Hermes, OpenClaw, Agent Zero, Oh My Pi, Cline, Kilo, OpenHands, GitHub Copilot CLI, Gemini CLI |
+| Common MCP route; ordinary-session receiver or model route unresolved | 4 | Goose, Letta Code, Cursor Agent, Google Antigravity |
 | Cloud access and network route unresolved | 2 | Grok Bot, Manus |
 
-Identify the specific runtime behind Grok Bot before choosing an adapter, and verify which external interface Manus makes available. Antigravity's Python SDK completed a real MCP exchange with a provider adaptation; its CLI remains at configuration discovery. Gemini's native noninteractive CLI completed a Luna exchange through an external provider translator; idle terminal wake is unverified. See the [client verification limits](integrations/mcp.md#client-setup-and-verification). Agent Zero reuses the common CLI through its custom plugin interfaces. Queue membership does not establish access, model compatibility or working message delivery.
+Identify the specific runtime behind Grok Bot before choosing an adapter, and verify which external interface Manus makes available. Antigravity's Python SDK completed a real MCP exchange with a provider adaptation; its CLI remains at configuration discovery. Gemini's live Luna exchange used noninteractive mode and an external provider translator; its ordinary-TUI receiver passed separate canned-provider checks. See the [client verification limits](integrations/mcp.md#client-setup-and-verification). Agent Zero reuses the common CLI through its custom plugin interfaces. Queue membership does not establish access, model compatibility or working message delivery.
 
-The local Pi, Hermes, OpenClaw, Agent Zero and Oh My Pi integrations share the CLI notice stream; Oh My Pi reuses Pi's receiver unchanged. Its ordinary terminal passed a model-free idle/busy queue exchange; the live Luna exchange used RPC mode. See [integration setup](integrations/README.md). Release still requires review of the recorded exchanges and remaining limitations.
+The local receivers share the CLI notice stream; Oh My Pi reuses Pi's receiver unchanged. Cline attaches to the terminal's existing hub; Kilo reuses the OpenCode HTTP adapter; OpenHands and Gemini use version-pinned TUI launchers; Copilot uses native background-command completion hooks. Ordinary terminals passed canned-provider idle/busy checks and real MCP operations separately from the earlier Luna exchanges. These fixtures verify routing and tool execution, not autonomous model reasoning. See [integration setup](integrations/README.md).
+
+Goose, Letta and Antigravity still lack a usable input path into an idle ordinary terminal in the inspected versions. Letta's mod send persisted history but bypassed the UI and turn events. The [remaining interface requirements](integrations/README.md#clients-without-an-ordinary-session-receiver) distinguish those blockers from working MCP access. Release still requires review of the recorded exchanges and remaining limitations.
 
 ## Work between devices
 

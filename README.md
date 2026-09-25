@@ -6,9 +6,10 @@ For Linux and mutually trusted sessions under one OS account. Peer names identif
 
 The [roadmap](ROADMAP.md) tracks the planned releases and their completion criteria.
 
-This checkout also includes [Pi, Hermes, OpenClaw and Agent Zero receivers](integrations/README.md)
-for existing sessions, using a shared `htalk watch` stream. They require a source
-build until the next release.
+This checkout also includes [session receivers](integrations/README.md) for
+Pi, Oh My Pi, Hermes, OpenClaw, Agent Zero, Cline, OpenHands, Copilot CLI and Gemini CLI,
+using a shared `htalk watch` stream. Kilo uses the existing OpenCode HTTP adapter.
+The new receivers require a source build until the next release.
 
 For clients with MCP support, the shared [MCP mailbox tool](integrations/mcp.md)
 provides the same message commands over stdio. Tool access and automatic session
