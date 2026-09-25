@@ -55,10 +55,14 @@ The local receivers share the CLI notice stream; Oh My Pi reuses Pi's receiver u
 
 Goose, Letta and Antigravity still lack a usable input path into an idle ordinary terminal in the inspected versions. Letta's mod send persisted history but bypassed the UI and turn events. The [remaining interface requirements](integrations/README.md#clients-without-an-ordinary-session-receiver) distinguish those blockers from working MCP access. The 0.7.0 release records those limitations. A separate managed Goose ACP
 session is being explored in [issue #25](https://github.com/jointsome0-lgtm/harness-talk/issues/25).
-Its prototype preserved context across a clean restart with canned responses
-and refused to load interrupted work. Live-model restart verification remains
-incomplete after provider errors. The prototype is not part of 0.7.0; reuse for
-Letta or Antigravity requires independent session and permission checks.
+The [managed receiver candidate](integrations/goose.md) adds outgoing questions,
+incoming answers, passive status and explicit recovery into a fresh session.
+Native scripted-provider checks covered a delegated exchange across clean
+restart and refusal to reload interrupted work. Live-model restart verification
+remains incomplete after provider errors. The candidate is not part of 0.7.0.
+Letta's separate headless stream-json queue, same-conversation restart and
+interrupt have passed scripted-provider checks; its receiver is not implemented.
+Antigravity still requires independent session and permission checks.
 
 ## Work between devices
 
