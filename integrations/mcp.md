@@ -93,14 +93,14 @@ These rows do not establish that every client can use every model provider.
 | Harness | Configuration | Highest completed native check |
 | --- | --- | --- |
 | Oh My Pi 18.3.0 | Project `mcp.json` or `.mcp.json`, shape above | Tool mounted at `xd://mcp__htalk_htalk`; model exchange in progress |
-| Cline 3.0.65 | `cline mcp install htalk --transport stdio -- /absolute/path/to/htalk --db /absolute/mail.sqlite3 --as cline-worker mcp` | Native Cline Core 0.0.86 executed show/ACK/reply with a local model-response fixture |
-| Kilo 7.7.9 | `kilo.json`, shape below | Native `kilo mcp list` connected; tool call still unchecked |
+| Cline 3.0.65 | `cline mcp install htalk --transport stdio -- /absolute/path/to/htalk --db /absolute/mail.sqlite3 --as cline-worker mcp` | Native Cline Core 0.0.86 executed show/ACK/reply with a local model-response fixture; a Luna run read the request, then stopped on an upstream connection error |
+| Kilo 7.7.9 | `kilo.json`, shape below | Native MCP connected; the existing OpenCode adapter delivered a notification to the exact Kilo session |
 | Goose 1.52.0 | Stdio extension, command below | Retained native ACP session woke from a watch notice and completed show/ACK/reply on Luna/Flex |
 | Letta Code 0.33.0 | Local agent MCP server settings, shape below | Native MCP client listed the tool and read its test inbox |
-| OpenHands CLI 1.21.0 | `openhands mcp add htalk --transport stdio /absolute/path/to/htalk -- --db /absolute/mail.sqlite3 --as hands-worker mcp` | Native session SDK discovered the tool and read the test inbox |
+| OpenHands CLI/SDK 1.21.0 | `openhands mcp add htalk --transport stdio /absolute/path/to/htalk -- --db /absolute/mail.sqlite3 --as hands-worker mcp` | Retained native SDK conversation completed show/ACK/reply on Luna/Flex and finished normally |
 | Cursor Agent 2026.09.23-86fc751 | `~/.cursor/mcp.json`, shape above | `mcp list-tools htalk` discovered `htalk(args)` |
 | GitHub Copilot CLI 1.0.88 | `~/.copilot/mcp-config.json`, shape above | Native headless session completed a request/reply/ACK exchange on Luna/Flex |
-| Gemini CLI 0.61.0 | `.gemini/settings.json` or user settings, shape above | Native `mcp list` connected with folder trust disabled in the scratch profile |
+| Gemini CLI 0.61.0 | `.gemini/settings.json` or user settings, shape above | Native MCP SDK completed inbox/show/ACK/reply without a model; CLI `mcp list` connected |
 | Google Antigravity CLI 1.2.10 | `~/.gemini/config/mcp_config.json`, shape above | Native `mcp list` saw the config; connection/tool execution still unchecked |
 
 Oh My Pi exposes MCP tools as devices. Write `{"args":[...]}` to
@@ -122,6 +122,25 @@ Kilo uses a different JSON shape:
   }
 }
 ```
+
+Kilo 7.7.9 also accepts the existing [OpenCode HTTP notification
+adapter](../docs/opencode.md#transport). Start its loopback server with
+`kilo serve --hostname 127.0.0.1 --port 4097`, then use a session already
+created in that server. Register that session once:
+
+```sh
+htalk peer add kilo-worker --harness opencode --session ses_REPLACE_WITH_REAL_ID \
+  --workspace /absolute/project --url http://127.0.0.1:4097
+htalk peer check kilo-worker
+```
+
+Here `opencode` selects the compatible notification adapter. The saved harness
+field and transport diagnostics retain that name. The peer name identifies the
+Kilo participant; no separate Kilo transport or storage rules are needed.
+Configure the MCP tool with the same peer and database. Health, exact
+session/workspace, idle status and notification acceptance were checked against
+Kilo itself. Automatic discovery of Kilo's saved local session database and
+password-protected Kilo servers remain unchecked.
 
 Goose accepts a stdio extension when starting the session:
 
@@ -157,6 +176,15 @@ Cursor, Copilot and Antigravity's tested listing commands read user settings;
 a project file alone in a plain directory was not sufficient in those checks.
 Gemini applies its normal folder-trust policy. Review and trust the intended
 project through the client before enabling a local executable there.
+The Gemini SDK check trusted only its disposable workspace, used the installed
+client's discovery and tool-invocation classes, and explicitly approved each
+synthetic operation. It did not run a Gemini model or alter user trust settings.
+
+The OpenHands check used its installed `Conversation` and `Agent` SDK classes,
+the MCP htalk tool and its native finish tool. An external controller forwarded
+the notice into the existing idle conversation; the same conversation finished
+after replying. This does not establish an idle receiver for an ordinary
+OpenHands CLI process. Its model traffic used the provider's Responses API.
 
 Grok Bot and Manus run in cloud environments. Their connector setup requires a
 separate authenticated network route; neither is verified by configuring a
