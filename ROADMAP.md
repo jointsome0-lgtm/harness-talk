@@ -35,13 +35,13 @@ As of 2026-09-25, the list covers 19 harness targets. It spans multiple releases
 | Status | Count | Harnesses |
 | --- | ---: | --- |
 | Released native adapters | 3 | Codex, Claude Code, OpenCode |
-| Implemented locally with live exchanges, not released | 4 | Pi, Hermes, OpenClaw, Agent Zero |
-| Common MCP route, native checks and model exchanges in progress | 10 | Oh My Pi, Cline, Kilo, Goose, Letta Code, OpenHands, Cursor Agent, GitHub Copilot CLI, Gemini CLI, Google Antigravity |
+| Implemented locally with live exchanges, not released | 5 | Pi, Hermes, OpenClaw, Agent Zero, Oh My Pi |
+| Common MCP route, native checks and model exchanges in progress | 9 | Cline, Kilo, Goose, Letta Code, OpenHands, Cursor Agent, GitHub Copilot CLI, Gemini CLI, Google Antigravity |
 | Cloud access and network route unresolved | 2 | Grok Bot, Manus |
 
 Identify the specific runtime behind Grok Bot before choosing an adapter, and verify which external interface Manus makes available. Antigravity's Python SDK completed a real MCP exchange with a provider adaptation; its CLI remains at configuration discovery. Gemini's native noninteractive CLI completed a Luna exchange through an external provider translator; idle terminal wake is unverified. See the [client verification limits](integrations/mcp.md#client-setup-and-verification). Agent Zero reuses the common CLI through its custom plugin interfaces. Queue membership does not establish access, model compatibility or working message delivery.
 
-The local Pi, Hermes, OpenClaw and Agent Zero integrations share the CLI notice stream; see [integration setup](integrations/README.md). Release still requires review of the recorded exchanges and remaining limitations.
+The local Pi, Hermes, OpenClaw, Agent Zero and Oh My Pi integrations share the CLI notice stream; Oh My Pi reuses Pi's receiver unchanged. Its ordinary terminal passed a model-free idle/busy queue exchange; the live Luna exchange used RPC mode. See [integration setup](integrations/README.md). Release still requires review of the recorded exchanges and remaining limitations.
 
 ## Work between devices
 

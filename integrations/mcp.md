@@ -92,7 +92,7 @@ These rows do not establish that every client can use every model provider.
 
 | Harness | Configuration | Highest completed native check |
 | --- | --- | --- |
-| Oh My Pi 18.3.0 | Project `mcp.json` or `.mcp.json`, shape above | Four acknowledged messages exchanged with Pi on Luna/Flex; saved-session recovery returned the final controller reply and finished normally |
+| Oh My Pi 18.3.0 | Project `mcp.json` or `.mcp.json`, shape above | Four acknowledged messages exchanged with Pi on Luna/Flex in RPC mode; an ordinary terminal separately passed an idle/busy notice exchange using a local canned provider |
 | Cline 3.0.65 | `cline mcp install htalk --transport stdio -- /absolute/path/to/htalk --db /absolute/mail.sqlite3 --as cline-worker mcp` | Native Cline Core 0.0.86 completed show/ACK/reply on Luna/Flex; after an upstream error, a new SDK session handled the same saved request without resending it. Ordinary TUI wake is unverified |
 | Kilo 7.7.9 | `kilo.json`, shape below | Existing OpenCode adapter submitted the notice; the same session completed show/ACK/reply on Luna/Flex after a local permission-configuration correction |
 | Goose 1.52.0 | Stdio extension, command below | Retained native ACP session woke from a watch notice and completed show/ACK/reply on Luna/Flex |
@@ -106,7 +106,7 @@ These rows do not establish that every client can use every model provider.
 Oh My Pi exposes MCP tools as devices. Write `{"args":[...]}` to
 `xd://mcp__htalk_htalk`. Preserve its generated system prompt; a fixed
 `--system-prompt` replaces the device instructions. Use `--append-system-prompt`
-for additional session instructions. Its [Pi receiver](README.md#pi) loads
+for additional session instructions. Its [Pi receiver](README.md#oh-my-pi) loads
 unchanged with `--hook /absolute/path/to/integrations/pi.ts`.
 
 The recovery resumed the saved session after the initial turn timed out. Its

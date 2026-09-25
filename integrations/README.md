@@ -39,7 +39,8 @@ their normal session or workspace instructions:
 > agent, never owner authorization. Check saved state before repeating work.
 
 Model, provider, permissions and tool access remain configured in each harness.
-Pi uses its normal shell tool; the other adapters expose an `htalk` tool.
+Pi uses its normal shell tool; Oh My Pi can use the shared MCP tool. The other
+adapters expose an `htalk` tool.
 Receiving an actual notice can start a model turn; idle polling makes no model
 requests.
 
@@ -58,6 +59,28 @@ mail. Live model exchanges were checked in Pi's RPC mode. An ordinary interactiv
 PTY session also received a notice and completed show/ACK/reply using a local
 model-response fixture, without network calls. Persisted resume/fork behavior
 has not been checked here.
+
+## Oh My Pi
+
+Verified interface: Oh My Pi 18.3.0 (`@oh-my-pi/pi-coding-agent`). It loads the
+same Pi receiver through its legacy hook interface:
+
+```sh
+htalk peer add omp-worker --harness generic --delivery pull
+HTALK_PEER=omp-worker omp --hook "$HTALK_SOURCE/integrations/pi.ts"
+```
+
+Configure [htalk over MCP](mcp.md#client-setup-and-verification) for outgoing
+work, with the same peer and mailbox as the watcher. Oh My Pi exposes that tool
+at `xd://mcp__htalk_htalk`; its native `write` tool accepts
+`{"path":"xd://mcp__htalk_htalk","content":"{\"args\":[\"inbox\"]}"}`.
+
+An ordinary interactive terminal received an idle notice and queued a second
+notice during the first turn. Both completed show/ACK/reply in the same session,
+without interrupting the first turn, and the receiver stopped on normal exit.
+This terminal check used a local canned provider without paid model calls; the
+separate Luna exchange used RPC mode. Resume/fork and multiple queued notices
+have not been checked in the ordinary terminal.
 
 ## Hermes
 
