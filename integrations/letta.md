@@ -5,7 +5,7 @@ stream interface. It receives htalk requests and answers in one persistent
 conversation. It requires Linux, Python 3.11 or later, and htalk 0.7.0 or later.
 It does not attach to an existing Letta terminal or use Letta Cloud.
 
-This adapter is under development and is not included in 0.7.0. Use a separate
+This adapter is included in the 0.8.0 source archive and checkout. Use a separate
 test mailbox until its acceptance checks are complete. Keep `letta.py`,
 `managed_receiver.py` and `letta/htalk.ts` together in the source checkout.
 Goose and Letta share the notice, approval and recovery loop; mailbox commands

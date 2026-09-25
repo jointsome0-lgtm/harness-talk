@@ -30,6 +30,21 @@ are listed below; Kilo reuses the OpenCode HTTP adapter.
 canned model fixtures, recovery and unavailable client runtimes. Schema 3 is
 unchanged from 0.6.1; older schemas retain automatic backup and migration.
 
+## 0.8: managed native sessions
+
+Release scope: separate persistent Goose ACP, Letta Code and Antigravity SDK
+sessions, implemented in [PR #27](https://github.com/jointsome0-lgtm/harness-talk/pull/27),
+[PR #28](https://github.com/jointsome0-lgtm/harness-talk/pull/28),
+[PR #29](https://github.com/jointsome0-lgtm/harness-talk/pull/29), and
+[PR #30](https://github.com/jointsome0-lgtm/harness-talk/pull/30).
+They share a notice loop, an optional owner task bound by its exact contents,
+clean native-session restart, and explicit recovery for interrupted work.
+Live Luna/Flex checks completed delegated exchanges with synthetic helpers,
+retained context across restart, and independently verified four linked ACKs.
+Antigravity requires the documented external provider adaptation for that
+model route. These sessions do not attach to ordinary TUI or IDE windows.
+Mailbox schema 3 and existing receiver routes are unchanged.
+
 ## More local harness integrations
 
 In progress. Make the common CLI easy to use from coding and general-purpose agents. Add thin setup/invocation adapters first; add native notification adapters where the client's documented interface supports them. The [shared MCP tool](integrations/mcp.md) now has real native callers; its mailbox behavior stays in the CLI.
@@ -46,35 +61,23 @@ As of 2026-09-25, the list covers 19 harness targets. It spans multiple releases
 | --- | ---: | --- |
 | Released native adapters | 3 | Codex, Claude Code, OpenCode |
 | Receiver routes released in 0.7.0 | 10 | Pi, Hermes, OpenClaw, Agent Zero, Oh My Pi, Cline, Kilo, OpenHands, GitHub Copilot CLI, Gemini CLI |
-| Common MCP route; ordinary-session receiver or model route unresolved | 4 | Goose, Letta Code, Cursor Agent, Google Antigravity |
+| Separate managed receiver routes in 0.8.0 | 3 | Goose, Letta Code, Google Antigravity SDK (provider adaptation required for Luna) |
+| Common MCP route; exact model route unresolved | 1 | Cursor Agent |
 | Cloud access and network route unresolved | 2 | Grok Bot, Manus |
 
 Identify the specific runtime behind Grok Bot before choosing an adapter, and verify which external interface Manus makes available. Antigravity's Python SDK completed a real MCP exchange with a provider adaptation. Its separate CLI stream and same-session restart passed scripted-provider checks, but the tested restricted CLI agent still exposed background-task control. Gemini's live Luna exchange used noninteractive mode and an external provider translator; its ordinary-TUI receiver passed separate canned-provider checks. See the [client verification limits](integrations/mcp.md#client-setup-and-verification). Agent Zero reuses the common CLI through its custom plugin interfaces. Queue membership does not establish access, model compatibility or working message delivery.
 
 The local receivers share the CLI notice stream; Oh My Pi reuses Pi's receiver unchanged. Cline attaches to the terminal's existing hub; Kilo reuses the OpenCode HTTP adapter; OpenHands and Gemini use version-pinned TUI launchers; Copilot uses native background-command completion hooks. Ordinary terminals passed canned-provider idle/busy checks and real MCP operations separately from the earlier Luna exchanges. These fixtures verify routing and tool execution, not autonomous model reasoning. See [integration setup](integrations/README.md).
 
-Goose, Letta and Antigravity still lack a usable input path into an idle ordinary terminal in the inspected versions. Letta's mod send persisted history but bypassed the UI and turn events. The [remaining interface requirements](integrations/README.md#clients-without-an-ordinary-session-receiver) distinguish those blockers from working MCP access. The 0.7.0 release records those limitations. A separate managed Goose ACP
-session is being explored in [issue #25](https://github.com/jointsome0-lgtm/harness-talk/issues/25).
-The [managed receiver candidate](integrations/goose.md) adds outgoing questions,
-incoming answers, passive status and explicit recovery into a fresh session.
-Native scripted-provider checks covered a delegated exchange across clean
-restart and refusal to reload interrupted work. A fresh Luna/Flex case also
-completed a delegated exchange across restart with an explicit owner task.
-The candidate is not part of 0.7.0.
-The [managed Letta candidate](integrations/letta.md) uses its native headless
-stream and a direct htalk mod tool. It shares the notice and recovery loop with
-Goose. Native scripted-provider checks covered delegated exchange across a
-clean restart, inherited locking, explicit recovery and denial of an
-unadvertised shell tool. A fresh Luna/Flex case completed the same exchange
-and refused changed or missing owner tasks before native startup.
-The [Antigravity SDK candidate](integrations/antigravity.md) reuses the same
-loop and explicitly forwards native resume and permission configuration.
-Its delegated exchange, same-conversation resume and explicit recovery passed
-native scripted-provider checks. A fresh Luna/Flex exchange also passed, with
-the documented external provider adaptation. All three managed sessions now
-share an optional owner task file whose exact contents are bound on restart.
-Their live checks used synthetic helper peers and retained the original task
-context across a clean native restart; package release checks remain separate.
+Goose, Letta and Antigravity still lack a usable input path into an idle ordinary
+terminal in the inspected versions. Letta's mod send persisted history but
+bypassed UI and turn events. The [remaining interface requirements](integrations/README.md#clients-without-an-ordinary-session-receiver)
+distinguish those blockers from the separate managed routes introduced in 0.8.0.
+See [Goose setup and recovery](integrations/goose.md),
+[Letta setup and recovery](integrations/letta.md), and
+[Antigravity SDK setup and provider limits](integrations/antigravity.md).
+Native scripted-provider checks cover locking and uncertain-work recovery;
+the live model checks and package checks are recorded separately.
 
 ## Work between devices
 

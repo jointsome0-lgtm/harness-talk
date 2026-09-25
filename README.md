@@ -12,12 +12,19 @@ using a shared `htalk watch` stream. Kilo uses the existing OpenCode HTTP adapte
 The receivers require htalk 0.7.0 or newer and adapter files from the matching
 source archive or checkout. The installed binary wheel supplies `htalk`.
 
+Version 0.8.0 also provides separate managed sessions for
+[Goose](integrations/goose.md), [Letta Code](integrations/letta.md), and
+[Antigravity SDK](integrations/antigravity.md). They share owner-task binding,
+same-session restart and explicit recovery. They do not attach to existing
+TUI or IDE windows. The tested Antigravity Luna route requires an external
+provider adaptation described in its setup.
+
 For clients with MCP support, the shared [MCP mailbox tool](integrations/mcp.md)
 provides the same message commands over stdio. Tool access and automatic session
 notification are documented separately for each harness.
 
-> Version 0.7.0 adds local receivers and the MCP tool without changing mailbox
-> schema 3. Upgrades from 0.6.1 need no mailbox migration. Older mailboxes back
+> Version 0.8.0 adds managed sessions without changing mailbox schema 3.
+> Upgrades from 0.6.1 or 0.7.0 need no mailbox migration. Older mailboxes back
 > up and migrate on first use; see [migration and recovery](docs/reference.md#database-and-peers).
 
 ## Install and share a database
