@@ -5,7 +5,7 @@ The executable is Rust. Python 3.11+ is used for package installation and the in
 ```sh
 cargo build --locked
 cargo test --locked
-python3 -B -m unittest discover -s tests -p test_cli_compat.py -v
+python3 -B -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
 The CLI suite uses `target/debug/htalk`, temporary databases, fake client executables, Unix sockets and a loopback HTTP server. It never falls back to an installed `htalk`. To test a specific executable, set `HTALK_TEST_COMMAND` to a JSON argument list starting with its absolute path.
@@ -13,6 +13,12 @@ The CLI suite uses `target/debug/htalk`, temporary databases, fake client execut
 Schema migration tests use synthetic version 1/2 fixtures and cover automatic first opens, backup contents and permissions, concurrent writers, and rollback on failure. Pull and mixed native/pull exchanges use isolated mailboxes. These checks do not migrate a working mailbox.
 
 The CLI suite covers registration, request/reply/ACK states, pagination, recovery, migration and native/pull exchanges. Rust tests cover storage races and adapter-specific identity, discovery and delivery failures. Keep a behavior in one layer when another test already exercises the same failure; retain separate tests for distinct races and transport boundaries.
+
+Two MCP cases exercise the same compiled executable through stdio: message
+exchange with pinned identity and saved-error reporting, and cancellation or
+client loss without duplicate writes or leftover children. They also check that
+terminal Ctrl-C preserves the server connection. Run these on a host that permits
+async signal/IPC handling; restricted sandboxes can prevent that handling.
 
 Check what each assertion protects for the caller before preserving it. Old Python behavior and a passing test do not establish a requirement. Compare JSON fields and values without requiring key order or spacing. Isolate invalid inputs unless error precedence itself affects recovery. Delivery outcomes must follow whether submission could have begun, not the exception class that happened to escape an older adapter.
 

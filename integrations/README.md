@@ -1,5 +1,8 @@
 # Session receivers
 
+For mailbox access through MCP, see the [shared tool and client setup](mcp.md).
+The receivers below add automatic notices to supported running sessions.
+
 These adapters connect an already running agent to the shared htalk mailbox.
 `htalk watch` owns inbox selection, pagination and per-message notices. Pi and
 Hermes queue those notices; OpenClaw and Agent Zero coalesce them into an inbox

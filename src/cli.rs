@@ -725,6 +725,28 @@ pub fn main() -> i32 {
             return code;
         }
     };
+    if matches.subcommand_name() == Some("mcp") {
+        let db = matches
+            .get_one::<String>("db")
+            .map(PathBuf::from)
+            .unwrap_or_else(default_db);
+        let peer = matches
+            .get_one::<String>("actor")
+            .cloned()
+            .or_else(|| env::var("HTALK_PEER").ok())
+            .unwrap_or_default();
+        if let Err(error) = validate::peer_name(&peer) {
+            eprintln!("htalk mcp requires --as NAME or HTALK_PEER: {error}");
+            return 2;
+        }
+        return match crate::mcp::run(db, peer) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("htalk mcp: {error}");
+                2
+            }
+        };
+    }
     let mut call = match Call::new(matches) {
         Ok(call) => call,
         Err(error) => {

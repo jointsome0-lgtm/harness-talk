@@ -41,9 +41,9 @@ jobs:
         if: matrix.python == '3.14'
         run: |
           export HTALK_TEST_COMMAND="$(python -c 'import json, shutil; print(json.dumps([shutil.which("htalk")]))')"
-          cp tests/compat_support.py tests/test_cli_compat.py "$RUNNER_TEMP/"
+          cp tests/compat_support.py tests/test_cli_compat.py tests/test_mcp.py "$RUNNER_TEMP/"
           cd "$RUNNER_TEMP"
-          python -B -m unittest test_cli_compat -v
+          python -B -m unittest test_cli_compat test_mcp -v
 
   msrv:
     runs-on: ubuntu-24.04

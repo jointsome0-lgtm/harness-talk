@@ -46,10 +46,19 @@ woke the agent, exposed the htalk tool prompt/schema and ended through the nativ
 response tool. Idle receivers made no model calls. A local wire capture checked
 Luna/Flex settings for chat, utility and vision; it made no external API request.
 
-The real Agent Zero/Pi model exchange remains pending. These checks do not
-establish WebUI/container installation, other operating systems or full startup
-with default plugins and embeddings. The pinned Agent Zero API also has a
+Agent Zero then completed controller → Agent Zero → Pi → Agent Zero → controller
+on Luna/Flex. All four messages and ACKs were checked independently; Pi returned
+272 for 16×17. The original model turn reached its deadline after saving the
+answer. A separate recovery of the saved chat ended the native turn with one
+remaining model call, without sending more messages or invoking Pi again.
+This establishes recovered completion, not an uninterrupted first-attempt pass.
+These checks do not establish WebUI/container installation, other operating
+systems or full startup with default plugins and embeddings. The pinned Agent Zero API also has a
 narrow concurrent pause race, documented in [setup](../integrations/README.md#agent-zero).
+
+The [common MCP interface](../integrations/mcp.md#client-setup-and-verification)
+records additional native client checks separately from automatic notification
+receivers and completed model exchanges.
 
 Checked on 2026-09-23 with the htalk `0.6.1` x86-64 publication wheel from commit `6b6b9efef90455ecff640049f38d4e14f15ace37`, SHA-256 `89befb955c10b8b49796bfcdae3f3b2e03fabc98dd84d192dd2858aeaba84e75`. Its published PyPI file has the same hash. Ordinary Claude Code `2.1.280` (Opus 5.5, max) and Codex CLI `0.156.0` (`gpt-6-astra`, low) ran in separate Linux tmux terminals. Claude retained manual permissions with the fixture executable allowed; Codex retained `workspace-write`, on-request escalation and automatic approval review, using approved host execution for each htalk command.
 

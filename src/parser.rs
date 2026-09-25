@@ -34,6 +34,10 @@ pub fn command() -> Command {
             .help("Your registered peer name; overrides HTALK_PEER. Without either, message commands use the peer registered for the Claude Code session running them, if recognized.")
         )
         .subcommand_required(true)
+        .subcommand(Command::new("mcp")
+            .about("Expose this peer's mailbox tools over MCP stdio.")
+            .long_about("Run one local MCP stdio server with a fixed database and peer. Set --as or HTALK_PEER. Register the peer before use. Tool calls reuse the ordinary CLI; this server does not wake an idle agent.")
+        )
         .subcommand(
             Command::new("peer")
                 .disable_help_subcommand(true)

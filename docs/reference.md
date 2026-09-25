@@ -2,6 +2,10 @@
 
 Start with the [first exchange](../README.md). Commands print JSON; `--help` describes their arguments. [Client adapters](adapters.md) document notification and discovery compatibility.
 
+`htalk mcp` is the exception to line-oriented CLI results: it runs the
+[MCP stdio server](../integrations/mcp.md), with one mailbox tool and a fixed
+peer identity. Model and provider settings remain in the client.
+
 ## Database and peers
 
 Choose one writable directory shared by the participants. SQLite writers need directory access for the journal as well as file access. The path is selected in this order:
