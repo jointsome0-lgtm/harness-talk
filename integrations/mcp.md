@@ -92,7 +92,7 @@ These rows do not establish that every client can use every model provider.
 
 | Harness | Configuration | Highest completed native check |
 | --- | --- | --- |
-| Oh My Pi 18.3.0 | Project `mcp.json` or `.mcp.json`, shape above | Pi receiver loaded; three acknowledged messages exchanged with Pi, but the final answer to the controller was not observed |
+| Oh My Pi 18.3.0 | Project `mcp.json` or `.mcp.json`, shape above | Four acknowledged messages exchanged with Pi on Luna/Flex; saved-session recovery returned the final controller reply and finished normally |
 | Cline 3.0.65 | `cline mcp install htalk --transport stdio -- /absolute/path/to/htalk --db /absolute/mail.sqlite3 --as cline-worker mcp` | Native Cline Core 0.0.86 completed show/ACK/reply on Luna/Flex; after an upstream error, a new SDK session handled the same saved request without resending it. Ordinary TUI wake is unverified |
 | Kilo 7.7.9 | `kilo.json`, shape below | Existing OpenCode adapter submitted the notice; the same session completed show/ACK/reply on Luna/Flex after a local permission-configuration correction |
 | Goose 1.52.0 | Stdio extension, command below | Retained native ACP session woke from a watch notice and completed show/ACK/reply on Luna/Flex |
@@ -108,6 +108,15 @@ Oh My Pi exposes MCP tools as devices. Write `{"args":[...]}` to
 `--system-prompt` replaces the device instructions. Use `--append-system-prompt`
 for additional session instructions. Its [Pi receiver](README.md#pi) loads
 unchanged with `--hook /absolute/path/to/integrations/pi.ts`.
+
+The recovery resumed the saved session after the initial turn timed out. Its
+watch notice started the turn without a separate prompt. OMP reused the original
+workspace's MCP configuration, so the reply reached the original mailbox while
+the recovery collector waited on a copy and timed out. Independent readback
+found the correlated answer there; the controller then acknowledged it.
+The exchange completed, but the copied-mailbox fixture did not pass. When
+resuming or copying a session, verify its effective MCP configuration and make
+the watcher and MCP tool use the same mailbox.
 
 Kilo uses a different JSON shape:
 
