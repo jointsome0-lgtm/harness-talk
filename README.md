@@ -6,7 +6,7 @@ For Linux and mutually trusted sessions under one OS account. Peer names identif
 
 The [roadmap](ROADMAP.md) tracks the planned releases and their completion criteria.
 
-This checkout also includes [Pi and Hermes receivers](integrations/README.md)
+This checkout also includes [Pi, Hermes and OpenClaw receivers](integrations/README.md)
 for existing sessions, using a shared `htalk watch` stream. They require a source
 build until the next release.
 

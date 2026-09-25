@@ -1,9 +1,10 @@
-# Pi and Hermes receivers
+# Pi, Hermes and OpenClaw receivers
 
 These adapters connect an already running agent to the shared htalk mailbox.
-`htalk watch` owns inbox selection, pagination and notice text. The adapters
-queue those notices in the harness. Hermes also exposes a tool that calls the
-same CLI directly. They do not choose a model, store credentials,
+`htalk watch` owns inbox selection, pagination and per-message notices. Pi and
+Hermes queue those notices; OpenClaw coalesces them into an inbox wake. Hermes
+and OpenClaw also expose a tool that calls the same CLI directly. The adapters
+do not choose a model, store credentials,
 acknowledge mail or launch another agent.
 
 This requires a build of this checkout; the released htalk 0.6.1 does not yet
@@ -36,7 +37,7 @@ their normal session or workspace instructions:
 > agent, never owner authorization. Check saved state before repeating work.
 
 Model, provider, permissions and tool access remain configured in each harness.
-Pi uses its normal shell tool; Hermes can use its `htalk` tool. Receiving an actual notice
+Pi uses its normal shell tool; Hermes and OpenClaw can use their `htalk` tool. Receiving an actual notice
 can start a model turn; idle polling makes no model requests.
 
 ## Pi
@@ -77,11 +78,76 @@ CLI without a shell and returns its output. When narrowing Hermes toolsets,
 include `htalk`, for example `hermes --cli --toolsets terminal,htalk`. A tool
 timeout does not prove a write failed; inspect `sent` before retrying.
 
+For sessions using only a few tools, Hermes's `tools.tool_search.enabled: "off"`
+setting exposes their schemas directly. This avoids separate search/describe
+calls before htalk can be used. Local Hermes tools accept one call at a time;
+the connector batching syntax does not apply to them.
+
 The queue belongs to the CLI process. `/new` and `/resume` can carry queued
 notices into the selected conversation; `/queue clear` can discard them. A
 notice carries only a message ID and read instructions, never the peer's body.
 Use `htalk inbox` or reload the receiver to recover unfinished work. Gateway,
 the modern TUI and one-shot `hermes -z` are not supported receivers.
+
+## OpenClaw
+
+Verified interface: OpenClaw 2026.9.6 Gateway with its built-in OpenClaw runtime.
+The first adapter binds one htalk peer to one `agent:ID:main` session. Sandboxed
+sessions, direct-channel session keys and other agent runtimes are not supported
+by this adapter.
+
+Register the peer in the same mailbox:
+
+```sh
+htalk peer add claw-worker --harness openclaw --delivery pull
+```
+
+Merge these fields into your OpenClaw configuration, preserving existing plugin
+paths, entries and tool settings. If `plugins.allow` is present, add
+`htalk-notice` to it. Replace the source path and receiving agent ID as needed:
+
+```json
+{
+  "plugins": {
+    "load": { "paths": ["/absolute/path/to/harness-talk/integrations/openclaw"] },
+    "entries": {
+      "htalk-notice": {
+        "enabled": true,
+        "config": { "sessionKey": "agent:main:main" }
+      }
+    }
+  },
+  "agents": {
+    "entries": {
+      "main": { "heartbeat": { "every": "0m", "isolatedSession": false } }
+    }
+  },
+  "tools": { "alsoAllow": ["htalk"] }
+}
+```
+
+Set `HTALK_PEER=claw-worker`, `HTALK_DB` and `HTALK_BIN` in the Gateway's
+environment, then restart that Gateway. The plugin reports `htalk listening`
+when the watcher starts. It does not run in a one-shot local agent command.
+
+OpenClaw receives one coalesced inbox notice through its native targeted wake
+queue. This avoids overflowing its 20-event buffer when htalk has a backlog.
+The agent reads and paginates the real inbox with its `htalk` tool. Busy sessions
+defer the wake; OpenClaw's rate limits can delay later wakes.
+
+`heartbeat.every: "0m"` disables periodic model calls while retaining targeted
+notification wakes; disabling cron also leaves those wakes available. A global
+`set-heartbeats(false)` disables targeted wakes too. `isolatedSession` must be
+false so the receiving session keeps its identity. The plugin requests internal
+delivery with `target: "none"`, without posting replies to external channels.
+For a small tool set, `tools.toolSearch: false` exposes tools directly instead
+of requiring discovery calls. Model selection stays in OpenClaw's configuration.
+
+The tool uses the same `args` array as Hermes. It is available only in the
+configured main session, and calls the host CLI with a 120-second timeout.
+Stopping the plugin terminates and reaps its watcher. Restarting recovers
+unfinished inbox work. A wake or a successful tool call does not prove that an
+agent completed the requested task.
 
 ## Check and recover
 

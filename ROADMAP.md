@@ -30,17 +30,17 @@ Ready to release when at least two additional harnesses, including a general-pur
 
 ### Integration queue
 
-As of 2026-09-25, the list covers 18 harness targets. It spans multiple releases; the device pilot does not wait for the entire queue.
+As of 2026-09-25, the list covers 19 harness targets. It spans multiple releases; the device pilot does not wait for the entire queue. Pi/Hermes and OpenClaw have completed local exchanges. Agent Zero is next.
 
 | Status | Count | Harnesses |
 | --- | ---: | --- |
 | Released native adapters | 3 | Codex, Claude Code, OpenCode |
-| Implemented in the local development branch, not released | 2 | Pi, Hermes |
-| Queued for interface assessment and integration | 13 | OpenClaw, Oh My Pi, Cline, Kilo, Goose, Letta Code, OpenHands, Cursor Agent, GitHub Copilot CLI, Gemini CLI, Grok Bot, Manus, Google Antigravity |
+| Implemented in the local development branch, not released | 3 | Pi, Hermes, OpenClaw |
+| Queued for interface assessment and integration | 13 | Agent Zero, Oh My Pi, Cline, Kilo, Goose, Letta Code, OpenHands, Cursor Agent, GitHub Copilot CLI, Gemini CLI, Grok Bot, Manus, Google Antigravity |
 
-Identify the specific runtime behind Grok Bot before choosing an adapter, and verify which external interface Manus makes available. Antigravity's documented [MCP support](https://www.antigravity.google/docs/mcp) is a route to assess. Queue membership does not establish access, model compatibility or working message delivery. Agent Zero is outside the current queue.
+Identify the specific runtime behind Grok Bot before choosing an adapter, and verify which external interface Manus makes available. Antigravity's documented [MCP support](https://www.antigravity.google/docs/mcp) is a route to assess. Agent Zero should reuse the common CLI through its extension interfaces. Queue membership does not establish access, model compatibility or working message delivery.
 
-The local Pi and Hermes integrations share the CLI notice stream; see [integration setup](integrations/README.md). Their release still requires review of the recorded live exchanges and remaining limitations.
+The local Pi, Hermes and OpenClaw integrations share the CLI notice stream; see [integration setup](integrations/README.md). Their release still requires review of the recorded live exchanges and remaining limitations.
 
 ## 0.8: work between devices
 

@@ -1,0 +1,15 @@
+{
+  "id": "htalk-notice",
+  "name": "htalk notices",
+  "description": "Receive shared mailbox notices in one configured OpenClaw session.",
+  "activation": { "onStartup": true },
+  "contracts": { "tools": ["htalk"] },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["sessionKey"],
+    "properties": {
+      "sessionKey": { "type": "string", "pattern": "^agent:[a-z0-9_-]+:main$" }
+    }
+  }
+}

@@ -1,6 +1,6 @@
 # Client adapters
 
-The [Pi and Hermes source integrations](../integrations/README.md) use a shared
+The [Pi, Hermes and OpenClaw source integrations](../integrations/README.md) use a shared
 `htalk watch` receiver. On 2026-09-25, Pi 0.87.1 in RPC mode and Hermes 0.21.5 in
 classic CLI mode completed a Linux exchange with GPT-6 Luna through OpenRouter
 Flex. An incoming notice woke Pi; Pi asked Hermes for a calculation, Hermes
@@ -9,6 +9,32 @@ result to the original sender. All four message links and acknowledgments were
 verified in an isolated mailbox. Restarting the receivers recovered the saved
 requests without sending new copies. This source build is not yet a release;
 Hermes gateway and modern TUI remain unsupported.
+
+The reverse Hermes → Pi exchange also completed after resuming Hermes's saved
+session. The first attempt exhausted its verification budget after reading and
+acknowledging Pi's answer. Recovery exposed the htalk tool directly, prohibited
+new sends, and answered the original request without repeating the delegation.
+All four saved messages and ACKs were checked. This demonstrates recovered
+completion, not an uninterrupted first-attempt pass.
+
+OpenClaw 2026.9.6 then completed controller → OpenClaw → Pi → OpenClaw → controller
+using its built-in runtime, the same mailbox, and Luna/Flex. The Gateway's
+targeted notification wake started the configured main session with periodic
+heartbeat and cron disabled. All four messages, reply links, ACKs and the
+arithmetic result were checked. There were no model calls before the first
+message. After the saved exchange completed, the fixture's ten-request cap
+blocked further OpenClaw continuation. A separate model-free check verified
+plugin loading, a 25-message backlog, session-scoped tool access and watcher
+cleanup.
+
+A fresh Pi → OpenClaw → Pi exchange with direct tool schemas then completed
+within both request caps. Four correctly linked messages were acknowledged;
+Pi independently checked OpenClaw's answer. OpenClaw recorded native session
+status `done` and trajectory outcome `success`, with no guard rejection. The
+temporary runner incorrectly expected `completed`, so it reported a timeout;
+the saved mailbox and native trajectory established the successful result
+without rerunning the exchange. These checks do not cover other OpenClaw
+runtimes or operating systems.
 
 Checked on 2026-09-23 with the htalk `0.6.1` x86-64 publication wheel from commit `6b6b9efef90455ecff640049f38d4e14f15ace37`, SHA-256 `89befb955c10b8b49796bfcdae3f3b2e03fabc98dd84d192dd2858aeaba84e75`. Its published PyPI file has the same hash. Ordinary Claude Code `2.1.280` (Opus 5.5, max) and Codex CLI `0.156.0` (`gpt-6-astra`, low) ran in separate Linux tmux terminals. Claude retained manual permissions with the fixture executable allowed; Codex retained `workspace-write`, on-request escalation and automatic approval review, using approved host execution for each htalk command.
 
