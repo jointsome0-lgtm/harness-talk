@@ -94,9 +94,9 @@ These rows do not establish that every client can use every model provider.
 | --- | --- | --- |
 | Oh My Pi 18.3.0 | Project `mcp.json` or `.mcp.json`, shape above | Tool mounted at `xd://mcp__htalk_htalk`; model exchange in progress |
 | Cline 3.0.65 | `cline mcp install htalk --transport stdio -- /absolute/path/to/htalk --db /absolute/mail.sqlite3 --as cline-worker mcp` | Native Cline Core 0.0.86 executed show/ACK/reply with a local model-response fixture; a Luna run read the request, then stopped on an upstream connection error |
-| Kilo 7.7.9 | `kilo.json`, shape below | Native MCP connected; the existing OpenCode adapter delivered a notification to the exact Kilo session |
+| Kilo 7.7.9 | `kilo.json`, shape below | Existing OpenCode adapter submitted the notice; the same session completed show/ACK/reply on Luna/Flex after a local permission-configuration correction |
 | Goose 1.52.0 | Stdio extension, command below | Retained native ACP session woke from a watch notice and completed show/ACK/reply on Luna/Flex |
-| Letta Code 0.33.0 | Local agent MCP server settings, shape below | Native MCP client listed the tool and read its test inbox |
+| Letta Code 0.33.0 | Local agent MCP server settings, shape below | Native CLI MCP client completed show/ACK/reply without a model; a model-response fixture called that CLI through Bash |
 | OpenHands CLI/SDK 1.21.0 | `openhands mcp add htalk --transport stdio /absolute/path/to/htalk -- --db /absolute/mail.sqlite3 --as hands-worker mcp` | Retained native SDK conversation completed show/ACK/reply on Luna/Flex and finished normally |
 | Cursor Agent 2026.09.23-86fc751 | `~/.cursor/mcp.json`, shape above | `mcp list-tools htalk` discovered `htalk(args)` |
 | GitHub Copilot CLI 1.0.88 | `~/.copilot/mcp-config.json`, shape above | Native headless session completed a request/reply/ACK exchange on Luna/Flex |
@@ -139,7 +139,11 @@ field and transport diagnostics retain that name. The peer name identifies the
 Kilo participant; no separate Kilo transport or storage rules are needed.
 Configure the MCP tool with the same peer and database. Health, exact
 session/workspace, idle status and notification acceptance were checked against
-Kilo itself. Automatic discovery of Kilo's saved local session database and
+Kilo itself. Its live exchange continued the original session after correcting
+a local tool-permission error; it did not resend the saved request. Kilo's fresh
+configuration added a Bash permission, so the htalk-only test also needed an
+explicit `bash: "deny"`. Keep the tool permissions appropriate for your session.
+Automatic discovery of Kilo's saved local session database and
 password-protected Kilo servers remain unchecked.
 
 Goose accepts a stdio extension when starting the session:
@@ -171,6 +175,19 @@ not at the top level. The MCP part of that agent entry is:
 
 Configure the selected local agent through Letta's MCP settings. Letta Cloud
 cannot execute this local command. Keep the agent's existing model settings.
+The inspected local CLI exposes the configured server through these commands:
+
+```sh
+letta --backend local mcp tools htalk --agent AGENT_ID
+letta --backend local mcp call mcp__htalk__htalk \
+  --args '{"args":["inbox"]}' --agent AGENT_ID
+```
+
+In version 0.33.0 the tested model turn did not receive a direct MCP function;
+it invoked this command through its Bash tool. A complete native CLI exchange
+was checked separately without a model. Resuming a saved conversation in a
+separate headless process does not establish a safe wake route into its open
+TUI; no receiver for that UI is included here.
 
 Cursor, Copilot and Antigravity's tested listing commands read user settings;
 a project file alone in a plain directory was not sufficient in those checks.
