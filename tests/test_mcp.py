@@ -75,7 +75,18 @@ class MailboxMcp(HtalkCase):
         client = McpClient(self)
         tools = client.request("tools/list")["result"]["tools"]
         self.assertEqual(["htalk"], [tool["name"] for tool in tools])
-        self.assertEqual(["args"], tools[0]["inputSchema"]["required"])
+        schema = tools[0]["inputSchema"]
+        self.assertEqual(["args"], schema["required"])
+        self.assertEqual(["args"], list(schema["properties"]))
+        self.assertFalse(schema["additionalProperties"])
+        for metadata in (True, False):
+            result = client.request("tools/call", {"name": "htalk", "arguments": {
+                "args": ["inbox"], "wait_for_previous": metadata}})["result"]
+            self.assertFalse(result.get("isError", False))
+        for extra in ({"wait_for_previous": "true"}, {"wait_for_previous": None}, {"db": "other.db"}):
+            result = client.request("tools/call", {"name": "htalk", "arguments": {
+                "args": ["inbox"], **extra}})["result"]
+            self.assertTrue(result["isError"])
         self.assertFalse(client.call("send", "--help").get("isError", False))
         request_id = str(uuid.uuid4())
         for _ in range(2):

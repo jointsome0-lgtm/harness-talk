@@ -100,7 +100,7 @@ These rows do not establish that every client can use every model provider.
 | OpenHands CLI/SDK 1.21.0 | `openhands mcp add htalk --transport stdio /absolute/path/to/htalk -- --db /absolute/mail.sqlite3 --as hands-worker mcp` | Retained native SDK conversation completed show/ACK/reply on Luna/Flex and finished normally |
 | Cursor Agent 2026.09.23-86fc751 | `~/.cursor/mcp.json`, shape above | `mcp list-tools htalk` discovered `htalk(args)` |
 | GitHub Copilot CLI 1.0.88 | `~/.copilot/mcp-config.json`, shape above | Native headless session completed a request/reply/ACK exchange on Luna/Flex |
-| Gemini CLI 0.61.0 | `.gemini/settings.json` or user settings, shape above | Native MCP SDK completed inbox/show/ACK/reply without a model; CLI `mcp list` connected |
+| Gemini CLI 0.61.0 | `.gemini/settings.json` or user settings, shape above | Native noninteractive CLI completed show/ACK/reply on Luna/Flex through an external provider translator; normal finish and both ACKs verified. Idle TUI wake is unverified |
 | Google Antigravity CLI 1.2.10 / Python SDK 0.1.18 | CLI: `~/.gemini/config/mcp_config.json`; SDK: `McpStdioServer`, below | SDK completed show/ACK/reply on Luna/Flex with the provider adaptation described below; the CLI only listed its configuration |
 
 Oh My Pi exposes MCP tools as devices. Write `{"args":[...]}` to
@@ -206,12 +206,27 @@ Cursor, Copilot and Antigravity's tested listing commands read user settings;
 a project file alone in a plain directory was not sufficient in those checks.
 Gemini applies its normal folder-trust policy. Review and trust the intended
 project through the client before enabling a local executable there.
-The Gemini SDK check trusted only its disposable workspace, used the installed
-client's discovery and tool-invocation classes, and explicitly approved each
-synthetic operation. It did not run a Gemini model or alter user trust settings.
 Gemini CLI 0.61.0's custom base URL still uses the Gemini API client. The
 installed version has no native OpenRouter provider for GPT-6 Luna; changing
-the URL and model name alone does not provide that route.
+the URL and model name alone does not provide that route. The native CLI check
+used an external Gemini-to-OpenAI translator based on LiteLLM 1.102.1, with
+`GOOGLE_GEMINI_BASE_URL` pointing to its loopback endpoint. Model traffic used
+Luna/Flex; MCP used the direct htalk configuration above. The translator was a
+test fixture and is not part of htalk or a new package dependency.
+
+Gemini adds a boolean `wait_for_previous` to tool arguments and handles that
+ordering hint in its own scheduler before invoking MCP. htalk accepts and
+ignores this field; its advertised tool schema remains `args` only. Other
+unknown fields and non-boolean values are rejected. This prevents Gemini's
+client metadata from blocking otherwise valid mailbox commands.
+
+After this compatibility fix, a new CLI session read and acknowledged the
+original saved request, calculated its answer and replied to its ID.
+The controller independently read and acknowledged the answer. No request
+was resent or old chat imported. The CLI finished normally. A model-free check
+also covered the scheduling flag set to true, false and absent. These checks
+trusted only disposable workspaces; they do not establish resumption of the
+earlier native session or automatic wake into an idle Gemini terminal.
 
 The OpenHands check used its installed `Conversation` and `Agent` SDK classes,
 the MCP htalk tool and its native finish tool. An external controller forwarded

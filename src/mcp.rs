@@ -26,6 +26,10 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 struct Arguments {
     /// CLI arguments, e.g. ["inbox"], ["show","ID"], ["reply","ID","--message","answer"].
     args: Vec<String>,
+    // Gemini CLI forwards its client-side ordering hint after scheduling the call.
+    #[serde(default, rename = "wait_for_previous")]
+    #[schemars(skip)]
+    _wait_for_previous: bool,
 }
 
 #[derive(Clone)]
@@ -48,7 +52,7 @@ impl Mailbox {
     )]
     async fn htalk(
         &self,
-        Parameters(Arguments { args }): Parameters<Arguments>,
+        Parameters(Arguments { args, .. }): Parameters<Arguments>,
         ctx: RequestContext<RoleServer>,
     ) -> CallToolResult {
         // Parse with the existing CLI so flag values cannot bypass the scope.
