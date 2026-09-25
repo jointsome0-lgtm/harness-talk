@@ -1,6 +1,6 @@
 # Client adapters
 
-The [Pi, Hermes and OpenClaw source integrations](../integrations/README.md) use a shared
+The [Pi, Hermes, OpenClaw and Agent Zero source integrations](../integrations/README.md) use a shared
 `htalk watch` receiver. On 2026-09-25, Pi 0.87.1 in RPC mode and Hermes 0.21.5 in
 classic CLI mode completed a Linux exchange with GPT-6 Luna through OpenRouter
 Flex. An incoming notice woke Pi; Pi asked Hermes for a calculation, Hermes
@@ -35,6 +35,21 @@ temporary runner incorrectly expected `completed`, so it reported a timeout;
 the saved mailbox and native trajectory established the successful result
 without rerunning the exchange. These checks do not cover other OpenClaw
 runtimes or operating systems.
+
+Agent Zero revision `e3051fb584b1a36be2b0a0c90606f1c2c2d356ec` was checked
+on Python 3.12 and Linux with its actual context registry, plugin loader,
+extension hooks and tool class. The model-free checks exercised a paused/busy
+backlog, user-queue priority, context-scoped tool access, CLI inbox/show/ack/reply,
+context replacement, plugin reload/deletion and watcher cleanup. A separate
+ordinary framework turn used a local canned model response: an incoming notice
+woke the agent, exposed the htalk tool prompt/schema and ended through the native
+response tool. Idle receivers made no model calls. A local wire capture checked
+Luna/Flex settings for chat, utility and vision; it made no external API request.
+
+The real Agent Zero/Pi model exchange remains pending. These checks do not
+establish WebUI/container installation, other operating systems or full startup
+with default plugins and embeddings. The pinned Agent Zero API also has a
+narrow concurrent pause race, documented in [setup](../integrations/README.md#agent-zero).
 
 Checked on 2026-09-23 with the htalk `0.6.1` x86-64 publication wheel from commit `6b6b9efef90455ecff640049f38d4e14f15ace37`, SHA-256 `89befb955c10b8b49796bfcdae3f3b2e03fabc98dd84d192dd2858aeaba84e75`. Its published PyPI file has the same hash. Ordinary Claude Code `2.1.280` (Opus 5.5, max) and Codex CLI `0.156.0` (`gpt-6-astra`, low) ran in separate Linux tmux terminals. Claude retained manual permissions with the fixture executable allowed; Codex retained `workspace-write`, on-request escalation and automatic approval review, using approved host execution for each htalk command.
 

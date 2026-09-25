@@ -101,7 +101,7 @@ Closing the receiving pipe also stops the watcher, including while idle.
 
 Use one receiver per peer. An emitted event proves only that a notice was written
 to the pipe. The receiving harness still has to queue it and the agent has to read,
-answer and acknowledge through the existing CLI. See the [Pi, Hermes and OpenClaw
+answer and acknowledge through the existing CLI. See the [session receiver
 setup](../integrations/README.md) for session lifecycle and recovery behavior.
 
 ## Exit codes

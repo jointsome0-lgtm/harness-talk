@@ -30,17 +30,18 @@ Ready to release when at least two additional harnesses, including a general-pur
 
 ### Integration queue
 
-As of 2026-09-25, the list covers 19 harness targets. It spans multiple releases; the device pilot does not wait for the entire queue. Pi/Hermes and OpenClaw have completed local exchanges. Agent Zero is next.
+As of 2026-09-25, the list covers 19 harness targets. It spans multiple releases; the device pilot does not wait for the entire queue. Pi/Hermes and OpenClaw have completed local exchanges. Agent Zero's plugin and native lifecycle checks are complete; its live model exchange is pending.
 
 | Status | Count | Harnesses |
 | --- | ---: | --- |
 | Released native adapters | 3 | Codex, Claude Code, OpenCode |
-| Implemented in the local development branch, not released | 3 | Pi, Hermes, OpenClaw |
-| Queued for interface assessment and integration | 13 | Agent Zero, Oh My Pi, Cline, Kilo, Goose, Letta Code, OpenHands, Cursor Agent, GitHub Copilot CLI, Gemini CLI, Grok Bot, Manus, Google Antigravity |
+| Implemented locally with live exchanges, not released | 3 | Pi, Hermes, OpenClaw |
+| Implemented locally, live model exchange pending | 1 | Agent Zero |
+| Queued for interface assessment and integration | 12 | Oh My Pi, Cline, Kilo, Goose, Letta Code, OpenHands, Cursor Agent, GitHub Copilot CLI, Gemini CLI, Grok Bot, Manus, Google Antigravity |
 
-Identify the specific runtime behind Grok Bot before choosing an adapter, and verify which external interface Manus makes available. Antigravity's documented [MCP support](https://www.antigravity.google/docs/mcp) is a route to assess. Agent Zero should reuse the common CLI through its extension interfaces. Queue membership does not establish access, model compatibility or working message delivery.
+Identify the specific runtime behind Grok Bot before choosing an adapter, and verify which external interface Manus makes available. Antigravity's documented [MCP support](https://www.antigravity.google/docs/mcp) is a route to assess. Agent Zero reuses the common CLI through its custom plugin interfaces. Queue membership does not establish access, model compatibility or working message delivery.
 
-The local Pi, Hermes and OpenClaw integrations share the CLI notice stream; see [integration setup](integrations/README.md). Their release still requires review of the recorded live exchanges and remaining limitations.
+The local Pi, Hermes, OpenClaw and Agent Zero integrations share the CLI notice stream; see [integration setup](integrations/README.md). Release still requires review of the recorded exchanges and remaining limitations.
 
 ## 0.8: work between devices
 
