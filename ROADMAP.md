@@ -49,7 +49,7 @@ As of 2026-09-25, the list covers 19 harness targets. It spans multiple releases
 | Common MCP route; ordinary-session receiver or model route unresolved | 4 | Goose, Letta Code, Cursor Agent, Google Antigravity |
 | Cloud access and network route unresolved | 2 | Grok Bot, Manus |
 
-Identify the specific runtime behind Grok Bot before choosing an adapter, and verify which external interface Manus makes available. Antigravity's Python SDK completed a real MCP exchange with a provider adaptation; its CLI remains at configuration discovery. Gemini's live Luna exchange used noninteractive mode and an external provider translator; its ordinary-TUI receiver passed separate canned-provider checks. See the [client verification limits](integrations/mcp.md#client-setup-and-verification). Agent Zero reuses the common CLI through its custom plugin interfaces. Queue membership does not establish access, model compatibility or working message delivery.
+Identify the specific runtime behind Grok Bot before choosing an adapter, and verify which external interface Manus makes available. Antigravity's Python SDK completed a real MCP exchange with a provider adaptation. Its separate CLI stream and same-session restart passed scripted-provider checks, but the tested restricted CLI agent still exposed background-task control. Gemini's live Luna exchange used noninteractive mode and an external provider translator; its ordinary-TUI receiver passed separate canned-provider checks. See the [client verification limits](integrations/mcp.md#client-setup-and-verification). Agent Zero reuses the common CLI through its custom plugin interfaces. Queue membership does not establish access, model compatibility or working message delivery.
 
 The local receivers share the CLI notice stream; Oh My Pi reuses Pi's receiver unchanged. Cline attaches to the terminal's existing hub; Kilo reuses the OpenCode HTTP adapter; OpenHands and Gemini use version-pinned TUI launchers; Copilot uses native background-command completion hooks. Ordinary terminals passed canned-provider idle/busy checks and real MCP operations separately from the earlier Luna exchanges. These fixtures verify routing and tool execution, not autonomous model reasoning. See [integration setup](integrations/README.md).
 
@@ -65,7 +65,10 @@ stream and a direct htalk mod tool. It shares the notice and recovery loop with
 Goose. Native scripted-provider checks covered delegated exchange across a
 clean restart, inherited locking, explicit recovery and denial of an
 unadvertised shell tool. Live-model verification remains a release gate.
-Antigravity still requires independent session and permission checks.
+The [Antigravity SDK candidate](integrations/antigravity.md) reuses the same
+loop and explicitly forwards native resume and permission configuration.
+Its delegated exchange, same-conversation resume and explicit recovery passed
+native scripted-provider checks. A live-model exchange remains before release.
 
 ## Work between devices
 
