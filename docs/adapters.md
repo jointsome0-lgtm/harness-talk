@@ -1,5 +1,50 @@
 # Client adapters
 
+Checked on 2026-09-25 with the htalk `0.7.0` x86-64 publication wheel from
+commit `c18c87b3c0b654f32e1dca127fdb1d8c2aba3a48`, SHA-256
+`f97968e1bb8dbca6b8e49dee39889f1e95fb74cf2ec3d6d6de9ebcf993baf232`.
+The wheel was installed in a fresh environment, and receiver files came from
+that publication run's source archive. All source and adapter files matched the
+commit. [Publication build](https://github.com/jointsome0-lgtm/harness-talk/actions/runs/36150459090).
+
+Ordinary Codex CLI 0.156.0 with GPT-6 Sol medium and Claude Code 2.1.282 with
+Opus 5.5 max completed both initiating directions in separate Linux terminals.
+Four native notices were consumed, all four messages were shown and acknowledged,
+and both correlated replies arrived without repeated sends. Both final inboxes
+were empty; the sessions closed and their fixture peers were retired. Codex
+retained its sandbox and automatic approval review, with approved host execution
+for notification access. Claude used manual permissions with the fixture
+executable allowed. ACK cleanup was `unavailable/codex_rpc_closed` for Codex and
+`unsupported/client_has_no_notification_removal` for Claude. These results do not
+establish notification removal.
+
+The same wheel completed native exchanges with local canned model responses in
+Pi 0.87.1, Oh My Pi 18.3.0, Hermes classic CLI 0.21.5, OpenClaw 2026.9.6, Cline
+3.0.65/Core 0.0.86, Kilo 7.7.9, OpenHands CLI 1.16.0/SDK 1.21.0, Copilot CLI
+1.0.88, Gemini CLI 0.61.0, and a separately controlled Goose 1.52.0 ACP session.
+The [OpenCode check](opencode.md) used its native server session. These checks
+verify client tool execution and mailbox behavior, not model reasoning.
+
+The fixtures used only synthetic mail. Pi, OMP, Cline and OpenHands permitted
+the known fixture actions automatically; Copilot used exact one-time approvals
+for its waiter and allowed the fixture MCP tool. Goose disabled default tools
+and mediated each htalk call. Normal approval behavior is a separate property.
+Hermes completed its agent turn, but its auxiliary title request hit the test
+provider's limit and the fixture had to terminate the CLI. OpenClaw completed
+its original saved request after a provider-fixture size rejection, without
+resending it. Copilot handled a request sent during a busy interval after that
+interval; admission before the first turn ended was not observed. Gemini kept
+an unsent draft. Owned fixture processes were stopped. Pi's first ACK cleanup
+result was not captured; its stored ACK and empty inbox were verified separately.
+
+Letta Code 0.33.0 passed native MCP discovery and a CLI tool call; Cursor Agent
+2026.09.23-86fc751 passed schema discovery only. Agent Zero and Antigravity's
+previous temporary runtimes were no longer installed for this wheel check.
+Their earlier source observations below remain separate from release-wheel
+verification. The managed Goose experiment is tracked in
+[issue #25](https://github.com/jointsome0-lgtm/harness-talk/issues/25) and is not
+shipped as a receiver.
+
 The [Pi, Hermes, OpenClaw and Agent Zero source integrations](../integrations/README.md) use a shared
 `htalk watch` receiver. On 2026-09-25, Pi 0.87.1 in RPC mode and Hermes 0.21.5 in
 classic CLI mode completed a Linux exchange with GPT-6 Luna through OpenRouter
@@ -7,8 +52,8 @@ Flex. An incoming notice woke Pi; Pi asked Hermes for a calculation, Hermes
 answered through its `htalk` tool, and Pi returned the independently checked
 result to the original sender. All four message links and acknowledgments were
 verified in an isolated mailbox. Restarting the receivers recovered the saved
-requests without sending new copies. This source build is not yet a release;
-Hermes gateway and modern TUI remain unsupported.
+requests without sending new copies. Those checks used the pre-release source build. Hermes gateway and modern TUI
+remain unsupported.
 
 The reverse Hermes → Pi exchange also completed after resuming Hermes's saved
 session. The first attempt exhausted its verification budget after reading and
