@@ -23,13 +23,15 @@ bodies and model text. A manual approval prompt shows the exact proposed call
 in the foreground terminal so you can decide whether to permit it.
 
 Register a peer with `--delivery pull`, as in the [shared setup](README.md#shared-setup).
-Use a new private directory for state, and an existing workspace:
+Use a new private directory for state, an existing workspace, and an
+[owner task file](README.md#owner-task-for-managed-sessions):
 
 ```sh
 python3 -B "$HTALK_SOURCE/integrations/goose.py" run \
   --state /absolute/private/goose-receiver \
   --db /absolute/mail.sqlite3 --peer goose-worker \
   --workspace /absolute/workspace \
+  --task-file /absolute/private/mail-task.txt \
   --htalk /absolute/path/to/htalk --goose /absolute/path/to/goose
 ```
 
@@ -130,8 +132,14 @@ status, refusal to load uncertain work, and explicit recovery into a different
 native session using the original pending message. A final native exchange
 confirmed that routine receiver JSON omits a private marker carried in mail.
 
-These scripted-provider checks prove routing and tool execution, not model
-reasoning. An earlier live Luna/Flex prototype completed its first task and
-loaded the same session with prior context, but its second task stopped on a
-provider error before reading its message. A complete live delegated exchange
-and restart check remains a release prerequisite for this adapter.
+A separate live Luna/Flex case completed the same delegated exchange with an
+explicit owner task. The helper's answer was withheld until Goose had resumed
+the same session and remained idle for two seconds without inference. The
+resumed model request retained the original context; Goose returned the correct
+sum and private marker, and all four linked rows were ACKed. Twelve model calls
+completed, and the owned processes exited. The helper was a synthetic test peer.
+
+An earlier live case sent its helper question but called `htalk wait` and hit
+the fixture's time limit. That unfinished case was preserved. The successful
+case used a new mailbox and task explicitly ending the turn after a question,
+as in the [shared task example](README.md#owner-task-for-managed-sessions).

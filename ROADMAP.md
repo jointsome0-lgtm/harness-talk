@@ -58,17 +58,23 @@ session is being explored in [issue #25](https://github.com/jointsome0-lgtm/harn
 The [managed receiver candidate](integrations/goose.md) adds outgoing questions,
 incoming answers, passive status and explicit recovery into a fresh session.
 Native scripted-provider checks covered a delegated exchange across clean
-restart and refusal to reload interrupted work. Live-model restart verification
-remains incomplete after provider errors. The candidate is not part of 0.7.0.
+restart and refusal to reload interrupted work. A fresh Luna/Flex case also
+completed a delegated exchange across restart with an explicit owner task.
+The candidate is not part of 0.7.0.
 The [managed Letta candidate](integrations/letta.md) uses its native headless
 stream and a direct htalk mod tool. It shares the notice and recovery loop with
 Goose. Native scripted-provider checks covered delegated exchange across a
 clean restart, inherited locking, explicit recovery and denial of an
-unadvertised shell tool. Live-model verification remains a release gate.
+unadvertised shell tool. A fresh Luna/Flex case completed the same exchange
+and refused changed or missing owner tasks before native startup.
 The [Antigravity SDK candidate](integrations/antigravity.md) reuses the same
 loop and explicitly forwards native resume and permission configuration.
 Its delegated exchange, same-conversation resume and explicit recovery passed
-native scripted-provider checks. A live-model exchange remains before release.
+native scripted-provider checks. A fresh Luna/Flex exchange also passed, with
+the documented external provider adaptation. All three managed sessions now
+share an optional owner task file whose exact contents are bound on restart.
+Their live checks used synthetic helper peers and retained the original task
+context across a clean native restart; package release checks remain separate.
 
 ## Work between devices
 

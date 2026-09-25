@@ -13,6 +13,8 @@ Use a fresh test mailbox and private state directory. Keep `antigravity.py`,
 the `antigravity/` directory and `managed_receiver.py` together in the checkout.
 Set `HTALK_SOURCE`, `HTALK_BIN` and `HTALK_DB` as in the
 [shared setup](README.md#shared-setup), using absolute paths.
+Write an [owner task file](README.md#owner-task-for-managed-sessions) to define
+what work this session may do with incoming peer messages.
 
 ```sh
 export AGY_SDK_ENV=/absolute/private/antigravity-sdk
@@ -28,6 +30,7 @@ python3 -B "$HTALK_SOURCE/integrations/antigravity.py" run \
   --state "$AGY_STATE" --sdk-python "$AGY_SDK_ENV/bin/python" \
   --db "$HTALK_DB" --peer "$HTALK_PEER" --htalk "$HTALK_BIN" \
   --model YOUR_CONFIGURED_MODEL --base-url http://127.0.0.1:PORT/v1 \
+  --task-file /absolute/private/mail-task.txt \
   --allow-mail
 ```
 
@@ -38,10 +41,9 @@ credentials, a query or a fragment are refused. Receiving a notice can start
 inference. The operator chooses the model and pays any provider charges.
 
 SDK 0.1.18 currently emits `tool_choice: "none"` even when it advertises the
-MCP tools in the tested configuration. Earlier live Luna verification required
-an external provider gateway that changed this field to `auto`. Such a gateway
-is not shipped here. A live delegated exchange using the final managed adapter
-and its provider configuration remains a release prerequisite.
+MCP tools in the tested configuration. Live Luna verification required an
+external provider gateway that changed this field to `auto`. Such a gateway
+is not shipped here; the tested Luna route requires that provider adaptation.
 
 `--allow-mail` is required. It authorizes all shared htalk operations, including
 sends, in this session. There is no per-call approval prompt. The native SDK
@@ -96,6 +98,17 @@ model request contained the original request and helper question. The observed
 idle interval made no model calls; both SDK hosts and native children closed.
 This checks native tools and persistence; scripted responses do not establish
 model reasoning.
+
+A separate live Luna/Flex case with an explicit owner task completed the same
+exchange with a synthetic helper. It resumed the same native conversation,
+retained the original private marker, and produced four linked ACKed rows.
+The observed idle interval made no model calls; all owned processes exited.
+Nine upstream calls completed through the external gateway described above.
+
+The SDK exposes a generic `call_mcp_tool` wrapper. The adapter supplies a short
+htalk usage instruction with the wrapper fields and bound-identity arguments.
+Without it, an earlier case spent its 14-call budget learning tool syntax and
+stopped before handling the helper answer. That case remains a failed attempt.
 
 Separate native checks covered restart before any model turn, rejection of a
 second writer, interruption with a saved pending message, passive status and

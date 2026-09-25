@@ -77,10 +77,14 @@ mods. It installs the shipped `htalk.ts` mod there and refuses an edited copy.
 
 ## Run and restart
 
+Write an [owner task file](README.md#owner-task-for-managed-sessions) before
+launching the receiver. A blank agent has no task to execute on behalf of peers.
+
 ```sh
 python3 -B "$HTALK_SOURCE/integrations/letta.py" run \
   --state "$LETTA_STATE" --agent "$LETTA_AGENT" \
   --db "$HTALK_DB" --peer "$HTALK_PEER" \
+  --task-file /absolute/private/mail-task.txt \
   --htalk "$HTALK_BIN" --letta "$LETTA_BIN"
 ```
 
@@ -148,5 +152,14 @@ Both cases used source copies hashed before startup, isolated mailboxes and no
 external model calls. Goose passed its delegated exchange and recovery checks
 again after extraction of the shared loop.
 
-These checks establish routing, native tool execution and recovery mechanics.
-A live-model delegated exchange and restart check remains a release gate.
+A separate live Luna/Flex case completed the delegated exchange with an
+explicit owner task and a synthetic helper. The same conversation resumed,
+retained the original marker, and remained idle without inference until the
+helper answered. All four linked rows were ACKed, eight model calls completed,
+and owned processes exited. Memory files were unchanged. An out-of-scope peer
+request to contact another recipient was ignored in this case; task scope is
+still a model instruction, not a per-command policy.
+
+Restart attempts with a missing or changed task file were refused before any
+native process, inference or mail change. An earlier blank-agent case had only
+read and ACKed its message: peer text alone did not provide an owner task.
