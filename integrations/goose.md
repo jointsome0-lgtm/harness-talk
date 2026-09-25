@@ -7,6 +7,8 @@ later. It creates a separate session and does not attach to an open Goose TUI.
 
 This adapter is under development and is not included in the 0.7.0 release.
 Use a separate test mailbox until its acceptance checks are complete.
+Keep `goose.py` and `managed_receiver.py` together in the source checkout.
+Goose and Letta use that shared notice, approval and recovery loop.
 
 ## Start
 

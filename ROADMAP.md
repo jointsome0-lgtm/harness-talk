@@ -60,8 +60,11 @@ incoming answers, passive status and explicit recovery into a fresh session.
 Native scripted-provider checks covered a delegated exchange across clean
 restart and refusal to reload interrupted work. Live-model restart verification
 remains incomplete after provider errors. The candidate is not part of 0.7.0.
-Letta's separate headless stream-json queue, same-conversation restart and
-interrupt have passed scripted-provider checks; its receiver is not implemented.
+The [managed Letta candidate](integrations/letta.md) uses its native headless
+stream and a direct htalk mod tool. It shares the notice and recovery loop with
+Goose. Native scripted-provider checks covered delegated exchange across a
+clean restart, inherited locking, explicit recovery and denial of an
+unadvertised shell tool. Live-model verification remains a release gate.
 Antigravity still requires independent session and permission checks.
 
 ## Work between devices
