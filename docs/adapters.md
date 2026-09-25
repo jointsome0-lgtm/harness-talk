@@ -25,16 +25,27 @@ Pi 0.87.1, Oh My Pi 18.3.0, Hermes classic CLI 0.21.5, OpenClaw 2026.9.6, Cline
 The [OpenCode check](opencode.md) used its native server session. These checks
 verify client tool execution and mailbox behavior, not model reasoning.
 
-The fixtures used only synthetic mail. Pi, OMP, Cline and OpenHands permitted
-the known fixture actions automatically; Copilot used exact one-time approvals
-for its waiter and allowed the fixture MCP tool. Goose disabled default tools
-and mediated each htalk call. Normal approval behavior is a separate property.
+The fixtures used only synthetic mail. Pi used `--no-approve`, OMP
+`--auto-approve`, Cline `--auto-approve true`, and OpenHands `--always-approve`.
+Copilot used exact one-time approvals for its waiter and allowed the fixture MCP
+tool. Goose disabled default tools and mediated each htalk call. Kilo initially
+denied Bash; its MCP phase denied all tools except `htalk_*`. Gemini trusted its
+scratch workspace and used a deny-all policy with a higher-priority allow rule
+for the htalk MCP tool. Hermes selected `--toolsets htalk` with tool search
+disabled; OpenClaw used the additive `tools.alsoAllow: ["htalk"]` with tool search
+disabled. Hermes and OpenClaw ran htalk without an interactive approval prompt,
+but these fixtures supplied no explicit approval or sandbox policy and did not
+establish that other tools were prohibited. Approval gates were not exercised
+by those two fixtures.
+
 Hermes completed its agent turn, but its auxiliary title request hit the test
 provider's limit and the fixture had to terminate the CLI. OpenClaw completed
 its original saved request after a provider-fixture size rejection, without
-resending it. Copilot handled a request sent during a busy interval after that
-interval; admission before the first turn ended was not observed. Gemini kept
-an unsent draft. Owned fixture processes were stopped.
+resending it. After enabling MCP, Kilo's fixture reintroduced the two saved
+notices into the same session to complete show/ACK/reply. It created no new
+mailbox requests; completion required this second phase. Copilot handled the
+request sent during its busy interval after the interval; admission before the
+first turn ended was not observed. Gemini kept an unsent draft. Owned fixture processes were stopped.
 
 The clients' own ACK outputs recorded these `notification_cleanup` results:
 
