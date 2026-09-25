@@ -20,6 +20,16 @@ Released as [0.6.1](https://github.com/jointsome0-lgtm/harness-talk/releases/tag
 
 The first ordinary command on schema 1 or 2 now validates the source, creates and verifies a private SQLite backup, and migrates in one transaction. The explicit `migrate` command remains available. Backup or migration failures stop the command; htalk never restores an old backup automatically. Checks covered legacy data preservation, backup contents, concurrent opens and failure rollback. The publication wheel also completed native exchanges after upgrading a mailbox created by 0.5.1. [Release notes](https://github.com/jointsome0-lgtm/harness-talk/releases/tag/v0.6.1) contain update commands and recovery limits.
 
+## 0.7: local receivers and MCP
+
+Released as [0.7.0](https://github.com/jointsome0-lgtm/harness-talk/releases/tag/v0.7.0)
+on 2026-09-25. Implementation: [PR #24](https://github.com/jointsome0-lgtm/harness-talk/pull/24).
+This release adds the shared MCP tool and watch stream. Ten receiver routes
+are listed below; Kilo reuses the OpenCode HTTP adapter.
+[Release checks](docs/adapters.md) distinguish completed exchanges,
+canned model fixtures, recovery and unavailable client runtimes. Schema 3 is
+unchanged from 0.6.1; older schemas retain automatic backup and migration.
+
 ## More local harness integrations
 
 In progress. Make the common CLI easy to use from coding and general-purpose agents. Add thin setup/invocation adapters first; add native notification adapters where the client's documented interface supports them. The [shared MCP tool](integrations/mcp.md) now has real native callers; its mailbox behavior stays in the CLI.
@@ -35,7 +45,7 @@ As of 2026-09-25, the list covers 19 harness targets. It spans multiple releases
 | Status | Count | Harnesses |
 | --- | ---: | --- |
 | Released native adapters | 3 | Codex, Claude Code, OpenCode |
-| Implemented locally with native session exchanges, not released | 10 | Pi, Hermes, OpenClaw, Agent Zero, Oh My Pi, Cline, Kilo, OpenHands, GitHub Copilot CLI, Gemini CLI |
+| Receiver routes released in 0.7.0 | 10 | Pi, Hermes, OpenClaw, Agent Zero, Oh My Pi, Cline, Kilo, OpenHands, GitHub Copilot CLI, Gemini CLI |
 | Common MCP route; ordinary-session receiver or model route unresolved | 4 | Goose, Letta Code, Cursor Agent, Google Antigravity |
 | Cloud access and network route unresolved | 2 | Grok Bot, Manus |
 
@@ -43,7 +53,12 @@ Identify the specific runtime behind Grok Bot before choosing an adapter, and ve
 
 The local receivers share the CLI notice stream; Oh My Pi reuses Pi's receiver unchanged. Cline attaches to the terminal's existing hub; Kilo reuses the OpenCode HTTP adapter; OpenHands and Gemini use version-pinned TUI launchers; Copilot uses native background-command completion hooks. Ordinary terminals passed canned-provider idle/busy checks and real MCP operations separately from the earlier Luna exchanges. These fixtures verify routing and tool execution, not autonomous model reasoning. See [integration setup](integrations/README.md).
 
-Goose, Letta and Antigravity still lack a usable input path into an idle ordinary terminal in the inspected versions. Letta's mod send persisted history but bypassed the UI and turn events. The [remaining interface requirements](integrations/README.md#clients-without-an-ordinary-session-receiver) distinguish those blockers from working MCP access. Release still requires review of the recorded exchanges and remaining limitations.
+Goose, Letta and Antigravity still lack a usable input path into an idle ordinary terminal in the inspected versions. Letta's mod send persisted history but bypassed the UI and turn events. The [remaining interface requirements](integrations/README.md#clients-without-an-ordinary-session-receiver) distinguish those blockers from working MCP access. The 0.7.0 release records those limitations. A separate managed Goose ACP
+session is being explored in [issue #25](https://github.com/jointsome0-lgtm/harness-talk/issues/25).
+Its prototype preserved context across a clean restart with canned responses
+and refused to load interrupted work. Live-model restart verification remains
+incomplete after provider errors. The prototype is not part of 0.7.0; reuse for
+Letta or Antigravity requires independent session and permission checks.
 
 ## Work between devices
 

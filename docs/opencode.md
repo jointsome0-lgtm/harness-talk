@@ -1,5 +1,20 @@
 # OpenCode sessions
 
+Checked on 2026-09-25 with the htalk 0.7.0 publication wheel, commit
+`c18c87b3c0b654f32e1dca127fdb1d8c2aba3a48`, SHA-256
+`f97968e1bb8dbca6b8e49dee39889f1e95fb74cf2ec3d6d6de9ebcf993baf232`.
+OpenCode 1.18.31 ran a native loopback server session with a local canned
+provider and only the fixture htalk MCP tool permitted. A saved request's HTTP
+notice started a turn; native show, ACK and reply calls produced the correlated
+answer. The controller read and acknowledged that answer. Both rows had ACKs,
+and the owned server process group was stopped. OpenCode's native ACK returned
+`notification_cleanup: unsupported` with
+`client_has_no_notification_removal`. The controller's ACK was verified in
+storage, but its cleanup output was not retained. Neither a stored ACK nor
+process shutdown proves native notice removal. This checks a server session,
+not attachment to an ordinary TUI or real model reasoning. The older checks
+below cover their stated versions and model routes.
+
 Checked on 2026-09-23 with the htalk `0.6.1` x86-64 publication wheel from commit `6b6b9efef90455ecff640049f38d4e14f15ace37`, SHA-256 `89befb955c10b8b49796bfcdae3f3b2e03fabc98dd84d192dd2858aeaba84e75`. Its published PyPI file has the same hash. A headless OpenCode `1.18.31` session used `opencode/muse-spark-1.3-contributor-free`, an isolated schema-3 mailbox and a loopback server. Built-in tools retained ordinary `ask` permissions, with six exact fixture helper commands allowed.
 
 OpenCode and a pull participant each initiated one request and received its correlated reply. All four messages were shown and acknowledged in separate commands, with each request acknowledged before its reply. Both native notices appeared once and led to the expected tool calls; neither pull message attempted a notification. Both final inboxes were empty, both peers were retired and the server exited. Native cleanup was `unsupported`; pull cleanup was `skipped/pull_only`. Nothing was resent or renotified. Live provider metadata listed zero prices and every recorded assistant message used the intended model with reported cost zero. This checks OpenCode ↔ pull on Linux.
