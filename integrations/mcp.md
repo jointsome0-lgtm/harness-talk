@@ -101,7 +101,7 @@ These rows do not establish that every client can use every model provider.
 | Cursor Agent 2026.09.23-86fc751 | `~/.cursor/mcp.json`, shape above | `mcp list-tools htalk` discovered `htalk(args)` |
 | GitHub Copilot CLI 1.0.88 | `~/.copilot/mcp-config.json`, shape above | Native headless session completed a request/reply/ACK exchange on Luna/Flex |
 | Gemini CLI 0.61.0 | `.gemini/settings.json` or user settings, shape above | Native MCP SDK completed inbox/show/ACK/reply without a model; CLI `mcp list` connected |
-| Google Antigravity CLI 1.2.10 | `~/.gemini/config/mcp_config.json`, shape above | Native `mcp list` saw the config; connection/tool execution still unchecked |
+| Google Antigravity CLI 1.2.10 / Python SDK 0.1.18 | CLI: `~/.gemini/config/mcp_config.json`; SDK: `McpStdioServer`, below | SDK completed show/ACK/reply on Luna/Flex with the provider adaptation described below; the CLI only listed its configuration |
 
 Oh My Pi exposes MCP tools as devices. Write `{"args":[...]}` to
 `xd://mcp__htalk_htalk`. Preserve its generated system prompt; a fixed
@@ -219,6 +219,40 @@ the notice into the existing idle conversation; the same conversation finished
 after replying. This does not establish an idle receiver for an ordinary
 OpenHands CLI process. Its model traffic used the provider's Responses API.
 
+For Antigravity's Python SDK, add a stdio server to the existing agent config's
+`mcp_servers` list:
+
+```python
+from google.antigravity.types import McpStdioServer
+
+htalk = McpStdioServer(
+    name="htalk",
+    command="/absolute/path/to/htalk",
+    args=["--db", "/absolute/mail.sqlite3", "--as", "agy-worker", "mcp"],
+    enabled_tools=["htalk"],
+)
+```
+
+Keep the agent's model configuration and add an appropriate tool policy, such
+as `policy.allow(htalk, ["htalk"])` from `google.antigravity.hooks.policy`.
+SDK 0.1.18 exposes the tool through `call_mcp_tool`: `ServerName` and `ToolName`
+are both `htalk`, and `Arguments` is `{"args":[...]}`. Its wrapper also requires
+`toolSummary` and `toolAction`. The SDK supplies that wrapper schema to the
+model. A local canned endpoint first verified the native MCP tool calls.
+
+A real `Agent(LocalOpenAIAgentConfig(...))` turn then completed a Luna/Flex
+exchange through a bounded local provider gateway. That gateway supplied
+OpenRouter authentication and routing. SDK 0.1.18 sent `tool_choice: "none"`
+despite listing MCP tools, so the first model turn invoked nothing. Enabling
+the SDK's `FINISH` capability did not change that initial request. The gateway
+then changed `tool_choice` to `"auto"`, preserving messages and tool schemas.
+A fresh SDK session handled the same saved mailbox request, calculated its
+answer and completed show/ACK/reply with a normal finish. Both messages were
+acknowledged; no request was resent or old chat imported. This verifies the
+SDK with that provider adaptation. It does not establish a direct stock
+OpenRouter route, CLI/TUI tool execution or automatic wake. The provider
+gateway was a test fixture and is not part of htalk.
+
 Grok Bot and Manus run in cloud environments. Their connector setup requires a
 separate authenticated network route; neither is verified by configuring a
 local stdio server. Grok Build CLI is a different product and is not a substitute
@@ -232,4 +266,6 @@ Sources: [MCP Rust SDK](https://github.com/modelcontextprotocol/rust-sdk),
 [Cursor MCP](https://docs.cursor.com/context/model-context-protocol),
 [Copilot MCP](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers),
 [Gemini MCP](https://geminicli.com/docs/tools/mcp-server/),
-[Antigravity MCP](https://antigravity.google/docs/mcp).
+[Antigravity MCP](https://antigravity.google/docs/mcp),
+[Antigravity SDK MCP](https://antigravity.google/docs/sdk/mcp/),
+[Antigravity SDK local models](https://antigravity.google/docs/sdk/local-models/).

@@ -39,7 +39,7 @@ As of 2026-09-25, the list covers 19 harness targets. It spans multiple releases
 | Common MCP route, native checks and model exchanges in progress | 10 | Oh My Pi, Cline, Kilo, Goose, Letta Code, OpenHands, Cursor Agent, GitHub Copilot CLI, Gemini CLI, Google Antigravity |
 | Cloud access and network route unresolved | 2 | Grok Bot, Manus |
 
-Identify the specific runtime behind Grok Bot before choosing an adapter, and verify which external interface Manus makes available. Antigravity's documented [MCP support](https://www.antigravity.google/docs/mcp) is a route to assess. Agent Zero reuses the common CLI through its custom plugin interfaces. Queue membership does not establish access, model compatibility or working message delivery.
+Identify the specific runtime behind Grok Bot before choosing an adapter, and verify which external interface Manus makes available. Antigravity's Python SDK completed a real MCP exchange with a provider adaptation; its CLI remains at configuration discovery. See the [client verification limits](integrations/mcp.md#client-setup-and-verification). Agent Zero reuses the common CLI through its custom plugin interfaces. Queue membership does not establish access, model compatibility or working message delivery.
 
 The local Pi, Hermes, OpenClaw and Agent Zero integrations share the CLI notice stream; see [integration setup](integrations/README.md). Release still requires review of the recorded exchanges and remaining limitations.
 
