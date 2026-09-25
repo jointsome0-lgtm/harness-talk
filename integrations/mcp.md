@@ -96,7 +96,7 @@ These rows do not establish that every client can use every model provider.
 | Cline 3.0.65 | `cline mcp install htalk --transport stdio -- /absolute/path/to/htalk --db /absolute/mail.sqlite3 --as cline-worker mcp` | Native Cline Core 0.0.86 completed show/ACK/reply on Luna/Flex; after an upstream error, a new SDK session handled the same saved request without resending it. Ordinary TUI wake is unverified |
 | Kilo 7.7.9 | `kilo.json`, shape below | Existing OpenCode adapter submitted the notice; the same session completed show/ACK/reply on Luna/Flex after a local permission-configuration correction |
 | Goose 1.52.0 | Stdio extension, command below | Retained native ACP session woke from a watch notice and completed show/ACK/reply on Luna/Flex |
-| Letta Code 0.33.0 | Local agent MCP server settings, shape below | Native CLI MCP client completed show/ACK/reply without a model; a model-response fixture called that CLI through Bash |
+| Letta Code 0.33.0 | Local agent MCP server settings, shape below | Native headless session completed show/ACK/reply on Luna/Flex through Bash and Letta's own MCP CLI; ordinary TUI wake is unverified |
 | OpenHands CLI/SDK 1.21.0 | `openhands mcp add htalk --transport stdio /absolute/path/to/htalk -- --db /absolute/mail.sqlite3 --as hands-worker mcp` | Retained native SDK conversation completed show/ACK/reply on Luna/Flex and finished normally |
 | Cursor Agent 2026.09.23-86fc751 | `~/.cursor/mcp.json`, shape above | `mcp list-tools htalk` discovered `htalk(args)` |
 | GitHub Copilot CLI 1.0.88 | `~/.copilot/mcp-config.json`, shape above | Native headless session completed a request/reply/ACK exchange on Luna/Flex |
@@ -184,10 +184,14 @@ letta --backend local mcp call mcp__htalk__htalk \
 ```
 
 In version 0.33.0 the tested model turn did not receive a direct MCP function;
-it invoked this command through its Bash tool. A complete native CLI exchange
-was checked separately without a model. Resuming a saved conversation in a
-separate headless process does not establish a safe wake route into its open
-TUI; no receiver for that UI is included here.
+it invoked this command through its Bash tool. A native headless session on
+Luna/Flex read the saved request, calculated its answer, replied and finished
+normally. Both messages were acknowledged. The first attempt had stopped at
+an overly strict test permission rule. After correcting that rule, a fresh
+local agent handled the same saved request without resending it or importing
+the earlier chat. This establishes recovery by mailbox ID, not resumption of
+the earlier agent. A separate headless process does not establish a safe wake
+route into an open TUI; no receiver for that UI is included here.
 
 Cursor, Copilot and Antigravity's tested listing commands read user settings;
 a project file alone in a plain directory was not sufficient in those checks.
@@ -196,6 +200,9 @@ project through the client before enabling a local executable there.
 The Gemini SDK check trusted only its disposable workspace, used the installed
 client's discovery and tool-invocation classes, and explicitly approved each
 synthetic operation. It did not run a Gemini model or alter user trust settings.
+Gemini CLI 0.61.0's custom base URL still uses the Gemini API client. The
+installed version has no native OpenRouter provider for GPT-6 Luna; changing
+the URL and model name alone does not provide that route.
 
 The OpenHands check used its installed `Conversation` and `Agent` SDK classes,
 the MCP htalk tool and its native finish tool. An external controller forwarded
