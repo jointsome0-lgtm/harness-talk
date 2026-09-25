@@ -54,8 +54,10 @@ HTALK_PEER=pi-worker pi --extension "$HTALK_SOURCE/integrations/pi.ts"
 The extension starts the watcher at `session_start` and stops it at
 `session_shutdown`. Idle notices start a turn; busy notices use Pi's `followUp`
 queue. A later `session_start` restarts the receiver and can replay unfinished
-mail. Live exchanges were checked in Pi's RPC mode. Interactive sessions and
-persisted resume/fork behavior have not been checked here.
+mail. Live model exchanges were checked in Pi's RPC mode. An ordinary interactive
+PTY session also received a notice and completed show/ACK/reply using a local
+model-response fixture, without network calls. Persisted resume/fork behavior
+has not been checked here.
 
 ## Hermes
 
