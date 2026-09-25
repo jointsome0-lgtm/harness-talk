@@ -1,5 +1,97 @@
 # Client adapters
 
+Checked on 2026-09-26 with the htalk `0.8.0` x86-64 publication wheel from
+commit `8a07ffc22b38a006404b64eb7c7b0e0a62689c40`, SHA-256
+`fce59255b26a07dad0a521adcd5cfcb90fc2100313d79a9f04cd70ffd615996d`.
+The wheel was installed in a fresh environment before upload approval. Receiver
+files came from the same [publication run](https://github.com/jointsome0-lgtm/harness-talk/actions/runs/36190781359)'s
+source archive; every included source and adapter matched the commit.
+
+Codex CLI 0.156.0 (GPT-6 Sol medium) and Claude Code 2.1.282 (Opus 5.5 max)
+completed both initiating directions in separate Linux terminals. Four native
+notices led to show, separate ACK and two correlated replies. No message was
+resent. Both final inboxes were empty and the owned sessions were closed.
+Codex retained workspace-write and normal automatic approval review, using
+approved host execution for native notification access. Claude used manual
+permissions with the exact fixture executable allowed. An initial sandbox
+peer check failed before any send; a distinct authorized continuation completed
+the host check before using the still-unused request ID. An earlier tmux launch
+failed before creating a session or mailbox and was preserved separately.
+
+The new managed receivers also completed real `openai/gpt-6-luna` exchanges
+through OpenAI Flex on this package:
+
+| Receiver | Native interface | Calls | Verified result |
+| --- | --- | --- | --- |
+| Goose 1.52.0 | ACP | 10 | Same-session restart, delegated sum and original marker |
+| Letta Code 0.33.0 | Local headless stream | 9 | Same-conversation restart, delegated product and original marker |
+| Antigravity SDK 0.1.18 | Local SDK conversation | 10 | Same-ID resume, delegated product and original marker |
+
+Each case used one real model agent and a synthetic helper. All four linked
+messages were ACKed, both native turns completed, the first resumed model
+request retained the original context, and the observed two-second idle period
+made no inference calls. Total reported provider cost was $0.0025156725. Letta
+also refused missing/changed owner tasks before starting a native process and
+ignored a peer's request to contact an out-of-scope recipient in this case.
+Task scope remains model guidance, not a per-command policy. Antigravity used
+an external gateway translating `tool_choice: "none"` to `auto`; that gateway
+is not shipped. These checks cover dedicated managed sessions, not attachment
+to existing terminals or IDE windows. Owned fixture processes were stopped.
+
+Pi, Oh My Pi, Hermes classic CLI, OpenClaw Gateway, Cline, Kilo, OpenHands,
+Copilot CLI and Gemini CLI each completed native tool exchanges with
+local canned responses on the same wheel and source archive. All request and
+reply links and ACKs were independently checked in their synthetic mailboxes.
+These checks establish native tool execution and delivery, not model reasoning.
+The [OpenCode server-session check](opencode.md) was independent.
+
+| Installed client | Fixture permissions |
+| --- | --- |
+| Pi 0.87.1 | `--no-approve`, Bash tool |
+| Oh My Pi 18.3.0 | `--auto-approve`, read/write plus MCP |
+| Hermes 0.21.5 | `--toolsets htalk`; exclusive tool restriction unproven |
+| OpenClaw 2026.9.6 | Additive `tools.alsoAllow: [htalk]`; other tools remained exposed |
+| Cline 3.0.65 | `--auto-approve true`, interactive act mode |
+| Kilo 7.7.9 | Deny by default, `htalk_*` allowed, MCP ready before mail |
+| OpenHands 1.16.0 | `--always-approve` |
+| Copilot CLI 1.0.88 | Fixture MCP allowed; exact scratch-folder and shell approvals |
+| Gemini CLI 0.61.0 | Trusted scratch workspace, no OS sandbox; deny-all tool policy with a higher-priority htalk MCP allow rule |
+
+The managed cases used `--allow-mail`. Goose disabled its default tools and
+mediated the bound htalk calls. Letta's mod restricted access to its configured
+htalk server. Antigravity used the pinned SDK configuration and a default-deny
+tool policy allowing htalk. These configurations do not establish OS isolation.
+
+Some fixtures had narrower results than a clean overall pass. Pi's final audit
+used an unsupported inbox flag after completing its exchange. Hermes completed
+the exchange, but an auxiliary title request exceeded the canned provider's
+limits and required forced CLI cleanup. OpenClaw completed show/ACK/reply;
+the fixture's expected transcript table was absent, so native end-of-turn
+status was not established. Kilo's first canned script ended after request A
+even though B was already in the active turn. That case remains incomplete.
+A fresh script handled both notices once in the same session: six completed
+tools, four ACKed rows and native final output. Its status API returned no
+session entry, so the fixture's explicit idle assertion remained unproven.
+None of these failed cases was replayed. Copilot and Gemini completed their
+mail exchanges; their natural CLI exit was not separately observed, and the
+fixture stopped their owned tmux servers. Gemini preserved its unsent draft.
+
+Retained native ACK outputs reported `absent` for Codex and
+`unsupported/client_has_no_notification_removal` for Claude, OpenCode and Kilo.
+OMP, Hermes, Cline, OpenHands, Copilot, Gemini and the three managed receivers
+reported `skipped/pull_only`. Pi and OpenClaw's native cleanup outputs were not
+retained; their stored ACKs do not establish a cleanup result. Controller ACK
+cleanup was captured as `skipped/pull_only` for Copilot, Gemini and all three
+managed cases; the other controller cleanup receipts were not retained.
+None of these statuses establishes receiver-created notice removal or native
+process shutdown. Those are separate from stored ACKs and correlated replies.
+
+Agent Zero's temporary runtime was absent and was not reinstalled for this
+wheel check. Cursor's prior schema-only observation does not establish a
+receiver; its exact Luna provider route remains unverified. Grok Bot and Manus
+were not checked because account access was unavailable. Earlier observations
+below retain their own versions, artifacts and limitations.
+
 Checked on 2026-09-25 with the htalk `0.7.0` x86-64 publication wheel from
 commit `c18c87b3c0b654f32e1dca127fdb1d8c2aba3a48`, SHA-256
 `f97968e1bb8dbca6b8e49dee39889f1e95fb74cf2ec3d6d6de9ebcf993baf232`.

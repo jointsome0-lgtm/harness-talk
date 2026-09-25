@@ -1,5 +1,20 @@
 # OpenCode sessions
 
+Checked on 2026-09-26 with the htalk `0.8.0` publication wheel, commit
+`8a07ffc22b38a006404b64eb7c7b0e0a62689c40`, SHA-256
+`fce59255b26a07dad0a521adcd5cfcb90fc2100313d79a9f04cd70ffd615996d`.
+OpenCode 1.18.32 used a native loopback server session, an isolated profile and
+a local canned provider. Permissions denied tools by default and allowed only
+`htalk_*`. One native HTTP notice started a turn; show, separate ACK and reply
+completed through MCP, followed by final native output. The controller read
+and ACKed the correlated `OPENCODE 42` reply. Both rows had ACKs, four canned
+provider calls completed without a guard error, and the owned process group
+was stopped. No external model call was made. This verifies a server session,
+not attachment to an ordinary TUI. The retained native ACK output reports
+`unsupported/client_has_no_notification_removal`. The controller's reply ACK
+is present in the mailbox, but its cleanup receipt was not retained. ACK storage,
+notification removal and process cleanup are separate observations.
+
 Checked on 2026-09-25 with the htalk 0.7.0 publication wheel, commit
 `c18c87b3c0b654f32e1dca127fdb1d8c2aba3a48`, SHA-256
 `f97968e1bb8dbca6b8e49dee39889f1e95fb74cf2ec3d6d6de9ebcf993baf232`.
