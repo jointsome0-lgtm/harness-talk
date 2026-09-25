@@ -139,7 +139,7 @@ class Receiver:
                 self.failed = True
                 self.context.log.log(type="error", content=
                     f"htalk stopped ({type(error).__name__}). Check HTALK_PEER, HTALK_DB and "
-                    "htalk watch; reload the plugin to reconnect. Saved mail is unchanged.")
+                    "htalk watch; restart Agent Zero to reconnect. Saved mail is unchanged.")
         finally:
             self.stopped.set()
             if self.child is not None:
