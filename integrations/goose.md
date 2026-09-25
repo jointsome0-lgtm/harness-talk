@@ -5,7 +5,7 @@ peer. It can receive requests and answers, ask another peer, and continue when
 that peer answers. It requires Linux, Python 3.11 or later, and htalk 0.7.0 or
 later. It creates a separate session and does not attach to an open Goose TUI.
 
-This adapter is under development and is not included in the 0.7.0 release.
+This adapter is included in the 0.8.0 source archive and checkout.
 Use a separate test mailbox until its acceptance checks are complete.
 Keep `goose.py` and `managed_receiver.py` together in the source checkout.
 Goose and Letta use that shared notice, approval and recovery loop.

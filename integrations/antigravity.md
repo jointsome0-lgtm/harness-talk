@@ -3,7 +3,7 @@
 `antigravity.py` receives htalk notices in a dedicated Antigravity SDK 0.1.18
 conversation. It uses the same notice, lock, cursor and recovery module as
 Goose and Letta. The SDK runs the agent and calls the shared htalk MCP server.
-This candidate is under development and is not included in htalk 0.7.0.
+This adapter is included in the 0.8.0 source archive and checkout.
 It requires Linux, a Python 3.11+ controller and a separate Python environment
 with the pinned SDK. It does not attach to an Antigravity CLI or IDE window.
 

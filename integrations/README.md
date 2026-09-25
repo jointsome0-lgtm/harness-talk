@@ -513,9 +513,9 @@ pipe also stops a watcher left behind by an abrupt harness exit.
 ## Clients without an ordinary-session receiver
 
 For separate persistent sessions, see the [managed Goose adapter](goose.md),
-[managed Letta adapter](letta.md) and [Antigravity SDK candidate](antigravity.md).
+[managed Letta adapter](letta.md) and [Antigravity SDK adapter](antigravity.md).
 They share the notice and recovery loop.
-All three are under development after 0.7.0 and do not attach to the terminals
+All three are included in the 0.8.0 source archive and do not attach to the terminals
 described below.
 
 The [MCP integration](mcp.md#client-setup-and-verification) permits tool use in

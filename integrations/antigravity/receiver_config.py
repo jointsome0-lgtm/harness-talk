@@ -1,4 +1,4 @@
-"""Native feasibility configuration; not a released htalk adapter.
+"""Native configuration for managed Antigravity SDK sessions.
 
 SDK 0.1.18's LocalOpenAIAgentConfig drops continuation mode and policies.
 Use its AgentConfig factory seam and forward the required fields explicitly.
@@ -17,7 +17,7 @@ class ReceiverConfig(AgentConfig):
 
     def create_strategy(self, *, tool_runner, hook_runner):
         if version("google-antigravity") != "0.1.18":
-            raise RuntimeError("This feasibility check requires SDK 0.1.18")
+            raise RuntimeError("This receiver requires SDK 0.1.18")
         return LocalOpenAIConnectionStrategy(
             base_url=self.base_url, model_name=self.model,
             tool_runner=tool_runner, hook_runner=hook_runner,
