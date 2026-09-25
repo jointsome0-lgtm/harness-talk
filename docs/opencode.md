@@ -7,7 +7,11 @@ OpenCode 1.18.31 ran a native loopback server session with a local canned
 provider and only the fixture htalk MCP tool permitted. A saved request's HTTP
 notice started a turn; native show, ACK and reply calls produced the correlated
 answer. The controller read and acknowledged that answer. Both rows had ACKs,
-and the owned server process group was stopped. This checks a server session,
+and the owned server process group was stopped. OpenCode's native ACK returned
+`notification_cleanup: unsupported` with
+`client_has_no_notification_removal`. The controller's ACK was verified in
+storage, but its cleanup output was not retained. Neither a stored ACK nor
+process shutdown proves native notice removal. This checks a server session,
 not attachment to an ordinary TUI or real model reasoning. The older checks
 below cover their stated versions and model routes.
 

@@ -34,11 +34,40 @@ provider's limit and the fixture had to terminate the CLI. OpenClaw completed
 its original saved request after a provider-fixture size rejection, without
 resending it. Copilot handled a request sent during a busy interval after that
 interval; admission before the first turn ended was not observed. Gemini kept
-an unsent draft. Owned fixture processes were stopped. Pi's first ACK cleanup
-result was not captured; its stored ACK and empty inbox were verified separately.
+an unsent draft. Owned fixture processes were stopped.
+
+The clients' own ACK outputs recorded these `notification_cleanup` results:
+
+| Client | Status / detail |
+| --- | --- |
+| Codex | `unavailable/codex_rpc_closed` |
+| Claude Code | `unsupported/client_has_no_notification_removal` |
+| OpenCode | `unsupported/client_has_no_notification_removal` |
+| Pi | `skipped/pull_only` in a separate follow-up; first receipt not captured |
+| Oh My Pi | `skipped/pull_only` |
+| Hermes classic CLI | `skipped/pull_only` |
+| OpenClaw | `skipped/pull_only` |
+| Cline | `skipped/pull_only` |
+| Kilo | `unsupported/client_has_no_notification_removal` |
+| OpenHands | `skipped/pull_only` |
+| Copilot CLI | `skipped/pull_only` |
+| Gemini CLI | `skipped/pull_only` |
+| Goose ACP | `skipped/pull_only` |
+
+`skipped/pull_only` describes the core's cleanup decision; it does not establish
+removal of a notice created by a receiver. Pi's first stored ACK and empty inbox
+were verified, but its cleanup receipt was not retained. One fresh canned
+exchange on the same wheel captured the native tool result shown above; it does
+not fill the missing receipt from the first exchange. For the canned exchanges,
+the controller's reply ACK cleanup was captured for Copilot and Gemini as
+`skipped/pull_only`; the other controller ACK rows were verified in storage,
+but their exact cleanup outputs were not retained. ACK storage, notice removal
+and owned-process cleanup are separate observations.
 
 Letta Code 0.33.0 passed native MCP discovery and a CLI tool call; Cursor Agent
-2026.09.23-86fc751 passed schema discovery only. Agent Zero and Antigravity's
+2026.09.23-86fc751 passed schema discovery only. Letta's show-only request was
+intentionally left unacknowledged, so cleanup was not attempted. Cursor had no
+message to acknowledge. Agent Zero and Antigravity's
 previous temporary runtimes were no longer installed for this wheel check.
 Their earlier source observations below remain separate from release-wheel
 verification. The managed Goose experiment is tracked in
