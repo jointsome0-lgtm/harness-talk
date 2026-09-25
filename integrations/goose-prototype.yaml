@@ -1,0 +1,33 @@
+extensions:
+  developer:
+    enabled: false
+    type: platform
+    name: developer
+  skills:
+    enabled: false
+    type: platform
+    name: skills
+  tom:
+    enabled: false
+    type: platform
+    name: tom
+  summon:
+    enabled: false
+    type: platform
+    name: summon
+  scheduler:
+    enabled: false
+    type: platform
+    name: scheduler
+  apps:
+    enabled: false
+    type: platform
+    name: apps
+  analyze:
+    enabled: false
+    type: platform
+    name: analyze
+  extensionmanager:
+    enabled: false
+    type: platform
+    name: extensionmanager
