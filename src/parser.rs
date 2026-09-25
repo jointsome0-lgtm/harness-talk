@@ -34,6 +34,10 @@ pub fn command() -> Command {
             .help("Your registered peer name; overrides HTALK_PEER. Without either, message commands use the peer registered for the Claude Code session running them, if recognized.")
         )
         .subcommand_required(true)
+        .subcommand(Command::new("mcp")
+            .about("Expose this peer's mailbox tools over MCP stdio.")
+            .long_about("Run one local MCP stdio server with a fixed database and peer. Set --as or HTALK_PEER. Register the peer before use. Tool calls reuse the ordinary CLI; this server does not wake an idle agent.")
+        )
         .subcommand(
             Command::new("peer")
                 .disable_help_subcommand(true)
@@ -278,6 +282,13 @@ pub fn command() -> Command {
                     .help("Continue with messages newer than this seq; recovery.next_page supplies it.")
                     .value_parser(integer_argument).allow_negative_numbers(true)
                 )
+        )
+        .subcommand(
+            Command::new("watch")
+                .disable_help_subcommand(true)
+                .about("Stream incoming message notices as JSON lines until interrupted.")
+                .long_about("Emit ready, then a message event for each open inbox item. Polls locally without model calls. Reading changes no acknowledgments or delivery receipts.")
+                .after_help("Example: htalk --as bob watch\nUse for a harness extension that queues notices into its current session.\nEach event contains an id and notification text, not the peer's message body.\nOpen messages appear once per watcher; restarting replays unfinished work.\nAlways show the current message before acting. Run one receiver per peer.")
         )
         .subcommand(
             Command::new("sent")

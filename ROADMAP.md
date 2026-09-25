@@ -1,6 +1,6 @@
 # Roadmap
 
-Ship the common core first, then local harness integrations, communication between devices, and native macOS/Windows support. Each release must demonstrate its intended exchange and leave a usable package. Later version numbers are provisional; there are no delivery dates yet.
+Ship the common core first, then local harness integrations, communication between devices, and native macOS/Windows support. Each release must demonstrate its intended exchange and leave a usable package. Future work is grouped by capability; versions are assigned when a release scope is ready.
 
 ## 0.6: common mailbox core
 
@@ -20,15 +20,32 @@ Released as [0.6.1](https://github.com/jointsome0-lgtm/harness-talk/releases/tag
 
 The first ordinary command on schema 1 or 2 now validates the source, creates and verifies a private SQLite backup, and migrates in one transaction. The explicit `migrate` command remains available. Backup or migration failures stop the command; htalk never restores an old backup automatically. Checks covered legacy data preservation, backup contents, concurrent opens and failure rollback. The publication wheel also completed native exchanges after upgrading a mailbox created by 0.5.1. [Release notes](https://github.com/jointsome0-lgtm/harness-talk/releases/tag/v0.6.1) contain update commands and recovery limits.
 
-## 0.7: more local harness integrations
+## More local harness integrations
 
-Planned. Make the common CLI easy to use from coding and general-purpose agents. Add thin setup/invocation adapters first; add native notification adapters where the client's documented interface supports them. Assess a shared MCP interface if real integrations need it.
+In progress. Make the common CLI easy to use from coding and general-purpose agents. Add thin setup/invocation adapters first; add native notification adapters where the client's documented interface supports them. The [shared MCP tool](integrations/mcp.md) now has real native callers; its mailbox behavior stays in the CLI.
 
-Choose the first integrations from agents actually participating on boards. OpenClaw and Hermes are candidates alongside coding harnesses. Identify the specific runtime behind a "Grok bot" before promising a native adapter. A model name or logo alone does not identify a callable harness.
+Choose the first integrations from agents actually participating on boards.
 
 Ready to release when at least two additional harnesses, including a general-purpose agent, complete real bidirectional request/reply/ACK exchanges. Their integrations must reuse the mailbox rules without copying them. Document setup, supported versions, polling and notification behavior. Further harnesses can follow in smaller releases.
 
-## 0.8: work between devices
+### Integration queue
+
+As of 2026-09-25, the list covers 19 harness targets. It spans multiple releases; the device pilot does not wait for the entire queue. Pi/Hermes, OpenClaw and Agent Zero have completed local message exchanges. Agent Zero required a separate saved-session recovery to finish its model turn. The current expansion covers the remaining thirteen targets from Agent Zero onward; a shared config alone does not count as a working exchange.
+
+| Status | Count | Harnesses |
+| --- | ---: | --- |
+| Released native adapters | 3 | Codex, Claude Code, OpenCode |
+| Implemented locally with native session exchanges, not released | 10 | Pi, Hermes, OpenClaw, Agent Zero, Oh My Pi, Cline, Kilo, OpenHands, GitHub Copilot CLI, Gemini CLI |
+| Common MCP route; ordinary-session receiver or model route unresolved | 4 | Goose, Letta Code, Cursor Agent, Google Antigravity |
+| Cloud access and network route unresolved | 2 | Grok Bot, Manus |
+
+Identify the specific runtime behind Grok Bot before choosing an adapter, and verify which external interface Manus makes available. Antigravity's Python SDK completed a real MCP exchange with a provider adaptation; its CLI remains at configuration discovery. Gemini's live Luna exchange used noninteractive mode and an external provider translator; its ordinary-TUI receiver passed separate canned-provider checks. See the [client verification limits](integrations/mcp.md#client-setup-and-verification). Agent Zero reuses the common CLI through its custom plugin interfaces. Queue membership does not establish access, model compatibility or working message delivery.
+
+The local receivers share the CLI notice stream; Oh My Pi reuses Pi's receiver unchanged. Cline attaches to the terminal's existing hub; Kilo reuses the OpenCode HTTP adapter; OpenHands and Gemini use version-pinned TUI launchers; Copilot uses native background-command completion hooks. Ordinary terminals passed canned-provider idle/busy checks and real MCP operations separately from the earlier Luna exchanges. These fixtures verify routing and tool execution, not autonomous model reasoning. See [integration setup](integrations/README.md).
+
+Goose, Letta and Antigravity still lack a usable input path into an idle ordinary terminal in the inspected versions. Letta's mod send persisted history but bypassed the UI and turn events. The [remaining interface requirements](integrations/README.md#clients-without-an-ordinary-session-receiver) distinguish those blockers from working MCP access. Release still requires review of the recorded exchanges and remaining limitations.
+
+## Work between devices
 
 Planned. An agent on one device asks an agent on another device to perform a bounded task and receives its result. Start with two devices on one LAN and one authoritative mailbox reached through SSH. The task must actually run on the second device.
 
@@ -36,7 +53,7 @@ Ready to release when the two-device exchange preserves request identity across 
 
 Extend the authenticated route to internet-accessible hosts after the LAN pilot. Evaluate Bluetooth against a working pilot if there is a concrete need. Independent offline mailboxes, synchronization and relay infrastructure require a separate demonstrated need before implementation.
 
-## 0.9: native macOS and Windows
+## Native macOS and Windows
 
 Planned. Provide native packages and a working mailbox CLI on both operating systems. They may ship in separate releases if their remaining work differs. WSL does not count as native Windows support.
 

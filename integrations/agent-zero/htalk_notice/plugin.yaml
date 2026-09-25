@@ -1,0 +1,8 @@
+name: htalk_notice
+title: htalk notices
+description: Connect one existing Agent Zero chat to the shared htalk mailbox.
+version: 0.0.0
+settings_sections: [external]
+per_project_config: false
+per_agent_config: false
+always_enabled: false

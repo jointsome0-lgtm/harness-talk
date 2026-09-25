@@ -22,6 +22,12 @@ For a new project, configure a pending publisher in [PyPI account publishing](ht
 2. Run `publish.yml` on that commit with mode `build-only`. Confirm the installed-wheel tests and metadata checks pass and the upload job is skipped.
 3. With owner authorization to publish, run the workflow with mode `publish`. Check that the commit has not changed. Merge nothing else until the release is tagged: the workflow builds the current `main`. Inspect this run's build output, distributions, and SHA-256 hashes; its upload job waits for approval of the `pypi` environment.
 4. Before that approval, run the live check on this run's wheel, downloaded and installed in a fresh virtual environment. With each supported client on its installed version, exchange one notified request and its reply in separate terminal sessions. For each client, record whether the notification arrived and the reply was correlated with the request, then record `ack` and `notification_cleanup` separately. Record the date, commit SHA, wheel hash, htalk and client versions, and each client's permission mode. A client that is not installed is recorded as not checked. Keep this report outside the repository until publication, so the checked commit and artifacts stay the ones being approved.
+
+   For client receivers, extract the source archive from this same workflow run
+   and verify that it contains every adapter file from the release commit.
+   Set `HTALK_SOURCE` to that archive, and `HTALK_BIN` and each MCP command to
+   the wheel virtual environment's `htalk`. Keep that environment first on the
+   client `PATH`; do not build or select a checkout executable for this check.
 5. Approve the `pypi` environment for that run only after reviewing the report, commit and hashes. The upload job downloads that run's checked artifacts; it does not rebuild them.
 6. Verify the [PyPI release](https://pypi.org/project/harness-talk/) and install its version in a fresh virtual environment. Run `htalk --version`, `htalk --help`, and `python -m pip check`. Compare the downloaded files with the workflow's hashes.
 7. Tag the published commit with a lightweight tag `vVERSION`, as for earlier releases, and push the tag.

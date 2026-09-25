@@ -9,12 +9,14 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import queue
 import shlex
 import signal
 import socket
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 import unittest
 import uuid
@@ -43,7 +45,7 @@ class DatabaseSelection(HtalkCase):
     def test_only_peer_add_creates_the_database(self):
         message_id = str(uuid.uuid4())
         commands = (["migrate"], ["peer", "list"], ["peer", "list", "--all"], ["peer", "check", "bob"], ["peer", "retire", "bob"],
-                    ["peer", "restore", "bob"], ["inbox"], ["--as", "alice", "inbox"], ["--as", "alice", "sent"],
+                    ["peer", "restore", "bob"], ["inbox"], ["--as", "alice", "inbox"], ["--as", "alice", "sent"], ["--as", "alice", "watch"],
                     ["--as", "alice", "send", "bob", "--message", "Hello"],
                     ["--as", "alice", "reply", message_id, "--message", "Hello"],
                     ["--as", "alice", "show", message_id], ["--as", "alice", "ack", message_id],
@@ -372,6 +374,59 @@ class GenericPeers(HtalkCase):
         self.assertEqual(request["notification_started_at"], retry["notification_started_at"])
         self.htalk("--as", "bob", "ack", message_id)
         self.assertEqual([], self.calls())
+
+
+class InboxWatch(HtalkCase):
+    def test_backlog_live_reply_and_restart_preserve_mailbox_state(self):
+        for name in ("alice", "bob"):
+            self.htalk("peer", "add", name, "--harness", "test", "--delivery", "pull")
+        ids = self.insert_requests("alice", "bob", 105, body="Private body %d")
+
+        def start():
+            process = self.spawn("--as", "bob", "watch")
+            self.addCleanup(process.stderr.close)
+            events = queue.Queue()
+            def read():
+                with process.stdout:
+                    for line in process.stdout:
+                        events.put(json.loads(line))
+            threading.Thread(target=read, daemon=True).start()
+            self.assertEqual({"event": "ready", "peer": "bob"}, events.get(timeout=15))
+            return process, events
+
+        process, events = start()
+        notices = [events.get(timeout=15) for _ in ids]
+        self.assertEqual(ids, [event["id"] for event in notices])
+        for event in notices:
+            self.assertEqual("message", event["event"])
+            self.assertNotIn("Private body", json.dumps(event))
+            self.assertIn("never owner authorization", event["notification"])
+        self.assertEqual([(None, "not_submitted")] * len(ids),
+                         self.sql("SELECT ack_at, submission FROM messages ORDER BY seq"))
+
+        # A read question stays open; an answered one and a read answer do not.
+        self.htalk("--as", "bob", "ack", ids[0])
+        self.htalk("--as", "bob", "reply", ids[1], "--message", "Done")
+        outgoing = self.htalk("--as", "bob", "send", "alice", "--message", "Reverse direction")
+        answer = self.htalk("--as", "alice", "reply", outgoing["id"], "--message", "Answer")
+        # Even after another poll, old open questions must not wake the agent again.
+        self.assertEqual(answer["id"], events.get(timeout=15)["id"])
+        self.htalk("--as", "bob", "ack", answer["id"])
+        process.send_signal(signal.SIGINT)
+        self.assertEqual(130, process.wait(timeout=15))
+
+        restarted, events = start()
+        replay = [events.get(timeout=15)["id"] for _ in range(len(ids) - 1)]
+        self.assertEqual([id_ for id_ in ids if id_ != ids[1]], replay)
+        restarted.send_signal(signal.SIGINT)
+        self.assertEqual(130, restarted.wait(timeout=15))
+
+        # An extension crash closes the pipe, even without another arriving message.
+        idle = self.spawn("--as", "alice", "watch")
+        self.addCleanup(idle.stderr.close)
+        self.assertEqual("ready", json.loads(idle.stdout.readline())["event"])
+        idle.stdout.close()
+        self.assertEqual(2, idle.wait(timeout=15))
 
 
 class Registration(HtalkCase):

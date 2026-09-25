@@ -28,4 +28,5 @@ include = [
     { path = ".cargo/config.toml", format = "sdist" },
     { path = "tests/**", format = "sdist" },
     { path = "docs/**", format = "sdist" },
+    { path = "integrations/**", format = "sdist" },
 ]

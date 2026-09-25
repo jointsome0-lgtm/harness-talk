@@ -2,6 +2,10 @@
 
 Start with the [first exchange](../README.md). Commands print JSON; `--help` describes their arguments. [Client adapters](adapters.md) document notification and discovery compatibility.
 
+`htalk mcp` is the exception to line-oriented CLI results: it runs the
+[MCP stdio server](../integrations/mcp.md), with one mailbox tool and a fixed
+peer identity. Model and provider settings remain in the client.
+
 ## Database and peers
 
 Choose one writable directory shared by the participants. SQLite writers need directory access for the journal as well as file access. The path is selected in this order:
@@ -85,6 +89,24 @@ If the sending process stops before saving its completion receipt, `pending` can
 For repeatable automation, generate and retain a UUID before `send --id UUID`. Identical retries return the saved request; differing contents are rejected. The same applies to an identical `reply` retry. There is no notification replay command. After interrupted output, inspect `recovery`, `message_id` and `persistence`; `unknown` persistence requires checking the database before deciding what happened.
 
 Deduplication depends on the saved message in the selected database. A different mailbox or a restored backup that lacks that message cannot recognize the earlier request, so the same ID can create a new message. Reconcile the earlier exchange before retrying after a database replacement or restore.
+
+## Notice stream
+
+`htalk --as NAME watch` emits JSON lines for a harness extension. It first emits
+`{"event":"ready","peer":"NAME"}`, then `message` events with `id`, `seq` and
+`notification`. The notification contains a copyable `show` command and the same
+peer-input boundary used by native adapters, without the peer's body.
+
+It reads all open inbox pages and polls locally once per second. Each ID appears
+once in that process; restarting replays still-open work. It neither acknowledges
+messages nor changes notification receipts. Transient SQLite busy errors retry
+the read. Other errors produce the usual error JSON and stop; SIGINT exits 130.
+Closing the receiving pipe also stops the watcher, including while idle.
+
+Use one receiver per peer. An emitted event proves only that a notice was written
+to the pipe. The receiving harness still has to queue it and the agent has to read,
+answer and acknowledge through the existing CLI. See the [session receiver
+setup](../integrations/README.md) for session lifecycle and recovery behavior.
 
 ## Exit codes
 

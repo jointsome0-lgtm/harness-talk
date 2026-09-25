@@ -1,5 +1,65 @@
 # Client adapters
 
+The [Pi, Hermes, OpenClaw and Agent Zero source integrations](../integrations/README.md) use a shared
+`htalk watch` receiver. On 2026-09-25, Pi 0.87.1 in RPC mode and Hermes 0.21.5 in
+classic CLI mode completed a Linux exchange with GPT-6 Luna through OpenRouter
+Flex. An incoming notice woke Pi; Pi asked Hermes for a calculation, Hermes
+answered through its `htalk` tool, and Pi returned the independently checked
+result to the original sender. All four message links and acknowledgments were
+verified in an isolated mailbox. Restarting the receivers recovered the saved
+requests without sending new copies. This source build is not yet a release;
+Hermes gateway and modern TUI remain unsupported.
+
+The reverse Hermes → Pi exchange also completed after resuming Hermes's saved
+session. The first attempt exhausted its verification budget after reading and
+acknowledging Pi's answer. Recovery exposed the htalk tool directly, prohibited
+new sends, and answered the original request without repeating the delegation.
+All four saved messages and ACKs were checked. This demonstrates recovered
+completion, not an uninterrupted first-attempt pass.
+
+OpenClaw 2026.9.6 then completed controller → OpenClaw → Pi → OpenClaw → controller
+using its built-in runtime, the same mailbox, and Luna/Flex. The Gateway's
+targeted notification wake started the configured main session with periodic
+heartbeat and cron disabled. All four messages, reply links, ACKs and the
+arithmetic result were checked. There were no model calls before the first
+message. After the saved exchange completed, the fixture's ten-request cap
+blocked further OpenClaw continuation. A separate model-free check verified
+plugin loading, a 25-message backlog, session-scoped tool access and watcher
+cleanup.
+
+A fresh Pi → OpenClaw → Pi exchange with direct tool schemas then completed
+within both request caps. Four correctly linked messages were acknowledged;
+Pi independently checked OpenClaw's answer. OpenClaw recorded native session
+status `done` and trajectory outcome `success`, with no guard rejection. The
+temporary runner incorrectly expected `completed`, so it reported a timeout;
+the saved mailbox and native trajectory established the successful result
+without rerunning the exchange. These checks do not cover other OpenClaw
+runtimes or operating systems.
+
+Agent Zero revision `e3051fb584b1a36be2b0a0c90606f1c2c2d356ec` was checked
+on Python 3.12 and Linux with its actual context registry, plugin loader,
+extension hooks and tool class. The model-free checks exercised a paused/busy
+backlog, user-queue priority, context-scoped tool access, CLI inbox/show/ack/reply,
+context replacement, plugin reload/deletion and watcher cleanup. A separate
+ordinary framework turn used a local canned model response: an incoming notice
+woke the agent, exposed the htalk tool prompt/schema and ended through the native
+response tool. Idle receivers made no model calls. A local wire capture checked
+Luna/Flex settings for chat, utility and vision; it made no external API request.
+
+Agent Zero then completed controller → Agent Zero → Pi → Agent Zero → controller
+on Luna/Flex. All four messages and ACKs were checked independently; Pi returned
+272 for 16×17. The original model turn reached its deadline after saving the
+answer. A separate recovery of the saved chat ended the native turn with one
+remaining model call, without sending more messages or invoking Pi again.
+This establishes recovered completion, not an uninterrupted first-attempt pass.
+These checks do not establish WebUI/container installation, other operating
+systems or full startup with default plugins and embeddings. The pinned Agent Zero API also has a
+narrow concurrent pause race, documented in [setup](../integrations/README.md#agent-zero).
+
+The [common MCP interface](../integrations/mcp.md#client-setup-and-verification)
+records additional native client checks separately from automatic notification
+receivers and completed model exchanges.
+
 Checked on 2026-09-23 with the htalk `0.6.1` x86-64 publication wheel from commit `6b6b9efef90455ecff640049f38d4e14f15ace37`, SHA-256 `89befb955c10b8b49796bfcdae3f3b2e03fabc98dd84d192dd2858aeaba84e75`. Its published PyPI file has the same hash. Ordinary Claude Code `2.1.280` (Opus 5.5, max) and Codex CLI `0.156.0` (`gpt-6-astra`, low) ran in separate Linux tmux terminals. Claude retained manual permissions with the fixture executable allowed; Codex retained `workspace-write`, on-request escalation and automatic approval review, using approved host execution for each htalk command.
 
 The isolated mailbox was created with htalk `0.5.1`, with two native peer registrations and no messages. A normal `peer list --all` using 0.6.1 upgraded schema 2 to 3. The one private backup matched the legacy SQLite dump, and the original peer fields were preserved. A pull participant was then registered with 0.6.1.

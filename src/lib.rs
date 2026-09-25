@@ -5,6 +5,7 @@ pub mod discovery;
 pub mod error;
 pub mod guidance;
 pub mod identity;
+mod mcp;
 pub mod model;
 pub mod notify;
 pub mod opencode;
