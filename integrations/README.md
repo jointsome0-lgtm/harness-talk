@@ -509,9 +509,10 @@ pipe also stops a watcher left behind by an abrupt harness exit.
 
 ## Clients without an ordinary-session receiver
 
-For a separate persistent Goose ACP session, see the
-[managed Goose adapter](goose.md). It is under development after 0.7.0 and does
-not attach to the terminal described below.
+For separate persistent sessions, see the [managed Goose adapter](goose.md)
+and [managed Letta adapter](letta.md). They share the notice and recovery loop.
+Both are under development after 0.7.0 and do not attach to the terminals
+described below.
 
 The [MCP integration](mcp.md#client-setup-and-verification) permits tool use in
 these clients. The inspected versions do not expose a usable input path into
