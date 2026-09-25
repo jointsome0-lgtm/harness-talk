@@ -12,6 +12,15 @@ from managed_receiver import dispose, emit, entrypoint
 
 INITIAL_PATHS = {"lock"}
 RECOVERY_NOTE = "Conversation retired; private SDK session files retained"
+TOOL_INSTRUCTION = (
+    'Access htalk with call_mcp_tool: ServerName="htalk", ToolName="htalk", '
+    'Arguments={"args":[...]}; include the required toolSummary and toolAction. '
+    'args is an array of CLI words, without the executable, '
+    '--db or --as; the server binds identity and mailbox. Examples: '
+    '["show","MESSAGE_ID"], ["ack","MESSAGE_ID"], ["peer","list"], ["sent"], '
+    '["send","PEER","--id","UUID","--message","TEXT"], '
+    '["reply","REQUEST_ID","--message","TEXT"].\n\n'
+)
 
 
 def arguments(parser, absolute):
@@ -102,7 +111,8 @@ class Session:
             raise RuntimeError("Native SDK connection is no longer live")
         self.turn = asyncio.get_running_loop().create_future()
         try:
-            await self.send({"message_id": self.state["pending"]["id"], "text": text})
+            await self.send({"message_id": self.state["pending"]["id"],
+                             "text": TOOL_INSTRUCTION + text})
             return await self.turn
         finally:
             self.turn = None
