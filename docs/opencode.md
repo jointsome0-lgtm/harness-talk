@@ -1,5 +1,20 @@
 # OpenCode sessions
 
+Checked on 2026-09-26 UTC with the htalk `0.8.1` publication wheel, commit
+`ca2e237a054d79b051a34962cff05b5d0178477f`, SHA-256
+`b5aed6d76e73e479c4a257df1e4a5924f815295b219fe4516e8268a56b77a399`.
+OpenCode 1.18.32 used an isolated profile, a native loopback server session and
+local canned responses. Tools were denied by default with only `htalk_*` allowed.
+One native notice led to three completed MCP calls: show, separate ACK and reply,
+then final native output. The controller read and ACKed the correlated
+`OPENCODE 42` reply. Both rows had ACKs; four canned provider calls completed
+without a guard error, and the owned server process group was stopped.
+The native ACK reported `unsupported/client_has_no_notification_removal`;
+the controller ACK receipt separately recorded `skipped/pull_only`.
+The published wheel matched the checked file. This verifies a server session,
+not TUI attachment, real model reasoning or notice removal. No external model
+call was made.
+
 Checked on 2026-09-26 with the htalk `0.8.0` publication wheel, commit
 `8a07ffc22b38a006404b64eb7c7b0e0a62689c40`, SHA-256
 `fce59255b26a07dad0a521adcd5cfcb90fc2100313d79a9f04cd70ffd615996d`.
