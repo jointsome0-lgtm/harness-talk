@@ -231,11 +231,23 @@ generation. This avoids the built-in queue's automatic drain, which can unpause
 a chat. The wake itself contains no peer message bodies; the agent reads those
 from the mailbox through its tool.
 
-One concurrency limit remains in this Agent Zero revision: `communicate()`
-clears the paused flag before checking whether another turn has started. If a
-turn starts and is paused between the receiver's idle check and its wake call,
-that call can clear the new pause. The idle check is not an atomic pause lock.
-Disable the plugin when a chat must stay paused during concurrent activity.
+The receiver starts the pinned framework's idle task path directly instead of
+calling `communicate()`, which unconditionally clears pause. Wake dispatch never
+writes the paused flag or the current user intervention. The process-chain hook
+checks pause again before accepting the wake. This path uses `_process_chain`
+and must be reviewed when changing the supported Agent Zero revision.
+
+The framework still has no atomic idle-task reservation. A user send racing
+the wake's final check can start a second monologue; two concurrent native
+sends have the same limitation. Queued user input has priority when checked,
+but its automatic drain can also clear pause through native `communicate()`.
+Disable the plugin when the chat requires strict serialization with concurrent
+user activity. A caller-only lock cannot provide that guarantee.
+
+For an existing installation, stop Agent Zero, replace the copied
+`usr/plugins/htalk_notice` directory from the new source archive, and restart.
+Updating the htalk executable alone does not update a copied plugin. No mailbox
+migration or peer re-registration is needed for this plugin change.
 
 The tool accepts the same `args` array as Hermes and OpenClaw and times out after
 120 seconds. Global plugin discovery can show its prompt in other chats, but
