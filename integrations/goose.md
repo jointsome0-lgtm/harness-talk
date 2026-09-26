@@ -119,6 +119,18 @@ use `--disposition settled`. Pass the saved session ID, or `unknown` when the
 state has no ID. Recovery never guesses which native session to load. Old
 prototype state files are not migrated into this adapter.
 
+## SIGKILL checks on 2026-09-26
+
+Two isolated checks killed the real receiver after a scripted ACP child had
+recorded a non-idempotent external action, before a clean turn was recorded.
+One child had saved a reply; the other had only ACKed the request. The surviving
+child retained the lock. After it stopped, restart still refused the uncertain
+session before launching native work. ACK alone could not settle the request.
+After inspecting the action and explicitly settling recovery, a fresh session
+did not repeat it. Each fixture retained one action. These used htalk 0.8.0 and
+the unchanged Goose adapter, with no Goose model or live service; they verify
+restart refusal, not exactly-once external execution.
+
 ## Verification on 2026-09-25
 
 Native Goose with a local scripted provider completed a delegated exchange:
