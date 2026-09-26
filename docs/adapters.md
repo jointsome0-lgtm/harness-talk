@@ -1,5 +1,33 @@
 # Client adapters
 
+Checked on 2026-09-26 UTC with the htalk `0.8.1` x86-64 publication wheel,
+commit `ca2e237a054d79b051a34962cff05b5d0178477f`, SHA-256
+`b5aed6d76e73e479c4a257df1e4a5924f815295b219fe4516e8268a56b77a399`.
+The [publication run](https://github.com/jointsome0-lgtm/harness-talk/actions/runs/36271901091)
+passed both Linux architecture checks. Every included source and adapter matched
+the release commit. All three published PyPI files matched the checked hashes;
+a fresh PyPI installation produced the same executable.
+
+Codex CLI 0.157.1 (GPT-6 Sol medium) and Claude Code 2.1.283 (Opus 5.5 max)
+completed both initiating directions on that wheel in separate Linux terminals:
+four native notices, show before each separate ACK, two correlated replies,
+no repeated sends and two empty final inboxes. Codex kept workspace-write and
+normal automatic approval review with approved host commands; Claude kept manual
+permissions with the exact fixture executable allowed. Codex's initial network
+failure recovered automatically; the single queued start marker was not resent.
+Owned sessions were closed and their peers retired. Native ACK cleanup was
+`absent` for Codex and `unsupported/client_has_no_notification_removal` for Claude.
+These results do not establish notification removal. The independent
+[OpenCode server-session check](opencode.md) also passed.
+
+The Agent Zero pause correction has one regression that fails on the old receiver
+and passes on the new one. A focused fixture also ran the pinned native scheduler,
+extension decorator and acceptance/task-end hooks. It retained pending mail after
+a late pause and accepted one wake after resuming. A full Agent Zero WebUI runtime
+was not installed for this check. Native check/start remains non-atomic; see the
+[integration limits and plugin update steps](../integrations/README.md#agent-zero).
+Other receivers' 0.8.0 observations below were not rerun for this patch.
+
 Checked on 2026-09-26 with the htalk `0.8.0` x86-64 publication wheel from
 commit `8a07ffc22b38a006404b64eb7c7b0e0a62689c40`, SHA-256
 `fce59255b26a07dad0a521adcd5cfcb90fc2100313d79a9f04cd70ffd615996d`.
