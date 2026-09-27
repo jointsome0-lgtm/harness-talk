@@ -112,6 +112,9 @@ had exited and each socket refused connections, then removed only those two
 owned socket paths. A production tunnel supervisor needs equivalent lifecycle
 handling; the htalk receiver does not manage SSH listeners.
 
+The [Linux user-service setup](ssh-service.md) provides this separate transport
+supervisor and a helper that preserves live or uncertain socket paths.
+
 Stopping the tunnel removes connectivity, not saved mail. Stop the receiver
 and close active connections when retiring the worker. Preserve its receipt
 directory. Bluetooth, WAN operation and native Windows/macOS remain separate

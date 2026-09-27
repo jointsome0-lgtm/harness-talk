@@ -47,6 +47,8 @@ jobs:
       - name: Test Agent Zero pause handling
         if: matrix.python == '3.14'
         run: python -B -m unittest discover -s tests -p test_agent_zero.py -v
+      - name: Test reverse SSH socket recovery
+        run: python -B -m unittest discover -s tests -p test_ssh_sockets.py -v
 
   msrv:
     runs-on: ubuntu-24.04

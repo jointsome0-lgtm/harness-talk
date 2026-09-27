@@ -29,7 +29,12 @@ for a worker on another device. Keep the mailbox on an available PC so requests
 remain saved while the worker is disconnected. The receiver keeps native queue
 receipts and stops on uncertain delivery instead of resubmitting work.
 
-> Version 0.9.0 keeps mailbox schema 3. Upgrades from 0.6.1 through 0.8.1
+The [Linux user-service guide](integrations/ssh-service.md) and socket helper
+maintain a reverse SSH route when only the worker accepts SSH. They recover
+transport separately from model execution. See the [checked recovery and
+resume limits](docs/checks/2026-09-27-ssh-lifecycle.md).
+
+> Version 0.9.1 keeps mailbox schema 3. Upgrades from 0.6.1 through 0.9.0
 > need no mailbox migration. Update the worker to use the new commands. Older mailboxes back
 > up and migrate on first use; see [migration and recovery](docs/reference.md#database-and-peers).
 

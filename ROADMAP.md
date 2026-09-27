@@ -94,14 +94,18 @@ incoming native notices into one continuously running, idle Codex TUI on the
 mailbox host. Each notice began a new turn without manual continuation.
 The existing 0.8.1 adapter supplied the route; no new transport was added.
 
-The next release adds `mcp --connect` and `receive` for a worker separate from
+Version 0.9.0 adds `mcp --connect` and `receive` for a worker separate from
 the mailbox host. The [reconnection check](docs/checks/2026-09-27-ssh-reconnect.md)
 records saved requests during an outage, native wakeup after connection, and
 independent result verification. The mailbox remains singular; no replicas or
 new storage schema are introduced.
 
-Startup of stopped clients, unattended worker lifecycle and a shared task
-execution-status protocol remain open. Broader support must preserve request
+The [Linux user-service setup](integrations/ssh-service.md) adds separate SSH
+tunnel recovery and preserves active or uncertain socket paths. A
+[follow-up check](docs/checks/2026-09-27-ssh-lifecycle.md) verified automatic
+tunnel restart and explicit resume of the same idle-exited Codex session with
+a queued notice. Physical sleep/reboot, automatic worker startup and a shared
+task execution-status protocol remain open. Broader support must preserve request
 identity across disconnects and avoid automatically rerunning uncertain tasks.
 Record where work ran, how its artifacts returned and how access was authorized;
 message delivery alone is insufficient.
