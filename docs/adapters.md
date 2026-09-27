@@ -1,5 +1,32 @@
 # Client adapters
 
+Checked on 2026-09-27 UTC with the htalk `0.9.0` x86-64 publication wheel,
+commit `5e20371fde81e85dec06727f7be84f162aefb14f`, SHA-256
+`efb3d73970254d3be155f96e616b75603847dd34c63b62997a0928b4b6e5bf92`.
+The [publication run](https://github.com/jointsome0-lgtm/harness-talk/actions/runs/36292771193)
+passed both Linux architecture checks. All 91 included Git files matched the
+release tree, including the adapters and remote receiver.
+
+Codex CLI 0.157.1 with GPT-6 Luna medium and Claude Code 2.1.283 with Opus 5.5 max
+completed both initiating directions in separate ordinary Linux terminals.
+Four native notices led to separate show and ACK commands, two correlated
+replies, and two empty final inboxes. No send or reply was repeated. Codex used
+workspace-write and normal approval review, with approved host access for its
+native notification commands. Claude used manual permissions with the exact
+fixture executable allowed. Both owned sessions were closed, their recorded
+processes were absent, and their fixture peers were retired.
+
+ACK cleanup was `absent` for Codex and
+`unsupported/client_has_no_notification_removal` for Claude. These statuses do
+not establish notification removal. The separate [OpenCode check](opencode.md)
+used a local canned provider with the real MCP tool path.
+
+The new remote path also completed a [Linux LAN check](checks/2026-09-27-ssh-reconnect.md)
+with a source-built binary. The publication wheels passed the remote MCP and
+receiver contracts. The LAN result is not a second live check of the publication
+wheel. Other receivers retain their earlier observations below and were not
+rerun for 0.9.0.
+
 Checked on 2026-09-26 UTC with the htalk `0.8.1` x86-64 publication wheel,
 commit `ca2e237a054d79b051a34962cff05b5d0178477f`, SHA-256
 `b5aed6d76e73e479c4a257df1e4a5924f815295b219fe4516e8268a56b77a399`.

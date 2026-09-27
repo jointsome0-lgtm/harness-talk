@@ -1,5 +1,25 @@
 # OpenCode sessions
 
+Checked on 2026-09-27 UTC with the htalk `0.9.0` publication wheel from
+commit `5e20371fde81e85dec06727f7be84f162aefb14f`, SHA-256
+`efb3d73970254d3be155f96e616b75603847dd34c63b62997a0928b4b6e5bf92`.
+OpenCode 1.18.32 ran an isolated loopback server session with a local canned
+provider. Permissions denied all tools except the bound htalk MCP tool.
+
+One native request notice produced three completed tool calls: show, separate
+ACK, and one reply. The controller read and ACKed the correlated answer. Four
+canned provider calls completed, both inboxes were empty, both peers were
+retired, and the owned server process group had no remaining processes.
+Native ACK cleanup was `unsupported`; controller cleanup was
+`skipped/pull_only`. This checks server-session transport and native tool
+execution, not ordinary TUI receiving or model reasoning.
+
+An earlier fixture attempt failed when the sandbox denied its loopback bind,
+before a server, mailbox or send existed. That attempt was preserved. The
+passing check used approved host execution in a new directory with a fresh ID.
+The wheel came from [publication run 36292771193](https://github.com/jointsome0-lgtm/harness-talk/actions/runs/36292771193)
+and was checked before upload approval.
+
 Checked on 2026-09-26 UTC with the htalk `0.8.1` publication wheel, commit
 `ca2e237a054d79b051a34962cff05b5d0178477f`, SHA-256
 `b5aed6d76e73e479c4a257df1e4a5924f815295b219fe4516e8268a56b77a399`.
