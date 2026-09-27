@@ -88,12 +88,17 @@ a separate lost-receipt recovery were checked, with one message after replay
 and no task relaunch. [Setup](integrations/ssh.md) and
 [verification limits](docs/checks/2026-09-27-ssh-pilot.md).
 
-The checked route uses pull delivery and explicit worker startup. Automatic
-incoming wakeups and an unattended worker lifecycle remain open. Broader
-support must preserve request identity across disconnects, report execution
-status and avoid automatically rerunning uncertain tasks. Record where work
-ran, how its artifacts returned and how access was authorized; message delivery
-alone is insufficient.
+The first pilot used pull delivery and explicit worker startup. A
+[follow-up on 2026-09-27](docs/checks/2026-09-27-ssh-native.md) verified two
+incoming native notices into one continuously running, idle Codex TUI on the
+mailbox host. Each notice began a new turn without manual continuation.
+The existing 0.8.1 adapter supplied the route; no new transport was added.
+
+Startup of stopped clients, unattended worker lifecycle and a shared task
+execution-status protocol remain open. Broader support must preserve request
+identity across disconnects and avoid automatically rerunning uncertain tasks.
+Record where work ran, how its artifacts returned and how access was authorized;
+message delivery alone is insufficient.
 
 Extend the authenticated route to internet-accessible hosts after the LAN pilot. Evaluate Bluetooth against a working pilot if there is a concrete need. Independent offline mailboxes, synchronization and relay infrastructure require a separate demonstrated need before implementation.
 
