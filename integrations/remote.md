@@ -79,6 +79,8 @@ metadata store. Since 0.9.3, a receiver refuses a new notice with
 store. It also pins each native `codex queue` command to that captured store,
 so a config edit between the check and command startup cannot redirect the
 write. An already running submission finishes against its original store.
+A file symlink targeting a basename other than `state_5.sqlite` is refused with
+`codex_store_name_unsupported`, since `sqlite_home` cannot select that file.
 Restart with the existing receipt directory after the intended relocation;
 the guard does not synchronize separately copied stores or their queues.
 

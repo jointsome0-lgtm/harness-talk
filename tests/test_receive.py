@@ -134,6 +134,21 @@ class NativeReceiver(HtalkCase):
         self.assertEqual(1, len(calls))
         pinned = calls[0]["argv"][calls[0]["argv"].index("--config") + 1]
         self.assertEqual(str(self.codex_home), tomllib.loads(pinned)["sqlite_home"])
+        # A file symlink may point to a different basename. Its parent alone
+        # would select another store, possibly one owned by another receiver.
+        renamed = other / "renamed.sqlite"
+        (self.codex_home / "state_5.sqlite").rename(renamed)
+        (self.codex_home / "state_5.sqlite").symlink_to(renamed)
+        alias_words = words.copy()
+        alias_words[alias_words.index("--state") + 1] = str(self.tmp / "file-alias-state")
+        process = self.spawn(*alias_words, db=False)
+        wait_for(lambda: process.poll() is not None or len(self.calls("codex", ["queue"])) > 1)
+        if process.poll() is None:
+            process.terminate()
+        stdout, stderr = process.communicate(timeout=15)
+        self.assertEqual(1, len(self.calls("codex", ["queue"])), self.calls("codex", ["queue"])[-1])
+        self.assertEqual(2, process.returncode, stdout + stderr)
+        self.assertIn("codex_store_name_unsupported", stdout)
 
     def test_session_ownership_uses_saved_store_and_survives_cancellation(self):
         alice = self.codex_recipient("alice")

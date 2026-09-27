@@ -28,6 +28,11 @@ pub fn notify(peer: &Peer, message_id: &str, body: &str, skip: Skip<'_>) -> Outc
 /// Receivers hold ownership in this store. Refuse a changed selection and pin
 /// the child CLI too, so a later config edit cannot redirect the native write.
 pub(crate) fn notify_cli_in_store(peer: &Peer, body: &str, database: &Path) -> Outcome {
+    // sqlite_home selects state_5.sqlite; a differently named symlink target
+    // cannot be pinned by passing its parent directory to the child CLI.
+    if database.file_name() != Some(std::ffi::OsStr::new("state_5.sqlite")) {
+        return Outcome::not_submitted("codex_store_name_unsupported");
+    }
     let current =
         state::state_path().and_then(|path| std::fs::canonicalize(path).map_err(io_failure));
     match current {
