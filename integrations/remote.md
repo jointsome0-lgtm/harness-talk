@@ -66,11 +66,33 @@ directory for every restart of this receiver. It locks the directory, checks
 the saved Codex identity and binds state to the peer, session, workspace and
 connector arguments. Changing that binding is rejected.
 
+Since 0.9.2, a second receiver targeting the same saved Codex session is also
+rejected when it uses a different state directory. Ownership is locked under
+`htalk-receivers/SESSION_UUID.lock` beside the resolved Codex `state_5.sqlite`.
+Different Codex homes pointing to that same store share the lock. It is held
+until any in-flight native submission has finished. Keep these private lock
+files in place; do not unlink them to bypass an active receiver.
+
+This is local process ownership, not a cross-host lease or a task claim.
+Shared network filesystems and independently copied Codex stores are outside
+this guarantee. Processes using the same OS account can remove lock files;
+this is coordination between cooperating receivers, not account isolation.
+Stop older receivers before updating, since they do not acquire this lock.
+After stopping a receiver, reuse its original state directory: the session
+lock does not move receipts into a new directory or resolve uncertain work.
+
 When the watch connection closes, the receiver reconnects after 1, 2, 4, 8,
 16 and then at most every 30 seconds. This reconnects a stream; it does not
 call a model on a timer. Only a validated message ID becomes a native Codex
 notification. Remote notification prose and remote database paths are not
 injected into the worker. The worker reads the message through its MCP tool.
+
+A watch event can become obsolete while buffered in the connection. The
+receiver has no second mailbox read before native submission, so such an event
+can still wake the model. Always inspect current `show` state before acting:
+a request with a saved reply or an ACKed answer needs no further processing.
+An ACKed request without a reply remains open. Stream order and local ownership
+do not prevent repeated external work by separate workers sharing one peer.
 
 Before native submission, the receiver saves the message as `pending` and
 syncs the file. After a verified queue receipt, it saves that receipt and

@@ -1,11 +1,61 @@
 """Reconnect and crash ambiguity at the public native receiver interface."""
 import json
+from pathlib import Path
 import sys
 import uuid
 from compat_support import HtalkCase, wait_for
 
 
 class NativeReceiver(HtalkCase):
+    def test_session_ownership_uses_saved_store_and_survives_cancellation(self):
+        alice = self.codex_recipient("alice")
+        bob = self.codex_recipient("bob")
+        self.configure(codex_queue={"mode": "block"})
+        connector = self.tmp / "watch.py"
+        connector.write_text("""import json, os, sys
+from pathlib import Path
+Path(sys.argv[3]).write_text(str(os.getpid()))
+print(json.dumps({"event": "ready", "peer": sys.argv[1]}), flush=True)
+print(json.dumps({"event": "message", "id": sys.argv[2], "seq": 1}), flush=True)
+sys.stdin.read()
+""")
+        def words(peer, state):
+            return ["receive", "--peer", peer["name"], "--session", peer["session_id"],
+                    "--workspace", str(self.work), "--state", str(self.tmp / state),
+                    "--", sys.executable, str(connector), peer["name"], str(uuid.uuid4()),
+                    str(self.tmp / (state + "-connector.pid"))]
+        first_words = words(alice, "first")
+        first = self.spawn(*first_words, db=False)
+        self.started("codex_queue")
+        # Another home may redirect to the same saved Codex store.
+        alias = self.tmp / "other-codex-home"
+        alias.mkdir()
+        (alias / "config.toml").write_text("sqlite_home = " + json.dumps(str(self.codex_home)))
+        other_words = words(alice, "other-state")
+        blocked = self.run_raw(*other_words, db=False, env={"CODEX_HOME": str(alias)})
+        self.assertEqual(2, blocked.code)
+        self.assertIn("Another receiver owns this Codex session", blocked.stderr)
+        self.assertEqual(1, len(self.calls("codex", ["queue"])))
+        # A different session in the same store may run concurrently.
+        second = self.spawn(*words(bob, "second"), db=False)
+        wait_for(lambda: len(self.calls("codex", ["queue"])) == 2)
+        first.terminate()
+        connector_pid = int((self.tmp / "first-connector.pid").read_text())
+        wait_for(lambda: not Path(f"/proc/{connector_pid}").exists())
+        # Its native write is still blocked; ownership must not escape with
+        # the cancelled async future while that write can still take effect.
+        blocked = self.run_raw(*other_words, db=False)
+        self.assertEqual(2, blocked.code)
+        self.assertIn("Another receiver owns this Codex session", blocked.stderr)
+        self.release("codex_queue")
+        first.communicate(timeout=15)
+        self.assertEqual(0, first.returncode)
+        second.communicate(timeout=15)
+        self.assertEqual(2, second.returncode)  # fake native write has no receipt
+        stopped = self.run_raw(*first_words, db=False)
+        self.assertEqual(2, stopped.code)
+        self.assertIn("outcome unknown", stopped.stderr)
+
     def test_reconnect_deduplicates_and_uncertain_restart_stops(self):
         peer = self.codex_recipient("alice")
         self.configure(codex_queue={"queue_id": str(uuid.uuid4())})

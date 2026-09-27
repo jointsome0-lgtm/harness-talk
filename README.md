@@ -34,8 +34,11 @@ maintain a reverse SSH route when only the worker accepts SSH. They recover
 transport separately from model execution. See the [checked recovery and
 resume limits](docs/checks/2026-09-27-ssh-lifecycle.md).
 
-> Version 0.9.1 keeps mailbox schema 3. Upgrades from 0.6.1 through 0.9.0
-> need no mailbox migration. Update the worker to use the new commands. Older mailboxes back
+> Version 0.9.2 keeps mailbox schema 3. Upgrades from 0.6.1 through 0.9.1
+> need no mailbox migration. Stop older receivers before updating the worker,
+> then restart with their existing state directories. A second receiver for
+> the same saved Codex session is now rejected even with a different `--state`.
+> Older mailboxes back
 > up and migrate on first use; see [migration and recovery](docs/reference.md#database-and-peers).
 
 ## Install and share a database

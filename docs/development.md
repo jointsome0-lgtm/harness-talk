@@ -19,6 +19,9 @@ exchange with pinned identity and saved-error reporting, and cancellation or
 client loss without duplicate writes or leftover children. They also check that
 terminal Ctrl-C preserves the server connection. Run these on a host that permits
 async signal/IPC handling; restricted sandboxes can prevent that handling.
+The receiver cancellation checks require the same host access; a sandbox-only
+shutdown timeout must be compared with an ordinary host run before changing
+the product's signal handling.
 
 Check what each assertion protects for the caller before preserving it. Old Python behavior and a passing test do not establish a requirement. Compare JSON fields and values without requiring key order or spacing. Isolate invalid inputs unless error precedence itself affects recovery. Delivery outcomes must follow whether submission could have begun, not the exception class that happened to escape an older adapter.
 
