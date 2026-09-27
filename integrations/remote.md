@@ -73,6 +73,11 @@ Different Codex homes pointing to that same store share the lock. It is held
 until any in-flight native submission has finished. Keep these private lock
 files in place; do not unlink them to bypass an active receiver.
 
+Stop receivers before changing `sqlite_home` or moving the selected Codex
+metadata store. The lock identifies the store resolved at startup, while later
+native submissions consult the current configuration. Live relocation is not
+covered by this guard.
+
 This is local process ownership, not a cross-host lease or a task claim.
 Shared network filesystems and independently copied Codex stores are outside
 this guarantee. Processes using the same OS account can remove lock files;

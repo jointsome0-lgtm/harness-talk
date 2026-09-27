@@ -1,5 +1,36 @@
 # Client adapters
 
+Checked on 2026-09-27 UTC with the htalk `0.9.2` x86-64 publication wheel,
+commit `4b8c27cb848a75f33cf4edd0ade15fa320c0fccc`, SHA-256
+`bf3e6667f383fd7f82f942dccd5893d21f3627d93ee2e7a6faad5c092cfba75c`.
+The [publication run](https://github.com/jointsome0-lgtm/harness-talk/actions/runs/36314173772)
+passed both Linux architecture builds and installed-wheel checks. All 96
+included Git files matched the release tree, including every adapter source.
+
+Codex CLI 0.157.1 with GPT-6 Luna medium and Claude Code 2.1.283 with Opus 5.5 max
+completed both initiating directions in separate Linux terminals. Four native
+notices led to show before separate ACK, two correlated replies, no repeated
+sends or replies, and two empty final inboxes. Codex used workspace-write with
+normal approval review and approved host commands. Claude used manual
+permissions with the exact fixture executable allowed. Both owned sessions
+were closed, their recorded processes were absent, and their fixture peers
+were retired. ACK cleanup was `absent` for Codex and
+`unsupported/client_has_no_notification_removal` for Claude. These results do
+not establish notification removal.
+
+The same wheel also rejected a second `receive` process using a different
+state directory for the actual saved Codex session. The first receiver stopped
+normally and restarted with its original state. This used a ready-only watch
+connector: no native notice or model turn was requested by that ownership
+check. Alternate Codex homes and cancellation during a native write were
+covered by the [receiver contract check](checks/2026-09-27-receiver-ownership.md).
+Stop receivers before changing the selected Codex SQLite store; live relocation
+is outside the ownership guard checked here.
+
+The separate [OpenCode check](opencode.md) used a local canned provider with
+this publication wheel. Other receivers and LAN recovery retain their earlier
+observations below and were not rerun for this patch. Mailbox schema remains 3.
+
 Checked on 2026-09-27 UTC with the htalk `0.9.1` x86-64 publication wheel,
 commit `ab5a9e897cc176c67b480a3ba98baa0c8b0588d2`, SHA-256
 `8ba0e59a798448d69a44df83537c64fc59cdd546ffc4fe5c9e4959ca891c5cf1`.
