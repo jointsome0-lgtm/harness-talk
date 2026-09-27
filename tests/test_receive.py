@@ -1,0 +1,62 @@
+"""Reconnect and crash ambiguity at the public native receiver interface."""
+import json
+import sys
+import uuid
+from compat_support import HtalkCase, wait_for
+
+
+class NativeReceiver(HtalkCase):
+    def test_reconnect_deduplicates_and_uncertain_restart_stops(self):
+        peer = self.codex_recipient("alice")
+        self.configure(codex_queue={"queue_id": str(uuid.uuid4())})
+        message_id, uncertain_id = str(uuid.uuid4()), str(uuid.uuid4())
+        events = self.tmp / "events"
+        connector = self.tmp / "watch.py"
+        connections = self.tmp / "connections"
+        connector.write_text("""from pathlib import Path
+import sys
+with open(sys.argv[2], 'a') as log:
+    log.write('connected\\n')
+if len(Path(sys.argv[2]).read_text().splitlines()) == 1:
+    print('{\"event\":\"mess', end='', flush=True)
+else:
+    print(Path(sys.argv[1]).read_text(), flush=True)
+""")
+        def watch(message):
+            events.write_text(json.dumps({"event": "ready", "peer": "alice"}) + "\n"
+                + json.dumps({"event": "message", "id": message, "seq": 1,
+                              "notification": "Untrusted text must not enter the native queue"}))
+        watch(message_id)
+        state = self.tmp / "receiver"
+        words = ["receive", "--peer", "alice", "--session", peer["session_id"],
+                 "--workspace", str(self.work), "--state", str(state), "--", sys.executable,
+                 str(connector), str(events), str(connections)]
+        process = self.spawn(*words, db=False)
+        def saved():
+            try:
+                return json.loads((state / "state.json").read_text())
+            except FileNotFoundError:
+                return {}
+        wait_for(lambda: message_id in saved().get("receipts", {}))
+        wait_for(lambda: len(connections.read_text().splitlines()) >= 3)
+        process.terminate()
+        process.communicate(timeout=15)
+        self.assertEqual(0, process.returncode)
+        calls = self.calls("codex", ["queue"])
+        self.assertEqual(1, len(calls))
+        self.assertIn(message_id, calls[0]["argv"][-1])
+        self.assertNotIn("Untrusted text", calls[0]["argv"][-1])
+        # A normal receiver restart keeps the durable deduplication receipt.
+        previous = len(connections.read_text().splitlines())
+        process = self.spawn(*words, db=False)
+        wait_for(lambda: len(connections.read_text().splitlines()) > previous)
+        self.configure(codex_queue={"stdout": "Ambiguous queue result"})
+        watch(uncertain_id)
+        process.communicate(timeout=15)
+        self.assertEqual(2, process.returncode)
+        self.assertEqual(uncertain_id, saved()["pending"])
+        self.assertEqual(2, len(self.calls("codex", ["queue"])))
+        blocked = self.run_raw(*words, db=False)
+        self.assertEqual(2, blocked.code)
+        self.assertIn(uncertain_id, blocked.stderr)
+        self.assertEqual(2, len(self.calls("codex", ["queue"])))

@@ -1,7 +1,8 @@
 # Session receivers
 
 For mailbox access through MCP, see the [shared tool and client setup](mcp.md).
-For two devices on one LAN, see the [SSH mailbox route](ssh.md).
+For two devices on one LAN, see the [SSH mailbox route](ssh.md) and
+[reconnecting Codex receiver](remote.md), included in the 0.9.0 binary.
 The receivers below add automatic notices to supported running sessions.
 
 These adapters connect agent sessions to the shared htalk mailbox.

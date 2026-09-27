@@ -132,3 +132,12 @@ python3 -B -m unittest discover -s tests -p test_cli_compat.py -v
 ```
 
 SQLite is bundled in the executable. Ordinary Codex notifications use `codex queue`; the explicit app-server socket uses a native WebSocket connection. Claude uses its Unix socket, and OpenCode uses its local HTTP/HTTPS server.
+
+## Remote mailbox access
+
+`htalk mcp --connect -- COMMAND ARGS...` keeps a local MCP server alive while
+connecting separately for each call to a fixed remote endpoint.
+`htalk receive --peer NAME --session UUID --workspace PATH --state DIRECTORY -- COMMAND ARGS...`
+forwards its remote watch stream into one existing Codex CLI session, with
+durable notification receipts. Both commands are available in 0.9.0. They do
+not select a local database with `--db` or `--as`. See [setup and recovery](../integrations/remote.md).

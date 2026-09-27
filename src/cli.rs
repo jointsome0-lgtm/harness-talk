@@ -725,7 +725,44 @@ pub fn main() -> i32 {
             return code;
         }
     };
+    if let Some(options) = matches.subcommand_matches("receive") {
+        if matches.get_one::<String>("db").is_some() || matches.get_one::<String>("actor").is_some()
+        {
+            eprintln!("receive uses the remote watch binding; omit --db and --as");
+            return 2;
+        }
+        return match crate::receive::run(options) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("htalk receive: {error}");
+                2
+            }
+        };
+    }
     if matches.subcommand_name() == Some("mcp") {
+        let options = matches.subcommand_matches("mcp").unwrap();
+        if options.get_flag("connect") {
+            if matches.get_one::<String>("db").is_some()
+                || matches.get_one::<String>("actor").is_some()
+            {
+                eprintln!(
+                    "mcp --connect uses the remote endpoint's fixed database and peer; omit --db and --as"
+                );
+                return 2;
+            }
+            let command = options
+                .get_many::<String>("connector")
+                .unwrap()
+                .cloned()
+                .collect();
+            return match crate::mcp::connect(command) {
+                Ok(()) => 0,
+                Err(error) => {
+                    eprintln!("htalk mcp: {error}");
+                    2
+                }
+            };
+        }
         let db = matches
             .get_one::<String>("db")
             .map(PathBuf::from)

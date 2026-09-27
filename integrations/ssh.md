@@ -1,8 +1,9 @@
 # One mailbox across two devices
 
-An MCP client can run the existing `htalk mcp` command through SSH. The mailbox
-stays on one device; SSH carries the stdio protocol. This uses htalk 0.8.1 as
-shipped, with no new daemon, database schema or transport implementation.
+An MCP client can reach a fixed `htalk mcp` endpoint through SSH. The mailbox
+stays on one device; SSH carries the stdio protocol. htalk 0.9.0 keeps the
+client-facing MCP process alive and connects separately for each tool call.
+The remote endpoint can remain on 0.8.1; mailbox schema 3 is unchanged.
 
 Choose a mailbox host that will remain available. It can be either device.
 The [Linux LAN pilot](../docs/checks/2026-09-27-ssh-pilot.md) put it on the worker
@@ -58,15 +59,17 @@ adding it to the client's dedicated known-hosts file. A key obtained only with
 
 ## Connect the remote agent's MCP client
 
-Use the client's MCP configuration format. This common JSON form launches SSH
-without a terminal or a remote command; the key supplies the fixed command:
+Use the client's MCP configuration format. This common JSON form launches a persistent local MCP process. For each call
+it starts SSH without a terminal or a remote command; the key supplies the
+fixed command:
 
 ```json
 {
   "mcpServers": {
     "htalk": {
-      "command": "ssh",
+      "command": "/absolute/path/to/htalk",
       "args": [
+        "mcp", "--connect", "--", "ssh",
         "-F", "/dev/null", "-T",
         "-i", "/home/agent/.ssh/htalk-device",
         "-o", "IdentitiesOnly=yes",
@@ -99,6 +102,10 @@ listing and message permissions follow the ordinary mailbox rules. The route
 does not provide a per-recipient allowlist within that mailbox, resource quotas
 or isolation from its trusted OS account; use a separate mailbox for a separate
 collaboration. Do not expose an owner's general mailbox to untrusted users.
+
+For a worker on a different device from the mailbox, use the
+[remote receiver](remote.md). It reconnects the watch stream and preserves
+native queue receipts. The colocated setup below remains available.
 
 ## Notify an already-running Codex TUI
 

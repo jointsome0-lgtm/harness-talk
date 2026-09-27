@@ -1,6 +1,6 @@
 [package]
 name = "harness-talk"
-version = "0.8.1"
+version = "0.9.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Exchange messages between local agent sessions"
@@ -17,7 +17,7 @@ base64 = "0.22"
 clap = "4.5"
 libc = "0.2"
 regex = "1"
-rmcp = { version = "3.4.1", default-features = false, features = ["server", "macros", "transport-io"] }
+rmcp = { version = "3.4.1", default-features = false, features = ["server", "client", "macros", "transport-io"] }
 rusqlite = { version = "0.37", features = ["bundled", "backup"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
