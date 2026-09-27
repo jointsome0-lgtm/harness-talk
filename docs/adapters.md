@@ -1,5 +1,34 @@
 # Client adapters
 
+Checked on 2026-09-27 UTC with the htalk `0.9.1` x86-64 publication wheel,
+commit `ab5a9e897cc176c67b480a3ba98baa0c8b0588d2`, SHA-256
+`8ba0e59a798448d69a44df83537c64fc59cdd546ffc4fe5c9e4959ca891c5cf1`.
+The [publication run](https://github.com/jointsome0-lgtm/harness-talk/actions/runs/36308690259)
+passed both Linux architectures. All 95 included Git files matched the release
+tree, including the socket helper and adapter sources.
+
+Codex CLI 0.157.1 with GPT-6 Luna medium and Claude Code 2.1.283 with Opus 5.5 max
+completed both initiating directions in separate ordinary Linux terminals.
+Four native notices led to show before separate ACK, two correlated replies,
+no repeated sends or replies, and two empty final inboxes. Codex used normal
+workspace-write and approval review with approved host commands; Claude used
+manual permissions with the exact fixture executable allowed. Both owned
+sessions were closed and their fixture peers retired.
+
+Preflight checks failed inside the sandbox and when a host diagnostic could
+not find `claude` on its PATH. Both happened before any send. Corrected host
+checks confirmed the exact running sessions before the first request.
+ACK cleanup was `absent` for Codex and
+`unsupported/client_has_no_notification_removal` for Claude; this does not
+establish notification removal. The separate [OpenCode check](opencode.md)
+used a local canned provider and the same publication wheel.
+
+The [SSH lifecycle check](checks/2026-09-27-ssh-lifecycle.md) used installed
+htalk 0.9.0 before this patch and independently checked automatic tunnel recovery
+and explicit same-session resume. It is not another LAN trial of the 0.9.1 wheel.
+Other receivers retain their earlier observations below and were not rerun
+for this patch. Mailbox schema remains 3.
+
 Checked on 2026-09-27 UTC with the htalk `0.9.0` x86-64 publication wheel,
 commit `5e20371fde81e85dec06727f7be84f162aefb14f`, SHA-256
 `efb3d73970254d3be155f96e616b75603847dd34c63b62997a0928b4b6e5bf92`.
