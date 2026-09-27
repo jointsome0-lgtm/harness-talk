@@ -141,3 +141,10 @@ connecting separately for each call to a fixed remote endpoint.
 forwards its remote watch stream into one existing Codex CLI session, with
 durable notification receipts. Both commands are available in 0.9.0. They do
 not select a local database with `--db` or `--as`. See [setup and recovery](../integrations/remote.md).
+
+In 0.9.3, add `--mcp-command /absolute/mcp-connector` to `receive` to check
+current mail before submitting a notice. The executable takes no arguments
+and must reach the same fixed MCP mailbox and peer. It becomes part of the
+saved binding; an existing state can add its first checker without losing
+receipts. Completed messages are skipped, but ACKed unanswered requests still
+wake. Without this option the previous watch-only behavior remains.

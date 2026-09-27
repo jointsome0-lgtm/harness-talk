@@ -157,7 +157,7 @@ impl ServerHandler for Mailbox {
 
 /// Keep the harness-facing server alive across transport loss. One child and
 /// one tools/call per invocation; in particular, do not use SDK MRTR retries.
-async fn run_remote(
+pub(crate) async fn run_remote(
     command: Vec<String>,
     args: Vec<String>,
     cancel: CancellationToken,

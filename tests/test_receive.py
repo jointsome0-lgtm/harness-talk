@@ -1,12 +1,140 @@
 """Reconnect and crash ambiguity at the public native receiver interface."""
 import json
 from pathlib import Path
+import shutil
 import sys
+import tomllib
 import uuid
 from compat_support import HtalkCase, wait_for
 
 
 class NativeReceiver(HtalkCase):
+    def test_current_mail_is_checked_and_unanswered_ack_is_still_work(self):
+        peer = self.codex_recipient("alice")
+        self.htalk("peer", "add", "bob", "--harness", "generic", "--delivery", "pull")
+        self.configure(codex_queue={"queue_id": str(uuid.uuid4())})
+        def send(sender, recipient):
+            return self.htalk("--as", sender, "send", recipient,
+                              "--message", "Check this", "--no-notify")
+        answered, pending = send("bob", "alice"), send("bob", "alice")
+        answers = [self.htalk("--as", "bob", "reply", send("alice", "bob")["id"],
+                             "--message", "Done", "--no-notify") for _ in range(2)]
+        messages = [answered, *answers, pending]
+        events = self.tmp / "events"
+        events.write_text("".join(json.dumps({"event": "message", "id": m["id"],
+                                             "seq": m["seq"]}) + "\n" for m in messages))
+        # The captured events become stale before the receiver consumes them.
+        self.htalk("--as", "alice", "reply", answered["id"], "--message", "Finished", "--no-notify")
+        self.htalk("--as", "alice", "ack", answers[0]["id"])
+        self.htalk("--as", "alice", "ack", pending["id"])
+        watch = self.tmp / "watch.py"
+        watch.write_text("import sys\nfrom pathlib import Path\n"
+                         "print('{\"event\":\"ready\",\"peer\":\"alice\"}', flush=True)\n"
+                         "print(Path(sys.argv[1]).read_text(), end='', flush=True)\nsys.stdin.read()\n")
+        mode, attempts = self.tmp / "mode", self.tmp / "attempts"
+        mode.write_text("offline")
+        mcp = self.tmp / "mcp"
+        command = self.argv(["--as", "alice", "mcp"], True)
+        mcp.write_text(f"#!{sys.executable}\nimport os, sys\nfrom pathlib import Path\n"
+                       f"with open({str(attempts)!r}, 'a') as f: f.write(str(os.getpid())+'\\n')\n"
+                       f"mode=Path({str(mode)!r}).read_text()\n"
+                       "if mode == 'offline': sys.exit(1)\n"
+                       "if mode == 'hang': sys.stdin.read(); sys.exit(1)\n"
+                       f"os.execv({command[0]!r}, {command!r})\n")
+        mcp.chmod(0o700)
+        state = self.tmp / "receiver"
+        base = ["receive", "--peer", "alice", "--session", peer["session_id"],
+                "--workspace", str(self.work), "--state", str(state)]
+        words = [*base, "--mcp-command", str(mcp), "--", sys.executable, str(watch), str(events)]
+        saved = lambda: json.loads((state / "state.json").read_text())
+        process = self.spawn(*words, db=False)
+        wait_for(lambda: attempts.exists() and len(attempts.read_text().splitlines()) >= 2)
+        self.assertEqual([], self.calls("codex", ["queue"]))
+        self.assertIsNone(saved()["pending"])
+        mode.write_text("online")
+        expected = {pending["id"], answers[1]["id"]}
+        wait_for(lambda: expected == set(saved()["receipts"]))
+        process.terminate()
+        stdout, stderr = process.communicate(timeout=15)
+        self.assertEqual(0, process.returncode, stderr)
+        skipped = {v["id"] for line in stdout.splitlines()
+                   if (v := json.loads(line))["event"] == "skipped"}
+        self.assertEqual({answered["id"], answers[0]["id"]}, skipped)
+        self.assertEqual(2, len(self.calls("codex", ["queue"])))
+        self.assertIsNone(self.htalk("--as", "alice", "show", pending["id"])["reply"])
+        self.assertIsNone(self.htalk("--as", "alice", "show", answers[1]["id"])["ack_at"])
+        # Adding the first checker to a legacy receipt file preserves history.
+        legacy = saved()
+        legacy["binding"].pop("mcp_command")
+        (state / "state.json").write_text(json.dumps(legacy))
+        count = len(attempts.read_text().splitlines())
+        process = self.spawn(*words, db=False)
+        wait_for(lambda: len(attempts.read_text().splitlines()) > count)
+        process.terminate()
+        process.communicate(timeout=15)
+        self.assertEqual(expected, set(saved()["receipts"]))
+        self.assertEqual(str(mcp), saved()["binding"]["mcp_command"])
+        blocked = self.run_raw(*base, "--", sys.executable, str(watch), str(events), db=False)
+        self.assertEqual(2, blocked.code)
+        self.assertIn("binding changed", blocked.stderr)
+        # A valid show result for a different recipient must stop before waking.
+        wrong = send("alice", "bob")
+        events.write_text(json.dumps({"event": "message", "id": wrong["id"], "seq": wrong["seq"]}) + "\n")
+        rejected = self.run_raw(*words, db=False)
+        self.assertEqual(2, rejected.code)
+        self.assertIn("differs from the watched message or recipient", rejected.stderr)
+        self.assertIsNone(saved()["pending"])
+        # Cancellation also cleans up a checker still waiting for its handshake.
+        mode.write_text("hang")
+        count = len(attempts.read_text().splitlines())
+        process = self.spawn(*words, db=False)
+        wait_for(lambda: len(attempts.read_text().splitlines()) > count)
+        checker_pid = int(attempts.read_text().splitlines()[-1])
+        process.terminate()
+        process.communicate(timeout=15)
+        self.assertEqual(0, process.returncode)
+        self.assertFalse(Path(f"/proc/{checker_pid}").exists())
+        self.assertEqual(2, len(self.calls("codex", ["queue"])))
+
+    def test_store_move_stops_before_native_write_and_keeps_recovery(self):
+        peer = self.codex_recipient("alice")
+        self.configure(codex_queue={"queue_id": str(uuid.uuid4())})
+        ready, gate = self.tmp / "ready", self.tmp / "release"
+        message_id = str(uuid.uuid4())
+        watch = self.tmp / "watch.py"
+        watch.write_text(f"import json, sys, time\nfrom pathlib import Path\n"
+                         f"Path({str(ready)!r}).touch()\n"
+                         "print('{\"event\":\"ready\",\"peer\":\"alice\"}', flush=True)\n"
+                         f"while not Path({str(gate)!r}).exists(): time.sleep(0.01)\n"
+                         f"print({json.dumps({'event':'message','id':message_id,'seq':1})!r}, flush=True)\n"
+                         "sys.stdin.read()\n")
+        state = self.tmp / "receiver"
+        words = ["receive", "--peer", "alice", "--session", peer["session_id"],
+                 "--workspace", str(self.work), "--state", str(state), "--", sys.executable, str(watch)]
+        process = self.spawn(*words, db=False)
+        wait_for(ready.exists)
+        other = self.tmp / "relocated-store"
+        other.mkdir()
+        shutil.copyfile(self.codex_home / "state_5.sqlite", other / "state_5.sqlite")
+        config = self.codex_home / "config.toml"
+        config.write_text("sqlite_home = " + json.dumps(str(other)))
+        gate.touch()
+        stdout, stderr = process.communicate(timeout=15)
+        self.assertEqual(2, process.returncode, stderr)
+        self.assertIn("codex_store_changed", stdout)
+        self.assertEqual([], self.calls("codex", ["queue"]))
+        saved = lambda: json.loads((state / "state.json").read_text())
+        self.assertIsNone(saved()["pending"])
+        config.unlink()
+        process = self.spawn(*words, db=False)
+        wait_for(lambda: message_id in saved()["receipts"])
+        process.terminate()
+        process.communicate(timeout=15)
+        calls = self.calls("codex", ["queue"])
+        self.assertEqual(1, len(calls))
+        pinned = calls[0]["argv"][calls[0]["argv"].index("--config") + 1]
+        self.assertEqual(str(self.codex_home), tomllib.loads(pinned)["sqlite_home"])
+
     def test_session_ownership_uses_saved_store_and_survives_cancellation(self):
         alice = self.codex_recipient("alice")
         bob = self.codex_recipient("bob")

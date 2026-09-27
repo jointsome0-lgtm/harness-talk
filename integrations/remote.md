@@ -74,9 +74,13 @@ until any in-flight native submission has finished. Keep these private lock
 files in place; do not unlink them to bypass an active receiver.
 
 Stop receivers before changing `sqlite_home` or moving the selected Codex
-metadata store. The lock identifies the store resolved at startup, while later
-native submissions consult the current configuration. Live relocation is not
-covered by this guard.
+metadata store. Since 0.9.3, a receiver refuses a new notice with
+`codex_store_changed` if the selected store differs from its locked startup
+store. It also pins each native `codex queue` command to that captured store,
+so a config edit between the check and command startup cannot redirect the
+write. An already running submission finishes against its original store.
+Restart with the existing receipt directory after the intended relocation;
+the guard does not synchronize separately copied stores or their queues.
 
 This is local process ownership, not a cross-host lease or a task claim.
 Shared network filesystems and independently copied Codex stores are outside
@@ -92,12 +96,12 @@ call a model on a timer. Only a validated message ID becomes a native Codex
 notification. Remote notification prose and remote database paths are not
 injected into the worker. The worker reads the message through its MCP tool.
 
-A watch event can become obsolete while buffered in the connection. The
-receiver has no second mailbox read before native submission, so such an event
-can still wake the model. Always inspect current `show` state before acting:
-a request with a saved reply or an ACKed answer needs no further processing.
-An ACKed request without a reply remains open. Stream order and local ownership
-do not prevent repeated external work by separate workers sharing one peer.
+A watch event can become obsolete while buffered in the connection. Use the
+current-mail check below to skip completed messages before native submission.
+The agent must still inspect `show` before acting: a request with a saved reply
+or an ACKed answer needs no further processing, while an ACKed unanswered
+request remains open. Mail can change after any read. This check and local
+ownership do not provide exactly-once external work.
 
 Before native submission, the receiver saves the message as `pending` and
 syncs the file. After a verified queue receipt, it saves that receipt and
@@ -116,6 +120,41 @@ A native identity check reads saved CLI metadata. It does not prove a live
 TUI or queue consumption. Verify a bounded task and its correlated answer
 independently. This receiver neither starts stopped clients nor resumes an
 interrupted task automatically.
+
+## Check current mail
+
+With worker version 0.9.3, add an absolute executable path to the fixed MCP
+connector already used by the worker. For example, `/private/mcp-connector`
+can execute the owner's pinned SSH command or connect to the private MCP
+socket. It receives no command-line arguments from the receiver. It must speak
+MCP on stdin/stdout and reach the same mailbox and peer as the watch connector.
+Reuse the same wrapper in the worker's `htalk mcp --connect -- ...` setup.
+
+```sh
+htalk receive --peer laptop-worker --session EXACT_SESSION_UUID \
+  --workspace /absolute/project --state /private/receiver-state \
+  --mcp-command /private/mcp-connector -- /private/watch-connector
+```
+
+For every new watch ID, the receiver calls `show` through that authenticated
+endpoint before saving any native submission intent. It validates the returned
+ID, sequence and recipient. A request with a saved reply or an ACKed answer
+emits `skipped`; an unanswered request still wakes even after ACK. No ACK or
+reply is written by the receiver, and a skip is not a native queue receipt.
+
+If the read connection fails, it emits `check_unavailable` and reconnects the
+watch stream with the existing backoff. It does not wake without a successful
+check. A rejected, malformed or mismatched mailbox result stops for inspection.
+Cancellation waits for checker cleanup as well as any native submission.
+
+This option can be added to an existing receiver state once, provided no
+notification outcome is unresolved. Old receipts are kept. The executable path
+then becomes part of the saved binding; changing or removing it is refused.
+Preserve the original connector and state for recovery. Old receiver commands
+without this option remain compatible but can still wake on stale events.
+The mailbox endpoint needs no new protocol or schema; its existing MCP `show`
+operation supplies the read. Authentication remains the connector's job.
+The receiver's `ready` event reports whether `mailbox_check` is enabled.
 
 ## When only the laptop accepts SSH
 
