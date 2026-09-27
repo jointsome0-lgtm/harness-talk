@@ -110,10 +110,12 @@ verified with htalk 0.8.1 and Codex CLI 0.157.1 on Linux.
 
 Start the ordinary TUI in its intended workspace, with the local
 [MCP entry](mcp.md) fixed to this mailbox and `--as codex-worker`. Keep its
-normal model and permission settings. Register that fresh native name before
-using mailbox tools; the MCP server can start before registration.
-Give the receiving session its owner-authorized task scope before sending work;
-a peer notification grants no additional permissions.
+normal model and permission settings. Before discovery, give the session its
+owner-authorized task scope and ask it to reply READY without using mailbox
+tools. Wait for that initial turn to finish and the TUI to become idle; this
+establishes the saved session identity needed by discovery and registration.
+Register the fresh native name before using mailbox tools; the MCP server can
+start before registration. A peer notification grants no additional permissions.
 
 In a separate terminal under the same mailbox account and Codex environment,
 find the exact session UUID and confirm its workspace:
