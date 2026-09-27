@@ -110,6 +110,13 @@ identity across disconnects and avoid automatically rerunning uncertain tasks.
 Record where work ran, how its artifacts returned and how access was authorized;
 message delivery alone is insufficient.
 
+Receiver ownership is local to the saved Codex store and session; it does not
+claim a mailbox task for one worker. A buffered watch notice can become
+obsolete after a reply or ACK. A future machine check must preserve ACKed,
+unanswered requests and use an authenticated mailbox read; it must not turn a
+pre-check into a promise of exactly-once external work. The current receiver
+still asks the agent to inspect the message before acting.
+
 Extend the authenticated route to internet-accessible hosts after the LAN pilot. Evaluate Bluetooth against a working pilot if there is a concrete need. Independent offline mailboxes, synchronization and relay infrastructure require a separate demonstrated need before implementation.
 
 ## Native macOS and Windows

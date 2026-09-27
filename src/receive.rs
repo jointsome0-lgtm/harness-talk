@@ -66,6 +66,51 @@ fn emit(value: Value) -> Result<()> {
     Ok(())
 }
 
+fn lock_session(session: &str) -> Result<File> {
+    // Different Codex homes can select the same SQLite store. Key ownership
+    // on that resolved store, not the caller-chosen receipt directory or home.
+    let database = fs::canonicalize(codex::state::state_path()?)?;
+    let directory = database.parent().unwrap().join("htalk-receivers");
+    match fs::DirBuilder::new().mode(0o700).create(&directory) {
+        Ok(()) => (),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
+        Err(error) => return Err(error.into()),
+    }
+    let meta = fs::symlink_metadata(&directory)?;
+    if !meta.is_dir() || meta.uid() != unsafe { libc::getuid() } || meta.mode() & 0o077 != 0 {
+        return Err("Receiver session locks need a private directory owned by this account".into());
+    }
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(directory.join(format!("{session}.lock")))?;
+    let meta = lock.metadata()?;
+    if !meta.is_file()
+        || meta.uid() != unsafe { libc::getuid() }
+        || meta.mode() & 0o077 != 0
+        || meta.nlink() != 1
+    {
+        return Err("Receiver session lock must be a private owned regular file".into());
+    }
+    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+        let error = std::io::Error::last_os_error();
+        if error.kind() == std::io::ErrorKind::WouldBlock {
+            return Err(
+                "Another receiver owns this Codex session; reuse its saved state after it stops"
+                    .into(),
+            );
+        }
+        return Err(error.into());
+    }
+    // Keep the inode across restarts. Unlinking a held lock would permit a
+    // second receiver to lock a new inode at the same pathname.
+    Ok(lock)
+}
+
 pub(crate) fn run(options: &ArgMatches) -> Result<()> {
     let word = |name| options.get_one::<String>(name).unwrap().clone();
     let binding = Binding {
@@ -140,7 +185,11 @@ fn operate(directory: &Path, mut state: State, _lock: File) -> Result<()> {
         retired_at: None,
     };
     codex::probe(&peer)?;
-    tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
+    let _session_lock = lock_session(&peer.session_id)?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+    let result = runtime.block_on(async {
         let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
         let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
         let mut delay = 1;
@@ -220,5 +269,9 @@ fn operate(directory: &Path, mut state: State, _lock: File) -> Result<()> {
             }
             delay = (delay * 2).min(30);
         }
-    })
+    });
+    // Cancellation can leave a native submission running in spawn_blocking.
+    // Join it before releasing either ownership lock.
+    drop(runtime);
+    result
 }
