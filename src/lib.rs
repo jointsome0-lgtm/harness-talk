@@ -11,6 +11,7 @@ pub mod notify;
 pub mod opencode;
 pub mod os;
 mod parser;
+mod receive;
 mod schema;
 pub mod store;
 pub mod validate;

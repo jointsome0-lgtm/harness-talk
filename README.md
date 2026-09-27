@@ -23,14 +23,14 @@ For clients with MCP support, the shared [MCP mailbox tool](integrations/mcp.md)
 provides the same message commands over stdio. Tool access and automatic session
 notification are documented separately for each harness.
 
-Two devices can share one mailbox through the existing [MCP-over-SSH route](integrations/ssh.md).
-The verified Linux LAN pilot includes a bounded task on the second device and
-recovery after a lost SSH receipt; it uses the current executable unchanged.
-An already-running Codex TUI on the mailbox host can also receive
-[native notices from a remote sender](integrations/ssh.md#notify-an-already-running-codex-tui).
+Two devices can share one mailbox through the [MCP-over-SSH route](integrations/ssh.md).
+Version 0.9.0 adds reconnecting tool access and a [Codex receiver](integrations/remote.md)
+for a worker on another device. Keep the mailbox on an available PC so requests
+remain saved while the worker is disconnected. The receiver keeps native queue
+receipts and stops on uncertain delivery instead of resubmitting work.
 
-> Version 0.8.0 adds managed sessions without changing mailbox schema 3.
-> Upgrades from 0.6.1 or 0.7.0 need no mailbox migration. Older mailboxes back
+> Version 0.9.0 keeps mailbox schema 3. Upgrades from 0.6.1 through 0.8.1
+> need no mailbox migration. Update the worker to use the new commands. Older mailboxes back
 > up and migrate on first use; see [migration and recovery](docs/reference.md#database-and-peers).
 
 ## Install and share a database

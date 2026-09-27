@@ -46,6 +46,11 @@ and peer. A cloud MCP client that cannot spawn a local stdio process needs a
 different transport; this integration supplies no HTTP listener or remote
 authentication service of its own.
 
+For a remote mailbox, htalk 0.9.0 adds `mcp --connect -- COMMAND ARGS...`.
+It preserves the local MCP connection while each tool call starts a separate
+fixed connector. Calls are sent once, with uncertain writes reported for
+inspection. See [SSH setup](ssh.md) and [remote recovery](remote.md).
+
 ## Use the tool
 
 The tool is named `htalk`; its argument is an array of CLI words without the
