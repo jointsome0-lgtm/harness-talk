@@ -26,6 +26,8 @@ notification are documented separately for each harness.
 Two devices can share one mailbox through the existing [MCP-over-SSH route](integrations/ssh.md).
 The verified Linux LAN pilot includes a bounded task on the second device and
 recovery after a lost SSH receipt; it uses the current executable unchanged.
+An already-running Codex TUI on the mailbox host can also receive
+[native notices from a remote sender](integrations/ssh.md#notify-an-already-running-codex-tui).
 
 > Version 0.8.0 adds managed sessions without changing mailbox schema 3.
 > Upgrades from 0.6.1 or 0.7.0 need no mailbox migration. Older mailboxes back
