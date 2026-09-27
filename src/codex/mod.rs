@@ -20,8 +20,25 @@ const QUEUE_TIMEOUT: Duration = Duration::from_secs(20);
 
 pub fn notify(peer: &Peer, message_id: &str, body: &str, skip: Skip<'_>) -> Outcome {
     match socket(peer) {
-        None => notify_cli(peer, body, skip),
+        None => notify_cli(peer, body, skip, None),
         Some(path) => notify_socket(peer, path, message_id, body, skip),
+    }
+}
+
+/// Receivers hold ownership in this store. Refuse a changed selection and pin
+/// the child CLI too, so a later config edit cannot redirect the native write.
+pub(crate) fn notify_cli_in_store(peer: &Peer, body: &str, database: &Path) -> Outcome {
+    // sqlite_home selects state_5.sqlite; a differently named symlink target
+    // cannot be pinned by passing its parent directory to the child CLI.
+    if database.file_name() != Some(std::ffi::OsStr::new("state_5.sqlite")) {
+        return Outcome::not_submitted("codex_store_name_unsupported");
+    }
+    let current =
+        state::state_path().and_then(|path| std::fs::canonicalize(path).map_err(io_failure));
+    match current {
+        Ok(path) if path == database => notify_cli(peer, body, &|| Ok(None), Some(database)),
+        Ok(_) => Outcome::not_submitted("codex_store_changed"),
+        Err(failure) => Outcome::not_submitted(failure.to_string()),
     }
 }
 
@@ -151,17 +168,34 @@ fn notify_socket(
     })
 }
 
-fn notify_cli(peer: &Peer, body: &str, skip: Skip<'_>) -> Outcome {
-    match saved_identity(peer).and_then(|_| skip()) {
+fn notify_cli(peer: &Peer, body: &str, skip: Skip<'_>, database: Option<&Path>) -> Outcome {
+    let identity = match database {
+        Some(path) => saved_identity_at(peer, path),
+        None => saved_identity(peer),
+    };
+    match identity.and_then(|_| skip()) {
         Err(failure) => return Outcome::not_submitted(failure.to_string()),
         Ok(Some(reason)) => return Outcome::not_submitted(reason.as_str()),
         Ok(None) => (),
     }
-    let output = match os::run_command(
-        "codex",
-        &["queue", "--thread", &peer.session_id, "--message", body],
-        QUEUE_TIMEOUT,
-    ) {
+    let pinned_store = match database {
+        Some(path) => {
+            let Some(parent) = path.parent().unwrap().to_str() else {
+                return Outcome::not_submitted("codex_store_path_not_utf8");
+            };
+            Some(format!(
+                "sqlite_home={}",
+                toml::Value::String(parent.into())
+            ))
+        }
+        None => None,
+    };
+    let mut args = vec!["queue"];
+    if let Some(value) = &pinned_store {
+        args.extend(["--config", value.as_str()]);
+    }
+    args.extend(["--thread", &peer.session_id, "--message", body]);
+    let output = match os::run_command("codex", &args, QUEUE_TIMEOUT) {
         Ok(output) => output,
         // Spawn failures precede submission; anything after the process starts is uncertain.
         Err(failure @ Failure::Class("FileNotFoundError" | "PermissionError")) => {
@@ -222,7 +256,11 @@ fn check_live(rpc: &mut Rpc, peer: &Peer) -> Result<Value, Failure> {
 /// Read the installed CLI's saved address, without starting any client.
 fn saved_identity(peer: &Peer) -> Result<Value, Failure> {
     let path = state::state_path()?;
-    let (id, cwd, archived, source) = state::saved_thread_at(&path, &peer.session_id)?
+    saved_identity_at(peer, &path)
+}
+
+fn saved_identity_at(peer: &Peer, path: &Path) -> Result<Value, Failure> {
+    let (id, cwd, archived, source) = state::saved_thread_at(path, &peer.session_id)?
         .ok_or_else(|| Failure::coded("recipient_not_in_codex_state"))?;
     if id != peer.session_id || !same_workspace(Some(&cwd), &peer.workspace) {
         return Err(Failure::coded("recipient_identity_changed"));

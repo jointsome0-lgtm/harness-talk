@@ -106,6 +106,8 @@ except FileNotFoundError:
     config = {}
 argv = sys.argv[1:]
 log(argv=argv)
+if CLIENT == "codex" and argv[:2] == ["queue", "--config"]:
+    argv = [argv[0], *argv[3:]]
 if CLIENT == "claude" and argv == ["agents", "--json"]:
     settings = config.get("claude_agents", {})
     if settings.get("gate"):

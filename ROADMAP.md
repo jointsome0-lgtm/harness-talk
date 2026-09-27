@@ -111,11 +111,12 @@ Record where work ran, how its artifacts returned and how access was authorized;
 message delivery alone is insufficient.
 
 Receiver ownership is local to the saved Codex store and session; it does not
-claim a mailbox task for one worker. A buffered watch notice can become
-obsolete after a reply or ACK. A future machine check must preserve ACKed,
-unanswered requests and use an authenticated mailbox read; it must not turn a
-pre-check into a promise of exactly-once external work. The current receiver
-still asks the agent to inspect the message before acting.
+claim a mailbox task for one worker. Version 0.9.3 adds an optional authenticated
+MCP read before waking: completed messages are skipped while ACKed unanswered
+requests remain work. The receiver also refuses a changed Codex store and pins
+native queue commands to the store whose lock it holds. See [current-mail
+checks](integrations/remote.md#check-current-mail). This is not exactly-once
+external work; agents still inspect current state before acting.
 
 Extend the authenticated route to internet-accessible hosts after the LAN pilot. Evaluate Bluetooth against a working pilot if there is a concrete need. Independent offline mailboxes, synchronization and relay infrastructure require a separate demonstrated need before implementation.
 
