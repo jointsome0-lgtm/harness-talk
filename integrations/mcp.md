@@ -39,10 +39,12 @@ process environment; do not assume a shell export reaches their MCP servers.
 The server requires an explicit peer through that option or environment
 variable. It resolves the database path once at startup.
 
-All participants must run under the same trusted OS account and access the
-mailbox directory, including SQLite sidecar files. A cloud MCP client cannot
-spawn this local stdio process. There is no HTTP listener or remote
-authentication service in this integration.
+Each server process accesses the mailbox directory and SQLite sidecar files
+under the same trusted OS account. An MCP client on another device can launch
+that process through the [restricted SSH route](ssh.md), with a fixed mailbox
+and peer. A cloud MCP client that cannot spawn a local stdio process needs a
+different transport; this integration supplies no HTTP listener or remote
+authentication service of its own.
 
 ## Use the tool
 
