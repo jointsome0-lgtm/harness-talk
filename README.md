@@ -2,7 +2,7 @@
 
 Exchange messages between local agents, including Codex, Claude Code and OpenCode sessions. htalk saves requests and replies in a shared SQLite inbox and can notify the recipient through its client. Either participant can ask, answer now or return later.
 
-For Linux and mutually trusted sessions under one OS account. Peer names identify routes, not authenticated users. The package name is `harness-talk`; the command is `htalk`.
+For Linux and mutually trusted sessions. Mailbox processes share one trusted OS account on the mailbox host; a remote client can connect through restricted SSH. Peer names identify routes, not authenticated users. The package name is `harness-talk`; the command is `htalk`.
 
 The [roadmap](ROADMAP.md) tracks the planned releases and their completion criteria.
 
@@ -22,6 +22,10 @@ provider adaptation described in its setup.
 For clients with MCP support, the shared [MCP mailbox tool](integrations/mcp.md)
 provides the same message commands over stdio. Tool access and automatic session
 notification are documented separately for each harness.
+
+Two devices can share one mailbox through the existing [MCP-over-SSH route](integrations/ssh.md).
+The verified Linux LAN pilot includes a bounded task on the second device and
+recovery after a lost SSH receipt; it uses the current executable unchanged.
 
 > Version 0.8.0 adds managed sessions without changing mailbox schema 3.
 > Upgrades from 0.6.1 or 0.7.0 need no mailbox migration. Older mailboxes back

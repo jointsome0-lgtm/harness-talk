@@ -81,9 +81,19 @@ the live model checks and package checks are recorded separately.
 
 ## Work between devices
 
-Planned. An agent on one device asks an agent on another device to perform a bounded task and receives its result. Start with two devices on one LAN and one authoritative mailbox reached through SSH. The task must actually run on the second device.
+Linux LAN pilot completed on 2026-09-27 with the existing 0.8.1 executable.
+An agent on the worker laptop processed a bounded synthetic task and returned
+an independently verified result through one mailbox over SSH. Four ACKs and
+a separate lost-receipt recovery were checked, with one message after replay
+and no task relaunch. [Setup](integrations/ssh.md) and
+[verification limits](docs/checks/2026-09-27-ssh-pilot.md).
 
-Ready to release when the two-device exchange preserves request identity across disconnects, reports execution status, and does not automatically rerun a task whose outcome is uncertain. Record where the task ran, how its result or artifact returned, and how access is authorized. A successful message delivery alone is insufficient.
+The checked route uses pull delivery and explicit worker startup. Automatic
+incoming wakeups and an unattended worker lifecycle remain open. Broader
+support must preserve request identity across disconnects, report execution
+status and avoid automatically rerunning uncertain tasks. Record where work
+ran, how its artifacts returned and how access was authorized; message delivery
+alone is insufficient.
 
 Extend the authenticated route to internet-accessible hosts after the LAN pilot. Evaluate Bluetooth against a working pilot if there is a concrete need. Independent offline mailboxes, synchronization and relay infrastructure require a separate demonstrated need before implementation.
 
