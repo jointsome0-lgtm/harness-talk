@@ -42,7 +42,7 @@ impl BoundSocket {
         })
     }
 
-    fn check(&self) -> Result<(), Failure> {
+    pub(crate) fn check(&self) -> Result<(), Failure> {
         if Self::capture(self.path.clone())? != *self {
             return Err(Failure::coded("codex_server_socket_changed"));
         }

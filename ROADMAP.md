@@ -127,6 +127,11 @@ on the checked machines. A replaced daemon listener still requires inspection
 and rebinding; physical Wi-Fi loss, sleep/reboot and automatic model recovery
 remain open. Enabling a service is not proof of unattended startup.
 
+Version 0.9.5 adds `receive status` and an explicit `receive rebind` for a
+replacement listener at the saved socket path. It verifies the same loaded
+session and workspace, preserves receipts and refuses unresolved submissions.
+It does not resume a worker or repeat receipted notices. See [recovery steps](integrations/remote.md#inspect-and-recover-after-a-daemon-restart).
+
 Extend the authenticated route to internet-accessible hosts after the LAN pilot. Evaluate Bluetooth against a working pilot if there is a concrete need. Independent offline mailboxes, synchronization and relay infrastructure require a separate demonstrated need before implementation.
 
 ## Native macOS and Windows

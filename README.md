@@ -34,12 +34,13 @@ maintain a reverse SSH route when only the worker accepts SSH. They recover
 transport separately from model execution. See the [checked recovery and
 resume limits](docs/checks/2026-09-27-ssh-lifecycle.md).
 
-> Version 0.9.3 keeps mailbox schema 3. Upgrades from 0.6.1 through 0.9.2
+> Version 0.9.5 keeps mailbox schema 3. Upgrades from 0.6.1 through 0.9.4
 > need no mailbox migration. Stop older receivers before updating the worker,
 > then restart with their existing state directories. Add `--mcp-command` to
 > [check current mail before waking](integrations/remote.md#check-current-mail).
 > Existing commands keep their previous behavior without that option.
 > Receivers also refuse a changed Codex store before submitting a new notice.
+> After a daemon restart, inspect and explicitly [rebind the same session](integrations/remote.md#inspect-and-recover-after-a-daemon-restart).
 > Older mailboxes back
 > up and migrate on first use; see [migration and recovery](docs/reference.md#database-and-peers).
 

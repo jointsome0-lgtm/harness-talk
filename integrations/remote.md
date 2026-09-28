@@ -127,9 +127,50 @@ listener; use the Codex server's own private socket.
 
 The first socket binding can be added to existing receipt state only when no
 notification outcome is unresolved. Existing receipts remain. After that,
-changing or removing the socket binding is refused. Resolve a pending unknown
+the ordinary start command refuses a changed or removed binding. Resolve a pending unknown
 submission by inspecting the original queue, session and mailbox first. Do not
 replace the receipt directory or resend a task to get past this guard.
+
+### Inspect and recover after a daemon restart
+
+Worker version 0.9.5 adds two maintenance commands:
+
+```sh
+htalk receive status --state /private/receiver-state
+htalk receive rebind --state /private/receiver-state
+```
+
+`status` reads the saved ledger and probes the bound local Codex target. It
+creates no state, starts no client and does not contact the remote mailbox.
+Its JSON reports `receipt_count`, `pending`, `pending_status`, the socket path,
+`state_lock_held` and `target`. A changed listener reports
+`target.detail: codex_server_socket_changed`; an unloaded session reports
+`recipient_not_loaded`. A CLI binding without an explicit socket can only
+report saved identity and `runtime_status: unknown`.
+
+This is a snapshot. With a pending ID and the receiver lock held,
+`pending_status` is `in_flight`; with the lock free it is `unknown`. The state
+lock is released before the read-only probe, so a slow server does not block
+receiver startup. These fields do not establish task completion or prove that
+the SSH connection works.
+
+For a replaced daemon listener, stop the receiver first. Inspect the original
+queue, mailbox and session history for unfinished work, then explicitly resume
+the same UUID and workspace on the intended Codex server. Keep its existing
+socket path. Run `rebind`, then restart the original receiver command with its
+original state directory. The command verifies the live UUID, workspace and
+loaded status and accepts only the replacement listener at that saved path.
+It checks the listener again after the probe and before saving. Peer, session,
+workspace, connector, checker and all receipts stay unchanged. An unchanged
+listener returns `changed: false` without rewriting state.
+
+Rebind refuses an active receiver or any pending ID. It cannot reconcile an
+unknown submission, resume a thread or repeat a notice. Receipts mean submitted,
+not consumed: if a daemon lost its queue before consumption, a saved receipt
+still prevents automatic resubmission. Inspect and recover that work explicitly.
+No mailbox migration or receiver-state reset is needed for this update.
+
+### Reconnect the mailbox watch
 
 When the watch connection closes, the receiver reconnects after 1, 2, 4, 8,
 16 and then at most every 30 seconds. This reconnects a stream; it does not
