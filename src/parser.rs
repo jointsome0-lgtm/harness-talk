@@ -52,6 +52,8 @@ pub fn command() -> Command {
                 .help("Private receiver directory. Keep it across reconnects and restarts."))
             .arg(Arg::new("mcp_command").long("mcp-command").value_name("PATH")
                 .help("Absolute executable for the same fixed MCP mailbox. Recheck each message before waking; no arguments or shell. Keep this binding across restarts."))
+            .arg(Arg::new("codex_socket").long("codex-socket").value_name("PATH")
+                .help("Explicit local Codex app-server Unix socket hosting this session. Use its existing native adapter instead of codex queue; never fall back to another server."))
             .arg(Arg::new("connector").last(true).num_args(1..).required(true)
                 .help("Fixed watch executable and arguments, after --; no shell."))
         )

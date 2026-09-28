@@ -21,24 +21,36 @@ const QUEUE_TIMEOUT: Duration = Duration::from_secs(20);
 pub fn notify(peer: &Peer, message_id: &str, body: &str, skip: Skip<'_>) -> Outcome {
     match socket(peer) {
         None => notify_cli(peer, body, skip, None),
-        Some(path) => notify_socket(peer, path, message_id, body, skip),
+        Some(path) => notify_socket(peer, path, message_id, body, skip, None),
     }
 }
 
-/// Receivers hold ownership in this store. Refuse a changed selection and pin
-/// the child CLI too, so a later config edit cannot redirect the native write.
-pub(crate) fn notify_cli_in_store(peer: &Peer, body: &str, database: &Path) -> Outcome {
+/// Keep receiver ownership in its captured store. CLI writes also pin that store;
+/// an explicit server remains the delivery authority for socket writes.
+pub(crate) fn notify_in_store(
+    peer: &Peer,
+    message_id: &str,
+    body: &str,
+    database: &Path,
+    bound: Option<&rpc::BoundSocket>,
+) -> Outcome {
     // sqlite_home selects state_5.sqlite; a differently named symlink target
     // cannot be pinned by passing its parent directory to the child CLI.
     if database.file_name() != Some(std::ffi::OsStr::new("state_5.sqlite")) {
         return Outcome::not_submitted("codex_store_name_unsupported");
     }
-    let current =
-        state::state_path().and_then(|path| std::fs::canonicalize(path).map_err(io_failure));
-    match current {
-        Ok(path) if path == database => notify_cli(peer, body, &|| Ok(None), Some(database)),
-        Ok(_) => Outcome::not_submitted("codex_store_changed"),
-        Err(failure) => Outcome::not_submitted(failure.to_string()),
+    let check = || {
+        let current =
+            state::state_path().and_then(|path| std::fs::canonicalize(path).map_err(io_failure))?;
+        if current != database {
+            return Err(Failure::coded("codex_store_changed"));
+        }
+        saved_identity_at(peer, database)?;
+        Ok(None)
+    };
+    match bound {
+        Some(bound) => notify_socket(peer, &bound.path, message_id, body, &check, Some(bound)),
+        None => notify_cli(peer, body, &check, Some(database)),
     }
 }
 
@@ -135,10 +147,14 @@ fn notify_socket(
     message_id: &str,
     body: &str,
     skip: Skip<'_>,
+    bound: Option<&rpc::BoundSocket>,
 ) -> Outcome {
     let mut attempted = false;
     let result = (|| -> Result<Outcome, Failure> {
-        let mut rpc = Rpc::connect_unix(path)?;
+        let mut rpc = match bound {
+            Some(bound) => Rpc::connect_bound(bound)?,
+            None => Rpc::connect_unix(path)?,
+        };
         check_live(&mut rpc, peer)?;
         if let Some(reason) = skip()? {
             return Ok(Outcome::not_submitted(reason.as_str()));
