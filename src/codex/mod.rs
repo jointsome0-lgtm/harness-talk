@@ -134,6 +134,14 @@ pub fn probe(peer: &Peer) -> Result<Value, Failure> {
     }
 }
 
+/// Inspect only the selected listener and ensure it survived the identity read.
+pub(crate) fn probe_bound(peer: &Peer, bound: &rpc::BoundSocket) -> Result<Value, Failure> {
+    let mut rpc = Rpc::connect_bound(bound)?;
+    let value = check_live(&mut rpc, peer)?;
+    bound.check()?;
+    Ok(value)
+}
+
 fn socket(peer: &Peer) -> Option<&Path> {
     peer.socket
         .as_deref()

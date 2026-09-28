@@ -242,11 +242,14 @@ fn receiver_uses_the_bound_server_without_cli_fallback_and_preserves_receipts() 
     let peer = fixture.peer(Some(&socket));
     let message_id = "5b0c8d4e-5f55-4a51-9d0c-2f5d4b8a7c11";
     let state = fixture.dir.join("receiver");
-    let watch = format!(
-        "printf '%s\\n' '{}' '{}'; /bin/cat",
+    let events = fixture.dir.join("events");
+    let stream = format!(
+        "{}\n{}\n",
         json!({"event":"ready","peer":"reader"}),
         json!({"event":"message","id":message_id,"seq":1})
     );
+    fs::write(&events, &stream).unwrap();
+    let watch = format!("/bin/cat '{}'; /bin/cat", events.display());
     let command = |with_socket: bool| {
         let mut command = Command::new(env!("CARGO_BIN_EXE_htalk"));
         command
@@ -274,21 +277,32 @@ fn receiver_uses_the_bound_server_without_cli_fallback_and_preserves_receipts() 
     let server = serve_connections(&socket, 2, app_server(&peer, || {}, None));
     let mut child = command(true).spawn().unwrap();
     let ledger = state.join("state.json");
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let saved = loop {
-        let saved = fs::read_to_string(&ledger)
-            .ok()
-            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
-        if let Some(saved) = saved.filter(|v| v["receipts"][message_id].is_string()) {
-            break saved;
+    let wait_receipt = |child: &mut std::process::Child, id: &str| {
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let saved = fs::read_to_string(&ledger)
+                .ok()
+                .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+            if let Some(saved) = saved.filter(|v| v["receipts"][id].is_string()) {
+                break saved;
+            }
+            assert!(
+                child.try_wait().unwrap().is_none(),
+                "receiver exited before its receipt"
+            );
+            assert!(Instant::now() < deadline, "receiver receipt timeout");
+            thread::sleep(Duration::from_millis(20));
         }
-        assert!(
-            child.try_wait().unwrap().is_none(),
-            "receiver exited before its receipt"
-        );
-        assert!(Instant::now() < deadline, "receiver receipt timeout");
-        thread::sleep(Duration::from_millis(20));
     };
+    let maintenance = |action: &str| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_htalk"));
+        cmd.args(["receive", action, "--state"]).arg(&state);
+        cmd.output().unwrap()
+    };
+    let saved = wait_receipt(&mut child, message_id);
+    let busy = maintenance("rebind");
+    assert_eq!(Some(2), busy.status.code());
+    assert!(String::from_utf8_lossy(&busy.stderr).contains("Stop the receiver"));
     unsafe {
         libc::kill(child.id() as i32, libc::SIGTERM);
     }
@@ -329,6 +343,161 @@ fn receiver_uses_the_bound_server_without_cli_fallback_and_preserves_receipts() 
     let rejected = command(true).output().unwrap();
     assert_eq!(Some(2), rejected.status.code());
     assert!(String::from_utf8_lossy(&rejected.stderr).contains("binding changed"));
+    let status = maintenance("status");
+    assert!(status.status.success());
+    let status: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status["target"]["detail"], "codex_server_socket_changed");
+    assert_eq!(status["state_lock_held"], false);
+    assert_eq!(status["receipt_count"], 1);
+
+    let mut pending = saved.clone();
+    pending["pending"] = json!(message_id);
+    let pending = serde_json::to_vec(&pending).unwrap();
+    fs::write(&ledger, &pending).unwrap();
+    let rejected = maintenance("rebind");
+    assert_eq!(Some(2), rejected.status.code());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("outcome unknown"));
+    assert_eq!(pending, fs::read(&ledger).unwrap());
+    let status: Value = serde_json::from_slice(&maintenance("status").stdout).unwrap();
+    assert_eq!(status["pending_status"], "unknown");
+    use std::os::fd::AsRawFd;
+    let lock = fs::File::open(state.join("lock")).unwrap();
+    assert_eq!(0, unsafe {
+        libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB)
+    });
+    let status: Value = serde_json::from_slice(&maintenance("status").stdout).unwrap();
+    assert_eq!(status["pending_status"], "in_flight");
+    drop(lock);
+    fs::write(&ledger, serde_json::to_vec(&saved).unwrap()).unwrap();
+
+    for (field, value, reason) in [
+        (
+            "cwd",
+            json!("/different-workspace"),
+            "recipient_identity_changed",
+        ),
+        (
+            "status",
+            json!({"type":"notLoaded"}),
+            "recipient_not_loaded",
+        ),
+    ] {
+        let mut handler = app_server(&peer, || {}, None);
+        let server = serve(
+            &socket,
+            Box::new(move |frame| {
+                let read = frame["method"] == "thread/read";
+                let mut result = handler(frame);
+                if read {
+                    result.as_mut().unwrap()["result"]["thread"][field] = value.clone();
+                }
+                result
+            }),
+        );
+        let rejected = maintenance("rebind");
+        assert_eq!(Some(2), rejected.status.code());
+        assert!(String::from_utf8_lossy(&rejected.stderr).contains(reason));
+        assert_eq!(
+            saved,
+            serde_json::from_slice::<Value>(&fs::read(&ledger).unwrap()).unwrap()
+        );
+        assert_eq!(
+            methods(&server.join().unwrap()),
+            vec!["initialize", "initialized", "thread/read"]
+        );
+    }
+    let replaced = socket.clone();
+    let server = serve(
+        &socket,
+        app_server(
+            &peer,
+            move || {
+                fs::remove_file(&replaced).unwrap();
+                let _replacement = UnixListener::bind(&replaced).unwrap();
+            },
+            None,
+        ),
+    );
+    let before = fs::read(&ledger).unwrap();
+    let rejected = maintenance("rebind");
+    assert_eq!(Some(2), rejected.status.code());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("codex_server_socket_changed"));
+    assert_eq!(before, fs::read(&ledger).unwrap());
+    server.join().unwrap();
+
+    let lock_path = state.join("lock");
+    let mut reads = 0;
+    let server = serve_connections(
+        &socket,
+        4,
+        app_server(
+            &peer,
+            move || {
+                reads += 1;
+                if reads == 4 {
+                    let lock = fs::File::open(&lock_path).unwrap();
+                    assert_eq!(
+                        0,
+                        unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
+                        "status must release its lock before RPC"
+                    );
+                }
+            },
+            None,
+        ),
+    );
+    let rebound = maintenance("rebind");
+    assert!(
+        rebound.status.success(),
+        "{}",
+        String::from_utf8_lossy(&rebound.stderr)
+    );
+    let rebound: Value = serde_json::from_slice(&fs::read(&ledger).unwrap()).unwrap();
+    let mut expected = saved.clone();
+    expected["binding"]["codex_socket"] = rebound["binding"]["codex_socket"].clone();
+    assert_ne!(
+        expected["binding"]["codex_socket"],
+        saved["binding"]["codex_socket"]
+    );
+    assert_eq!(expected, rebound, "only the socket binding may change");
+
+    let new_id = "6b0c8d4e-5f55-4a51-9d0c-2f5d4b8a7c11";
+    fs::write(
+        &events,
+        format!(
+            "{stream}{}\n",
+            json!({"event":"message","id":new_id,"seq":2})
+        ),
+    )
+    .unwrap();
+    let mut child = command(true).spawn().unwrap();
+    let final_state = wait_receipt(&mut child, new_id);
+    unsafe {
+        libc::kill(child.id() as i32, libc::SIGTERM);
+    }
+    assert!(child.wait().unwrap().success());
+    let status = maintenance("status");
+    assert!(status.status.success());
+    let status: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status["state_lock_held"], false);
+    assert_eq!(status["target"]["status"], "idle");
+    assert_eq!(status["receipt_count"], 2);
+    let frames = server.join().unwrap();
+    assert_eq!(
+        &methods(&frames)[..3],
+        &["initialize", "initialized", "thread/read"]
+    );
+    let writes: Vec<_> = frames
+        .iter()
+        .filter(|v| v["method"] == "thread/queue/add")
+        .collect();
+    assert_eq!(writes.len(), 1);
+    assert_eq!(writes[0]["params"]["clientUserMessageId"], new_id);
+    assert_eq!(
+        final_state["receipts"][message_id],
+        saved["receipts"][message_id]
+    );
+    assert!(final_state["pending"].is_null());
     fs::remove_file(&socket).unwrap();
     assert_eq!(Some(2), command(true).status().unwrap().code());
     assert!(

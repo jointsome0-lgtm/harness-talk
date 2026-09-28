@@ -40,6 +40,30 @@ struct Binding {
     codex_socket: Option<codex::rpc::BoundSocket>,
 }
 
+impl Binding {
+    fn target(&self) -> NativePeer {
+        NativePeer {
+            name: self.peer.clone(),
+            harness: Harness::Codex,
+            session_id: self.session.clone(),
+            workspace: self.workspace.to_string_lossy().into_owned(),
+            socket: self
+                .codex_socket
+                .as_ref()
+                .map(|s| s.path.to_string_lossy().into_owned()),
+            url: None,
+            retired_at: None,
+        }
+    }
+
+    fn probe(&self) -> std::result::Result<Value, crate::error::Failure> {
+        match &self.codex_socket {
+            Some(bound) => codex::probe_bound(&self.target(), bound),
+            None => codex::probe(&self.target()),
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct State {
     version: u8,
@@ -173,6 +197,9 @@ fn lock_session(session: &str, database: &Path) -> Result<File> {
 }
 
 pub(crate) fn run(options: &ArgMatches) -> Result<()> {
+    if let Some((action, options)) = options.subcommand() {
+        return maintain(action, options);
+    }
     let word = |name| options.get_one::<String>(name).unwrap().clone();
     let mcp_command = options
         .get_one::<String>("mcp_command")
@@ -213,18 +240,8 @@ pub(crate) fn run(options: &ArgMatches) -> Result<()> {
     if !directory.exists() {
         fs::DirBuilder::new().mode(0o700).create(&directory)?;
     }
-    let meta = fs::metadata(&directory)?;
-    if !meta.is_dir() || meta.uid() != unsafe { libc::getuid() } || meta.mode() & 0o077 != 0 {
-        return Err("Receiver state needs a private directory owned by this account".into());
-    }
-    let lock = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .mode(0o600)
-        .open(directory.join("lock"))?;
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+    let lock = state_lock(&directory, true)?;
+    if !try_lock(&lock, libc::LOCK_EX)? {
         return Err("Another receiver holds this state directory".into());
     }
     let state_file = directory.join("state.json");
@@ -257,7 +274,7 @@ pub(crate) fn run(options: &ArgMatches) -> Result<()> {
     }
     if state.version != 1 || state.binding != binding {
         return Err(
-            "Receiver binding changed; inspect saved state instead of retargeting it".into(),
+            "Receiver binding changed; use receive status --state DIR, then receive rebind for an inspected replacement socket".into(),
         );
     }
     if let Some(id) = state.pending.take() {
@@ -269,21 +286,103 @@ pub(crate) fn run(options: &ArgMatches) -> Result<()> {
     operate(&directory, state, lock)
 }
 
+fn state_lock(directory: &Path, create: bool) -> Result<File> {
+    let meta = fs::symlink_metadata(directory)?;
+    if !meta.is_dir() || meta.uid() != unsafe { libc::getuid() } || meta.mode() & 0o077 != 0 {
+        return Err("Receiver state needs a private directory owned by this account".into());
+    }
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(create)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(directory.join("lock"))?;
+    let meta = lock.metadata()?;
+    if !meta.is_file()
+        || meta.uid() != unsafe { libc::getuid() }
+        || meta.mode() & 0o077 != 0
+        || meta.nlink() != 1
+    {
+        return Err("Receiver state lock must be a private owned regular file".into());
+    }
+    Ok(lock)
+}
+
+fn try_lock(lock: &File, mode: i32) -> Result<bool> {
+    if unsafe { libc::flock(lock.as_raw_fd(), mode | libc::LOCK_NB) } == 0 {
+        return Ok(true);
+    }
+    let error = std::io::Error::last_os_error();
+    if error.kind() == std::io::ErrorKind::WouldBlock {
+        Ok(false)
+    } else {
+        Err(error.into())
+    }
+}
+
+fn maintain(action: &str, options: &ArgMatches) -> Result<()> {
+    let directory = crate::os::resolve(Path::new(options.get_one::<String>("state").unwrap()));
+    // Maintenance never initializes a directory or clears an uncertain outcome.
+    let lock = state_lock(&directory, false)?;
+    let available = try_lock(
+        &lock,
+        if action == "status" {
+            libc::LOCK_SH
+        } else {
+            libc::LOCK_EX
+        },
+    )?;
+    if action == "rebind" && !available {
+        return Err("Stop the receiver before rebinding its state".into());
+    }
+    let mut state: State = serde_json::from_reader(File::open(directory.join("state.json"))?)?;
+    if state.version != 1 {
+        return Err("Unsupported receiver state version".into());
+    }
+    if action == "status" {
+        // This is a snapshot. Never block receiver startup for a slow read-only RPC.
+        drop(lock);
+        let target = match state.binding.probe() {
+            Ok(value) => value,
+            Err(error) => json!({"status":"unavailable","detail":error.to_string()}),
+        };
+        return emit(
+            json!({"peer":state.binding.peer,"session":state.binding.session,
+            "workspace":state.binding.workspace,"state_lock_held":!available,
+            "pending":state.pending,
+            "pending_status":state.pending.as_ref().map(|_| if available { "unknown" } else { "in_flight" }),
+            "receipt_count":state.receipts.len(),
+            "codex_socket":state.binding.codex_socket.as_ref().map(|s| &s.path),
+            "target":target}),
+        );
+    }
+    if let Some(id) = &state.pending {
+        return Err(format!("Notification outcome unknown for {id}; inspect the original queue, session and mailbox before recovery. Rebind cannot clear it.").into());
+    }
+    let previous = state.binding.codex_socket.as_ref().ok_or(
+        "No saved socket binding; add the first --codex-socket with the original receive command",
+    )?;
+    let bound = codex::rpc::BoundSocket::capture(previous.path.clone())?;
+    let peer = state.binding.target();
+    codex::probe_bound(&peer, &bound)?;
+    bound.check()?;
+    let changed = previous != &bound;
+    state.binding.codex_socket = Some(bound);
+    if changed {
+        save(&directory, &state)?;
+    }
+    emit(
+        json!({"event":"rebound","changed":changed,"peer":state.binding.peer,"session":state.binding.session,
+        "workspace":state.binding.workspace,"receipt_count":state.receipts.len(),
+        "codex_socket":state.binding.codex_socket.as_ref().map(|s| &s.path)}),
+    )
+}
+
 fn operate(directory: &Path, mut state: State, _lock: File) -> Result<()> {
-    let peer = NativePeer {
-        name: state.binding.peer.clone(),
-        harness: Harness::Codex,
-        session_id: state.binding.session.clone(),
-        workspace: state.binding.workspace.to_string_lossy().into_owned(),
-        socket: state
-            .binding
-            .codex_socket
-            .as_ref()
-            .map(|socket| socket.path.to_string_lossy().into_owned()),
-        url: None,
-        retired_at: None,
-    };
-    codex::probe(&peer)?;
+    let peer = state.binding.target();
+    state.binding.probe()?;
     let database = fs::canonicalize(codex::state::state_path()?)?;
     let _session_lock = lock_session(&peer.session_id, &database)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
