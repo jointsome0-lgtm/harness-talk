@@ -118,6 +118,15 @@ native queue commands to the store whose lock it holds. See [current-mail
 checks](integrations/remote.md#check-current-mail). This is not exactly-once
 external work; agents still inspect current state before acting.
 
+Version 0.9.4 adds delivery through an explicitly selected local Codex server
+socket while retaining the receiver's receipt state. The [daemon and laptop
+check](docs/checks/2026-09-28-codex-daemon-laptop.md) verified real delegated work,
+controlled SSH-service recovery without another model turn, and a separate
+read-only task on the publication wheel. Persistent user services are enabled
+on the checked machines. A replaced daemon listener still requires inspection
+and rebinding; physical Wi-Fi loss, sleep/reboot and automatic model recovery
+remain open. Enabling a service is not proof of unattended startup.
+
 Extend the authenticated route to internet-accessible hosts after the LAN pilot. Evaluate Bluetooth against a working pilot if there is a concrete need. Independent offline mailboxes, synchronization and relay infrastructure require a separate demonstrated need before implementation.
 
 ## Native macOS and Windows
