@@ -1,5 +1,33 @@
 # Client adapters
 
+Checked on 2026-09-28 UTC with the htalk `0.9.4` x86-64 publication wheel,
+commit `cab29eabc7d2671bdb9dfacfddb4ad6303459a05`, SHA-256
+`89494cd0b9b7e6f18cdb3fd13fff7780df0e90e89347979bde8bb0a994844649`.
+The [publication run](https://github.com/jointsome0-lgtm/harness-talk/actions/runs/36429231142) passed both Linux architecture builds and
+installed-wheel checks. All 97 included Git files matched the release tree.
+The three PyPI files and a fresh installation matched the checked bytes.
+
+Codex CLI 0.158.0 with GPT-6 Luna medium and Claude Code 2.1.283 with Opus 5.5 max
+completed both initiating directions in separate Linux terminals. Four native
+notices led to show before separate ACK, two correlated replies, no repeated
+sends or replies, and two empty final inboxes. Codex used workspace-write and
+normal approval review with approved host commands. Claude used manual
+permissions with the exact fixture executable allowed. Both sessions were
+closed, their eight recorded processes were absent, and their peers retired.
+ACK cleanup was `absent` for Codex and `unsupported` for Claude; these statuses
+do not establish notification removal.
+
+The [daemon and laptop check](checks/2026-09-28-codex-daemon-laptop.md) distinguishes
+a source-candidate computation from a later read-only task on the exact wheel.
+The latter reached the same remote Luna through an explicitly bound Codex
+server socket and preserved prior artifacts and receipts. Both devices then
+installed the matching PyPI binary; replacing the temporary receiver binary
+kept the same idle model session without another model turn.
+
+The [OpenCode check](opencode.md) used a local canned provider. Other harnesses
+retain their earlier observations. Physical Wi-Fi loss, sleep and reboot remain
+untested; automatic worker startup is still open. Mailbox schema remains 3.
+
 Checked on 2026-09-28 UTC with the htalk `0.9.3` x86-64 publication wheel,
 commit `e98701dbb2c01194254341603f5f8290afddceee`, SHA-256
 `49cf45b55ec31d8bc17852827cbf74d1098e731e8b94f5f977c215cd098829bc`.
