@@ -1,5 +1,33 @@
 # Client adapters
 
+Checked on 2026-09-28 UTC with the htalk `0.9.3` x86-64 publication wheel,
+commit `e98701dbb2c01194254341603f5f8290afddceee`, SHA-256
+`49cf45b55ec31d8bc17852827cbf74d1098e731e8b94f5f977c215cd098829bc`.
+The [publication run](https://github.com/jointsome0-lgtm/harness-talk/actions/runs/36360798674) passed both Linux architecture builds and
+installed-wheel checks. All 96 included Git files matched the release
+tree. Published PyPI files and a fresh installation matched the checked bytes.
+
+Codex CLI 0.157.1 with GPT-6 Luna medium and Claude Code 2.1.283 with Opus 5.5 max
+completed both initiating directions in separate Linux terminals. Four native
+notices led to show before separate ACK, two correlated replies, no repeated
+sends or replies, and two empty final inboxes. Codex used workspace-write and
+normal approval review with approved host commands. Claude used manual
+permissions with the exact fixture executable allowed. Both fixture sessions
+were closed and their peers retired. ACK cleanup was `absent` for Codex and
+`unsupported/client_has_no_notification_removal` for Claude; these observations
+do not establish notification removal.
+
+The same wheel passed the [current-mail and store check](checks/2026-09-28-receiver-current-mail.md).
+Two completed messages were skipped; one ACKed unanswered request produced one
+native queue entry. Changing a private alias config immediately before the
+real Codex CLI started did not redirect that write. The entry was read back
+and deleted without starting another model turn. Receiver ownership also
+rejected a second state directory for the same saved session.
+
+The [OpenCode check](opencode.md) used a local canned provider. Other harnesses
+retain their earlier observations. Physical Wi-Fi loss and sleep remain
+untested. Schema remains 3.
+
 Checked on 2026-09-27 UTC with the htalk `0.9.2` x86-64 publication wheel,
 commit `4b8c27cb848a75f33cf4edd0ade15fa320c0fccc`, SHA-256
 `bf3e6667f383fd7f82f942dccd5893d21f3627d93ee2e7a6faad5c092cfba75c`.

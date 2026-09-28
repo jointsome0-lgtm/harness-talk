@@ -1,5 +1,22 @@
 # OpenCode sessions
 
+Checked on 2026-09-28 UTC with the htalk `0.9.3` x86-64 publication wheel,
+commit `e98701dbb2c01194254341603f5f8290afddceee`, SHA-256
+`49cf45b55ec31d8bc17852827cbf74d1098e731e8b94f5f977c215cd098829bc`.
+The [publication run](https://github.com/jointsome0-lgtm/harness-talk/actions/runs/36360798674) passed both Linux architecture builds and
+installed-wheel checks. All 96 included Git files matched the release
+tree. Published PyPI files and a fresh installation matched the checked bytes.
+
+OpenCode 1.18.32 used an isolated loopback server session and a local canned
+provider. Tools were denied by default, with only the bound htalk MCP tool
+allowed. One native notice led to show, separate ACK and one correlated reply;
+the controller read and ACKed the answer. Four canned provider calls completed,
+both inboxes were empty, fixture peers were retired, and the owned server was
+stopped. Native cleanup was `unsupported`; controller cleanup was
+`skipped/pull_only`. This checks the server session and native MCP execution,
+not TUI attachment, model reasoning or notification removal. No external model
+call was made for this OpenCode check.
+
 Checked on 2026-09-27 UTC with the htalk `0.9.2` publication wheel from
 commit `4b8c27cb848a75f33cf4edd0ade15fa320c0fccc`, SHA-256
 `bf3e6667f383fd7f82f942dccd5893d21f3627d93ee2e7a6faad5c092cfba75c`.
