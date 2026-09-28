@@ -92,6 +92,45 @@ Stop older receivers before updating, since they do not acquire this lock.
 After stopping a receiver, reuse its original state directory: the session
 lock does not move receipts into a new directory or resolve uncertain work.
 
+### Use an explicitly selected Codex server
+
+Codex CLI 0.157.1 refuses `queue` with configuration overrides when its local
+app-server daemon is running. The receiver's `sqlite_home` pin is such an
+override. Removing the pin would lose protection against a changed store.
+
+Since htalk 0.9.4, a session hosted by a local Codex app-server can use its
+explicit Unix socket instead:
+
+```sh
+htalk receive --peer laptop-worker --session EXACT_SESSION_UUID \
+  --workspace /absolute/project --state /private/receiver-state \
+  --codex-socket /private/codex-server.sock \
+  --mcp-command /private/mcp-connector -- /private/watch-connector
+```
+
+Select the server that actually hosts this UUID and workspace. The existing
+socket adapter checks ownership, the exact live thread identity and its loaded
+status before calling `thread/queue/add`. Its receipt must carry the same
+htalk message ID. An unavailable or different server does not trigger a CLI
+fallback. An unloaded session needs explicit resume before the receiver starts.
+
+The explicit server is the delivery authority in this mode. The receiver keeps
+the same local store/session lock and refuses a changed local store selection;
+it does not claim that a local `sqlite_home` setting controls the server's
+database. Independently copied stores and separate servers remain outside the
+local ownership guarantee. The receiver records the selected socket's device,
+inode and change time, and checks them before and after connecting. Replacing
+that listener stops delivery until an operator inspects and rebinds the saved
+state. This includes a daemon restart or reboot that replaces its socket. It
+does not authenticate a server hidden behind a proxy that retains the same
+listener; use the Codex server's own private socket.
+
+The first socket binding can be added to existing receipt state only when no
+notification outcome is unresolved. Existing receipts remain. After that,
+changing or removing the socket binding is refused. Resolve a pending unknown
+submission by inspecting the original queue, session and mailbox first. Do not
+replace the receipt directory or resend a task to get past this guard.
+
 When the watch connection closes, the receiver reconnects after 1, 2, 4, 8,
 16 and then at most every 30 seconds. This reconnects a stream; it does not
 call a model on a timer. Only a validated message ID becomes a native Codex

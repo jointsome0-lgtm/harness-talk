@@ -1,11 +1,12 @@
 //! Bounded JSON RPC to a Codex app-server over its Unix WebSocket or a temporary stdio process.
 use super::{connect_unix, io_failure, owned_socket, python_dumps, socket_failure};
 use crate::error::Failure;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
     os::{fd::AsRawFd, unix::net::UnixStream},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio as Pipe},
     thread,
     time::{Duration, Instant},
@@ -16,6 +17,38 @@ const FRAME_LIMIT: usize = 4 * 1024 * 1024;
 const OPEN_TIMEOUT: Duration = Duration::from_secs(5);
 const CALL_TIMEOUT: Duration = Duration::from_secs(10);
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// Owner-selected socket instance. Replacing the listener requires an explicit rebind.
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
+pub(crate) struct BoundSocket {
+    pub path: PathBuf,
+    device: u64,
+    inode: u64,
+    changed_seconds: i64,
+    changed_nanos: i64,
+}
+
+impl BoundSocket {
+    pub(crate) fn capture(path: PathBuf) -> Result<Self, Failure> {
+        use std::os::unix::fs::MetadataExt;
+        let path = owned_socket(&path)?;
+        let meta = std::fs::metadata(&path).map_err(io_failure)?;
+        Ok(Self {
+            path,
+            device: meta.dev(),
+            inode: meta.ino(),
+            changed_seconds: meta.ctime(),
+            changed_nanos: meta.ctime_nsec(),
+        })
+    }
+
+    fn check(&self) -> Result<(), Failure> {
+        if Self::capture(self.path.clone())? != *self {
+            return Err(Failure::coded("codex_server_socket_changed"));
+        }
+        Ok(())
+    }
+}
 
 /// An initialized RPC connection. Dropping it closes the WebSocket, or ends the stdio process
 /// by closing stdin, then terminating, then killing, each bounded by one second.
@@ -43,9 +76,23 @@ fn websocket_failure() -> Failure {
 impl Rpc {
     /// Connect to an owned Unix socket without compression and initialize the protocol.
     pub fn connect_unix(path: &Path) -> Result<Self, Failure> {
+        Self::connect_unix_checked(path, None)
+    }
+
+    pub(crate) fn connect_bound(socket: &BoundSocket) -> Result<Self, Failure> {
+        Self::connect_unix_checked(&socket.path, Some(socket))
+    }
+
+    fn connect_unix_checked(path: &Path, bound: Option<&BoundSocket>) -> Result<Self, Failure> {
         let path = owned_socket(path)?;
+        if let Some(bound) = bound {
+            bound.check()?;
+        }
         let deadline = Instant::now() + OPEN_TIMEOUT;
         let stream = connect_unix(&path, OPEN_TIMEOUT).map_err(io_failure)?;
+        if let Some(bound) = bound {
+            bound.check()?;
+        }
         let remaining = remaining(deadline).ok_or(Failure::Class("TimeoutError"))?;
         stream
             .set_read_timeout(Some(remaining))

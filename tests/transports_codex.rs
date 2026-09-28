@@ -184,46 +184,157 @@ fn message(
 type Handler = Box<dyn FnMut(&Value) -> Option<Value> + Send>;
 
 /// One WebSocket connection on a Unix socket. Returns every frame the client sent.
-fn serve(path: &Path, mut handler: Handler) -> JoinHandle<Vec<Value>> {
+fn serve(path: &Path, handler: Handler) -> JoinHandle<Vec<Value>> {
+    serve_connections(path, 1, handler)
+}
+
+fn serve_connections(path: &Path, count: usize, mut handler: Handler) -> JoinHandle<Vec<Value>> {
     let _ = fs::remove_file(path);
     let listener = UnixListener::bind(path).unwrap();
     thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(15)))
-            .unwrap();
-        let mut socket = tungstenite::accept(stream).unwrap();
         let mut seen = Vec::new();
-        loop {
-            let text = match socket.read() {
-                Ok(Frame::Text(text)) => text,
-                Ok(Frame::Close(_)) | Err(_) => break,
-                Ok(_) => continue,
-            };
-            let frame: Value = serde_json::from_str(text.as_str()).unwrap();
-            seen.push(frame.clone());
-            if frame.get("id").is_none() {
-                continue;
-            }
-            // Unrelated traffic before each answer must be skipped by the client.
-            socket
-                .send(Frame::text(
-                    json!({"method": "thread/status/changed", "params": {}}).to_string(),
-                ))
+        for _ in 0..count {
+            let (stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(15)))
                 .unwrap();
-            socket
-                .send(Frame::text(
-                    json!({"id": 9999, "result": {"thread": "wrong"}}).to_string(),
-                ))
-                .unwrap();
-            socket.send(Frame::Ping(Vec::new().into())).unwrap();
-            match handler(&frame) {
-                Some(reply) => socket.send(Frame::text(reply.to_string())).unwrap(),
-                None => break,
+            let mut socket = tungstenite::accept(stream).unwrap();
+            loop {
+                let text = match socket.read() {
+                    Ok(Frame::Text(text)) => text,
+                    Ok(Frame::Close(_)) | Err(_) => break,
+                    Ok(_) => continue,
+                };
+                let frame: Value = serde_json::from_str(text.as_str()).unwrap();
+                seen.push(frame.clone());
+                if frame.get("id").is_none() {
+                    continue;
+                }
+                // Unrelated traffic before each answer must be skipped by the client.
+                socket
+                    .send(Frame::text(
+                        json!({"method": "thread/status/changed", "params": {}}).to_string(),
+                    ))
+                    .unwrap();
+                socket
+                    .send(Frame::text(
+                        json!({"id": 9999, "result": {"thread": "wrong"}}).to_string(),
+                    ))
+                    .unwrap();
+                socket.send(Frame::Ping(Vec::new().into())).unwrap();
+                match handler(&frame) {
+                    Some(reply) => socket.send(Frame::text(reply.to_string())).unwrap(),
+                    None => break,
+                }
             }
         }
         seen
     })
+}
+
+#[test]
+fn receiver_uses_the_bound_server_without_cli_fallback_and_preserves_receipts() {
+    use std::process::{Command, Stdio};
+    let fixture = Fixture::new("receiver-socket");
+    fixture.thread(&fixture.workspace(), 0, "cli");
+    fixture.fake_codex();
+    let socket = fixture.dir.join("server.sock");
+    let peer = fixture.peer(Some(&socket));
+    let message_id = "5b0c8d4e-5f55-4a51-9d0c-2f5d4b8a7c11";
+    let state = fixture.dir.join("receiver");
+    let watch = format!(
+        "printf '%s\\n' '{}' '{}'; /bin/cat",
+        json!({"event":"ready","peer":"reader"}),
+        json!({"event":"message","id":message_id,"seq":1})
+    );
+    let command = |with_socket: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_htalk"));
+        command
+            .args([
+                "receive",
+                "--peer",
+                "reader",
+                "--session",
+                &peer.session_id,
+                "--workspace",
+                &peer.workspace,
+                "--state",
+            ])
+            .arg(&state);
+        if with_socket {
+            command.arg("--codex-socket").arg(&socket);
+        }
+        command
+            .args(["--", "/bin/sh", "-c", &watch])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        command
+    };
+    let server = serve_connections(&socket, 2, app_server(&peer, || {}, None));
+    let mut child = command(true).spawn().unwrap();
+    let ledger = state.join("state.json");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let saved = loop {
+        let saved = fs::read_to_string(&ledger)
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        if let Some(saved) = saved.filter(|v| v["receipts"][message_id].is_string()) {
+            break saved;
+        }
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "receiver exited before its receipt"
+        );
+        assert!(Instant::now() < deadline, "receiver receipt timeout");
+        thread::sleep(Duration::from_millis(20));
+    };
+    unsafe {
+        libc::kill(child.id() as i32, libc::SIGTERM);
+    }
+    assert!(child.wait().unwrap().success());
+    let frames = server.join().unwrap();
+    assert_eq!(
+        1,
+        methods(&frames)
+            .iter()
+            .filter(|&&m| m == "thread/queue/add")
+            .count()
+    );
+    assert_eq!(
+        message_id,
+        frames
+            .iter()
+            .find(|v| v["method"] == "thread/queue/add")
+            .unwrap()["params"]["clientUserMessageId"]
+    );
+    assert!(saved["pending"].is_null());
+    assert_eq!(
+        socket.to_string_lossy().as_ref(),
+        saved["binding"]["codex_socket"]["path"]
+    );
+    assert!(
+        fixture.calls().is_empty(),
+        "explicit socket must never run codex queue"
+    );
+    let rejected = command(false).output().unwrap();
+    assert_eq!(Some(2), rejected.status.code());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("binding changed"));
+    assert_eq!(
+        saved,
+        serde_json::from_str::<Value>(&fs::read_to_string(&ledger).unwrap()).unwrap()
+    );
+    fs::remove_file(&socket).unwrap();
+    let _replacement = UnixListener::bind(&socket).unwrap();
+    let rejected = command(true).output().unwrap();
+    assert_eq!(Some(2), rejected.status.code());
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("binding changed"));
+    fs::remove_file(&socket).unwrap();
+    assert_eq!(Some(2), command(true).status().unwrap().code());
+    assert!(
+        fixture.calls().is_empty(),
+        "unavailable socket must not fall back to CLI"
+    );
 }
 
 /// A well-behaved app-server for `peer`; `on_read` runs while the client's preflight is in progress.
