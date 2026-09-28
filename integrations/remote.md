@@ -133,6 +133,12 @@ replace the receipt directory or resend a task to get past this guard.
 
 ### Inspect and recover after a daemon restart
 
+If the selected socket is missing, `receive` and `receive rebind` stop before
+notification and identify the socket path and error. Preserve the receiver's
+state directory. For saved state, use `receive status` to inspect its receipts
+and pending outcome before recovery. A missing socket does not authorize a new
+client, session, binding or notification attempt.
+
 Worker version 0.9.5 adds two maintenance commands:
 
 ```sh
@@ -168,7 +174,13 @@ Rebind refuses an active receiver or any pending ID. It cannot reconcile an
 unknown submission, resume a thread or repeat a notice. Receipts mean submitted,
 not consumed: if a daemon lost its queue before consumption, a saved receipt
 still prevents automatic resubmission. Inspect and recover that work explicitly.
-No mailbox migration or receiver-state reset is needed for this update.
+No mailbox migration or receiver-state reset is needed for these commands.
+
+Codex startup and session resume belong to the harness or the machine's setup.
+htalk does not supervise the worker process. The checked Linux receiver service
+uses `Restart=no`; a startup failure therefore requires inspection and an
+explicit restart. See the [physical interruption checks](../docs/checks/2026-09-29-lan-interruption.md)
+for the difference between transport recovery and worker startup.
 
 ### Reconnect the mailbox watch
 

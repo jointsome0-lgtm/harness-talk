@@ -104,8 +104,10 @@ The [Linux user-service setup](integrations/ssh-service.md) adds separate SSH
 tunnel recovery and preserves active or uncertain socket paths. A
 [follow-up check](docs/checks/2026-09-27-ssh-lifecycle.md) verified automatic
 tunnel restart and explicit resume of the same idle-exited Codex session with
-a queued notice. Physical sleep/reboot, automatic worker startup and a shared
-task execution-status protocol remain open. Broader support must preserve request
+a queued notice. Physical Wi-Fi loss, suspend/resume and an owner-triggered
+reboot were checked on 2026-09-29; see the [results and limits](docs/checks/2026-09-29-lan-interruption.md).
+Worker startup is outside htalk's scope. A shared task execution-status protocol
+remains a separate proposal. Broader support must preserve request
 identity across disconnects and avoid automatically rerunning uncertain tasks.
 Record where work ran, how its artifacts returned and how access was authorized;
 message delivery alone is insufficient.
@@ -124,13 +126,19 @@ check](docs/checks/2026-09-28-codex-daemon-laptop.md) verified real delegated wo
 controlled SSH-service recovery without another model turn, and a separate
 read-only task on the publication wheel. Persistent user services are enabled
 on the checked machines. A replaced daemon listener still requires inspection
-and rebinding; physical Wi-Fi loss, sleep/reboot and automatic model recovery
-remain open. Enabling a service is not proof of unattended startup.
+and rebinding. The later physical interruption checks distinguish automatic
+transport recovery from explicit worker recovery. Enabling a service is not
+proof of unattended startup, and starting an agent is not a release requirement.
 
 Version 0.9.5 adds `receive status` and an explicit `receive rebind` for a
 replacement listener at the saved socket path. It verifies the same loaded
 session and workspace, preserves receipts and refuses unresolved submissions.
 It does not resume a worker or repeat receipted notices. See [recovery steps](integrations/remote.md#inspect-and-recover-after-a-daemon-restart).
+
+The missing-socket diagnostic now identifies the selected path and directs the
+operator to inspect saved state. A recovery regression covers missing and
+replaced listeners with the original receipts preserved. No automatic rebind,
+worker startup or notification retry is added.
 
 Extend the authenticated route to internet-accessible hosts after the LAN pilot. Evaluate Bluetooth against a working pilot if there is a concrete need. Independent offline mailboxes, synchronization and relay infrastructure require a separate demonstrated need before implementation.
 

@@ -339,6 +339,20 @@ fn receiver_uses_the_bound_server_without_cli_fallback_and_preserves_receipts() 
         serde_json::from_str::<Value>(&fs::read_to_string(&ledger).unwrap()).unwrap()
     );
     fs::remove_file(&socket).unwrap();
+    let before = fs::read(&ledger).unwrap();
+    for rejected in [command(true).output().unwrap(), maintenance("rebind")] {
+        assert_eq!(Some(2), rejected.status.code());
+        let error = String::from_utf8_lossy(&rejected.stderr);
+        assert!(error.contains("Cannot inspect Codex server socket"));
+        assert!(error.contains(socket.to_str().unwrap()));
+        assert!(error.contains("FileNotFoundError"));
+        assert!(error.contains("receive status --state"));
+        assert_eq!(before, fs::read(&ledger).unwrap());
+    }
+    assert!(
+        fixture.calls().is_empty(),
+        "missing socket must not start Codex"
+    );
     let _replacement = UnixListener::bind(&socket).unwrap();
     let rejected = command(true).output().unwrap();
     assert_eq!(Some(2), rejected.status.code());

@@ -64,6 +64,18 @@ impl Binding {
     }
 }
 
+fn capture_socket(path: PathBuf) -> Result<codex::rpc::BoundSocket> {
+    codex::rpc::BoundSocket::capture(path.clone()).map_err(|error| {
+        format!(
+            "Cannot inspect Codex server socket {}: {error}. No notification was attempted. \
+            Once the intended Codex server is available, inspect saved receiver state with \
+            receive status --state DIR before restarting or rebinding. Htalk does not start Codex.",
+            path.display()
+        )
+        .into()
+    })
+}
+
 #[derive(Serialize, Deserialize)]
 struct State {
     version: u8,
@@ -228,7 +240,7 @@ pub(crate) fn run(options: &ArgMatches) -> Result<()> {
                 if !path.is_absolute() {
                     return Err("--codex-socket needs an absolute Unix socket path".into());
                 }
-                Ok(codex::rpc::BoundSocket::capture(crate::os::resolve(path))?)
+                capture_socket(crate::os::resolve(path))
             })
             .transpose()?,
     };
@@ -364,7 +376,7 @@ fn maintain(action: &str, options: &ArgMatches) -> Result<()> {
     let previous = state.binding.codex_socket.as_ref().ok_or(
         "No saved socket binding; add the first --codex-socket with the original receive command",
     )?;
-    let bound = codex::rpc::BoundSocket::capture(previous.path.clone())?;
+    let bound = capture_socket(previous.path.clone())?;
     let peer = state.binding.target();
     codex::probe_bound(&peer, &bound)?;
     bound.check()?;
