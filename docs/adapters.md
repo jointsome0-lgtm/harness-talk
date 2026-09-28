@@ -1,5 +1,29 @@
 # Client adapters
 
+Checked on 2026-09-28 UTC with the htalk `0.9.5` x86-64 publication wheel,
+commit `709e5ea8f855ca19296203f65a01bc94fb2b066a`, SHA-256
+`53f179a5ab74686d9acfe25e7ed0dc8069e5753f362498667db8492f0b9241b6`.
+The [publication run](https://github.com/jointsome0-lgtm/harness-talk/actions/runs/36482432457)
+passed both Linux architecture builds and installed-wheel checks. All 98 included
+Git files matched the release tree. The three PyPI files and a fresh installation
+matched the checked bytes.
+
+Codex CLI 0.158.0 with GPT-6 Luna medium and Claude Code 2.1.284 with Opus 5.5 max
+completed both initiating directions: four native notices, show before each
+separate ACK, two correlated replies, no repeated sends or replies, and two
+empty final inboxes. Codex used workspace-write and normal approval review
+with approved host commands; Claude used manual permissions with the exact
+fixture executable allowed. Both sessions closed, all six recorded processes
+were absent, and their peers retired. ACK cleanup was `absent` for Codex and
+`unsupported` for Claude; these observations do not establish notification removal.
+
+The [receiver recovery check](checks/2026-09-28-receiver-rebind.md) separates
+source-candidate daemon recovery from the publication wheel's laptop checks.
+Both devices installed the matching PyPI binary while preserving the idle
+worker and its receipts. The [OpenCode check](opencode.md) used a local canned
+provider. Other harnesses retain their earlier observations. Physical Wi-Fi
+loss, sleep, reboot and automatic worker startup remain untested. Schema is 3.
+
 Checked on 2026-09-28 UTC with the htalk `0.9.4` x86-64 publication wheel,
 commit `cab29eabc7d2671bdb9dfacfddb4ad6303459a05`, SHA-256
 `89494cd0b9b7e6f18cdb3fd13fff7780df0e90e89347979bde8bb0a994844649`.
