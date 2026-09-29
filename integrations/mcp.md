@@ -93,7 +93,8 @@ losing its MCP connection. EOF or SIGTERM stops the server.
 
 ## Client setup and verification
 
-The checks below used isolated profiles on Linux on 2026-09-25. A configuration
+The checks below used isolated profiles on Linux, starting on 2026-09-25; later
+native session checks are linked where available. A configuration
 check, tool discovery, a tool call and a model exchange are different results.
 These rows do not establish that every client can use every model provider.
 
@@ -106,8 +107,8 @@ These rows do not establish that every client can use every model provider.
 | Letta Code 0.33.0 | Local agent MCP server settings, shape below | Native headless session completed show/ACK/reply on Luna/Flex through Bash and Letta's own MCP CLI. The ordinary TUI mod-send check persisted history but did not display its turn |
 | OpenHands CLI 1.16.0 / SDK 1.21.0 | `openhands mcp add htalk --transport stdio /absolute/path/to/htalk -- --db /absolute/mail.sqlite3 --as hands-worker mcp` | [TUI launcher](README.md#openhands) passed idle/busy native MCP exchanges, visible answers and normal exit with a canned provider. A separate SDK conversation completed show/ACK/reply on Luna/Flex |
 | Cursor Agent 2026.09.23-86fc751 | `~/.cursor/mcp.json`, shape above | `mcp list-tools htalk` discovered `htalk(args)` |
-| GitHub Copilot CLI 1.0.88 | `~/.copilot/mcp-config.json`, shape above | [Notification hooks](README.md#github-copilot-cli) passed idle/busy ordinary-TUI exchanges, rearming and normal exit with a canned provider. A separate headless session completed a request/reply/ACK exchange on Luna/Flex |
-| Gemini CLI 0.61.0 | `.gemini/settings.json` or user settings, shape above | [TUI launcher](README.md#gemini-cli) passed idle/busy native MCP exchanges, draft preservation and normal exit with a canned provider. A separate noninteractive CLI completed show/ACK/reply on Luna/Flex through an external provider translator |
+| GitHub Copilot CLI 1.0.88 | `~/.copilot/mcp-config.json`, shape above | [Real Luna TUI check](../docs/checks/2026-09-29-native-session-checks.md#github-copilot-cli) completed native notice, show/ACK/reply and waiter rearm; normal exit was unconfirmed. Earlier canned-provider checks separately covered idle/busy delivery and normal exit |
+| Gemini CLI 0.61.0 | `.gemini/settings.json` or user settings, shape above | [Real Luna TUI check](../docs/checks/2026-09-29-native-session-checks.md#gemini-cli) completed show/ACK/reply and normal exit in a fresh session recovering the original pending request through an external provider translator. Same-session resume remained unconfirmed. Earlier canned-provider checks covered idle/busy delivery and draft preservation |
 | Google Antigravity CLI 1.2.10 / Python SDK 0.1.18 | CLI: `~/.gemini/config/mcp_config.json`; SDK: `McpStdioServer`, below | SDK completed show/ACK/reply on Luna/Flex with the provider adaptation described below; the CLI only listed its configuration |
 
 Oh My Pi exposes MCP tools as devices. Write `{"args":[...]}` to
