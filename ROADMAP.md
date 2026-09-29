@@ -135,7 +135,7 @@ replacement listener at the saved socket path. It verifies the same loaded
 session and workspace, preserves receipts and refuses unresolved submissions.
 It does not resume a worker or repeat receipted notices. See [recovery steps](integrations/remote.md#inspect-and-recover-after-a-daemon-restart).
 
-The missing-socket diagnostic now identifies the selected path and directs the
+Version 0.9.6's missing-socket diagnostic identifies the selected path and directs the
 operator to inspect saved state. A recovery regression covers missing and
 replaced listeners with the original receipts preserved. No automatic rebind,
 worker startup or notification retry is added.
