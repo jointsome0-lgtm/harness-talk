@@ -264,6 +264,13 @@ In a container, mount the executable and the mailbox directory, including
 SQLite sidecar files, and use paths valid inside that container. The adapter
 does not install Agent Zero, configure its models or start its job scheduler.
 
+A [native WebUI check on 2026-09-29](../docs/checks/2026-09-29-native-session-checks.md#agent-zero-webui)
+used the 0.9.6 wheel and this unchanged plugin with real Luna. An idle saved
+chat woke from mail, completed show/ACK/reply without manual resume, and
+displayed the correct answer after a browser reload. Nine model calls included
+native utility work; two ten-second idle observations added none. The chat
+path was checked; media, ingestion and concurrent user-send races were not.
+
 ## Cline
 
 Tested with Cline CLI 3.0.65 and its bundled `@cline/core` 0.0.86 on Linux.
@@ -451,6 +458,14 @@ check used a canned provider; the separate earlier live Luna exchange was
 headless. Starting the waiter and handling its completion use native model
 turns; the waiter itself makes no model requests.
 
+The [2026-09-29 Luna TUI check](../docs/checks/2026-09-29-native-session-checks.md#github-copilot-cli)
+subsequently completed a real notice, show/ACK/reply and waiter rearm in the
+ordinary terminal. Normal `/exit` remained unconfirmed in that run: the
+command was queued when the runner closed its terminal server. The session-end
+hook closed the receiver and independent readback found no remaining owned
+processes. The real-model exchange and that cleanup limitation are recorded
+separately.
+
 ## Gemini CLI
 
 Verified on Linux with Gemini CLI 0.61.0. This launcher imports its ordinary
@@ -479,14 +494,14 @@ node "$HTALK_SOURCE/integrations/gemini.mjs"
 `HTALK_GEMINI_ROOT` points to the installed npm package. Use Node 20 or later.
 Ordinary CLI arguments pass through to Gemini. Model, authentication and tool
 permissions stay in Gemini's configuration. The launcher does not provide a
-model-protocol translator; the separate Luna check described in the MCP guide
-used an external gateway.
+model-protocol translator; the Luna checks used an external gateway.
 
 Gemini holds the notices until the terminal is idle, MCP is ready and no tool
 awaits approval. Its own TUI submits and renders the turn, preserving unsent
-drafts. The receiver follows the conversation selected in this CLI process;
-resume and `/clear` with pending notices have not been checked. Inspect saved
-mail before restarting or changing conversations.
+drafts. The receiver follows the conversation selected in this CLI process.
+Same-session resume did not complete in the real-model check below; `/clear`
+with pending notices remains untested. Inspect saved mail before restarting
+or changing conversations.
 
 An ordinary-terminal check completed two native MCP show/ACK/reply exchanges
 in one session. The second notice arrived during a held first turn and appeared
@@ -494,6 +509,15 @@ after it finished. The typed draft survived both turns. Four mailbox rows were
 acknowledged and `/exit` reaped the watcher. The check used eight canned native
 Gemini-protocol responses, with no extra calls during a four-second final idle
 observation. The earlier real Luna exchange used noninteractive CLI mode.
+
+The [2026-09-29 Luna TUI check](../docs/checks/2026-09-29-native-session-checks.md#gemini-cli)
+completed show/ACK/reply and normal exit in a fresh native terminal using the
+original pending mailbox request. A prior attempt stopped during a provider
+call; same-session resume was rejected for malformed restored tool history.
+The successful recovery used a new session without repeating the saved send.
+It does not establish transparent resume of the previous conversation. The
+external test bridge required early HTTP headers and disabled native retries;
+those provider settings are separate from the htalk launcher.
 
 ## Check and recover
 

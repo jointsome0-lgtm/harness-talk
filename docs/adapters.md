@@ -1,5 +1,36 @@
 # Client adapters
 
+Checked on 2026-09-29 UTC with the htalk `0.9.6` x86-64 publication wheel,
+commit `5c8955caf1a3b419d092ff7dc0c2cb9fdb0ce370`, SHA-256
+`4abcfe1786432111d9cd17ab6895ca5922cc31d3fb6087217a25dccd907fdbc1`.
+The [publication run](https://github.com/jointsome0-lgtm/harness-talk/actions/runs/36506294790)
+passed both Linux architecture builds and installed-wheel checks. All 100
+included Git files matched the release tree. All three PyPI files and a fresh
+installation matched the checked artifacts.
+
+Codex CLI 0.158.0 with GPT-6 Luna medium and Claude Code 2.1.284 with Opus 5.5 high
+completed both initiating directions: four native notices, show before each
+separate ACK, two correlated replies, no repeated sends or replies, and two
+empty final inboxes. Codex used workspace-write and normal approval review
+with approved host commands; Claude used manual permissions with the exact
+fixture executable allowed. Both terminal sessions closed and their peers
+retired. ACK cleanup was `absent` for Codex and `unsupported` for Claude;
+these observations do not establish notification removal.
+
+The same wheel rejected an absent explicit receiver socket before invoking
+the connector or creating receiver state. Its diagnostic included the path,
+the underlying error and the command to inspect saved state. Both devices
+then installed the matching PyPI binary; the laptop's existing worker, five
+receipts and receiver ledger were preserved without another model turn.
+Mailbox schema remains 3; updating from 0.9.5 needs no migration.
+
+The [OpenCode check](opencode.md) used a local canned provider. Post-publication
+[WebUI and TUI checks](checks/2026-09-29-native-session-checks.md) used real Luna
+with the same wheel and unchanged adapter sources. The separate
+[LAN interruption checks](checks/2026-09-29-lan-interruption.md) cover physical
+Wi-Fi loss, sleep and reboot on 0.9.5. Starting or supervising an agent is
+outside htalk's scope. Other harnesses retain their earlier observations.
+
 Checked on 2026-09-28 UTC with the htalk `0.9.5` x86-64 publication wheel,
 commit `709e5ea8f855ca19296203f65a01bc94fb2b066a`, SHA-256
 `53f179a5ab74686d9acfe25e7ed0dc8069e5753f362498667db8492f0b9241b6`.
