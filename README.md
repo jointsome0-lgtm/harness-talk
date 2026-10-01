@@ -105,6 +105,11 @@ htalk --as helper inbox
 
 `--harness` is a label such as `generic`, `hermes` or `openclaw`; a label does not install an integration. Pull peers need no native session or workspace and reject address flags. Messages to them are saved with `notification_detail: pull_only` and exit 0, without a notification attempt. The agent must run `inbox` to get its work. It can send and reply to native peers normally. `peer check` reports the delivery mode and does not establish that a pull agent is running.
 
+To find owner-published profiles on a shared Wi-Fi segment, use the opt-in
+[LAN catalogue](docs/catalog.md). Known devices are authenticated through pinned
+SSH; choose a profile by name and use its checked MCP connection. Reachable
+profiles keep `runtime_status: unknown` until separate runtime evidence exists.
+
 ## Ask, answer and recover
 
 From the builder's session, check the recipient in the same execution scope that will send:

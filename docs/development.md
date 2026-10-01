@@ -12,6 +12,13 @@ The CLI suite uses `target/debug/htalk`, temporary databases, fake client execut
 
 Schema migration tests use synthetic version 1/2 fixtures and cover automatic first opens, backup contents and permissions, concurrent writers, and rollback on failure. Pull and mixed native/pull exchanges use isolated mailboxes. These checks do not migrate a working mailbox.
 
+The catalogue suite uses isolated schema-3 mailboxes to check private export,
+publication and binding changes, read-only legacy-schema refusal, strict SSH
+command dispatch, conversation scopes before pagination and per-call MCP
+identity mismatches. It neither advertises on the LAN nor contacts real agents.
+Native mDNS and SSH checks require explicitly selected owned devices and a
+separate temporary endpoint.
+
 The CLI suite covers registration, request/reply/ACK states, pagination, recovery, migration and native/pull exchanges. Rust tests cover storage races and adapter-specific identity, discovery and delivery failures. Keep a behavior in one layer when another test already exercises the same failure; retain separate tests for distinct races and transport boundaries.
 
 Two MCP cases exercise the same compiled executable through stdio: message

@@ -107,6 +107,90 @@ fn peer_on(db: &Connection, name: &str) -> Result<Peer, Error> {
     .ok_or_else(|| code("unknown_peer"))
 }
 
+/// Catalogue reads cannot create, initialize or migrate a mailbox.
+pub(crate) fn catalog_peers(path: &Path, names: &[String]) -> Result<Vec<Peer>, Error> {
+    let db = catalog_connection(path)?;
+    db.execute_batch("BEGIN")?;
+    names.iter().map(|name| peer_on(&db, name)).collect()
+}
+
+fn catalog_connection(path: &Path) -> Result<Connection, Error> {
+    let db = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    db.busy_timeout(Duration::from_secs(2))?;
+    if db.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))? != SCHEMA_VERSION {
+        return Err(code("catalog_requires_schema3"));
+    }
+    Ok(db)
+}
+
+pub(crate) fn catalog_message(path: &Path, id: &str, actor: &str) -> Result<Message, Error> {
+    let db = catalog_connection(path)?;
+    db.execute_batch("BEGIN")?;
+    load(&db, &validate::uuid(id)?, Some(actor))
+}
+
+/// Apply the catalogue's conversation filter before pagination and counts.
+pub(crate) fn catalog_page(
+    path: &Path,
+    actor: &str,
+    names: &[String],
+    sent: bool,
+    limit: i64,
+    cursor: Option<i64>,
+    bodies: bool,
+) -> Result<Page, Error> {
+    validate::page(limit, cursor)?;
+    let mut db = catalog_connection(path)?;
+    let tx = db.transaction()?;
+    peer_on(&tx, actor)?;
+    let base = if sent { SENT } else { INBOX };
+    let condition = format!(
+        "({base}) AND CASE WHEN m.sender=?1 THEN m.recipient ELSE m.sender END IN (SELECT value FROM json_each(?2))"
+    );
+    let (order, beyond) = if sent { ("DESC", "<") } else { ("ASC", ">") };
+    let cursor = cursor.unwrap_or(if sent { i64::MAX } else { 0 });
+    let names = serde_json::to_string(names)?;
+    let total = tx.query_row(
+        &format!("SELECT COUNT(*) FROM messages m WHERE {condition}"),
+        params![actor, names],
+        |r| r.get(0),
+    )?;
+    let mut stmt = tx.prepare(&format!("SELECT * FROM messages m WHERE {condition} AND m.seq {beyond} ?3 ORDER BY m.seq {order} LIMIT ?4"))?;
+    let mut found = stmt.query(params![actor, names, cursor, limit])?;
+    let mut rows = Vec::new();
+    while let Some(r) = found.next()? {
+        rows.push(read_row(r)?);
+    }
+    let omitted = match rows.last() {
+        Some(last) => tx.query_row(
+            &format!("SELECT COUNT(*) FROM messages m WHERE {condition} AND m.seq {beyond} ?3"),
+            params![actor, names, last.seq],
+            |r| r.get(0),
+        )?,
+        None => 0,
+    };
+    let mut messages: Vec<Value> = rows
+        .into_iter()
+        .map(|r| Ok(serde_json::to_value(with_reply(&tx, r)?)?))
+        .collect::<Result<_, Error>>()?;
+    if sent && !bodies {
+        messages.iter_mut().for_each(summarize);
+    }
+    Ok(Page {
+        messages,
+        total,
+        omitted,
+        next_action: if sent {
+            None
+        } else {
+            Some(INBOX_ACTION.into())
+        },
+    })
+}
+
 fn with_reply(db: &Connection, row: Row) -> Result<Message, Error> {
     let reply = message_row(db, "SELECT * FROM messages WHERE in_reply_to=?", [&row.id])?;
     Ok(Message::from_row(row, reply))
