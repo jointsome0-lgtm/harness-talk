@@ -1,5 +1,17 @@
 # OpenCode sessions
 
+Checked on 2026-10-01 UTC with the htalk `0.10.0` publication wheel,
+commit `0498932f887865737a6df887773c76c14954dd51`, SHA-256
+`3bdd20ad5c0af3704b55948efbf097b3bd03832c187229cc16c331405a22038c`.
+OpenCode 1.18.32 completed native MCP `show`, separate `ack`, and one correlated
+`reply` in a fresh server session with a local canned provider. Its request and
+reply were ACKed, both final inboxes were empty, and the owned server stopped.
+The fixture kept the wheel environment first on PATH, used the source archive
+from the same publication run, and allowed only the htalk MCP tool.
+ACK cleanup was `unsupported` for OpenCode and `skipped/pull_only` for the
+synthetic helper. This checks transport and native tool execution with no
+external model calls. See the [publication check](checks/2026-10-01-catalog.md).
+
 Checked on 2026-09-29 UTC with the htalk `0.9.6` x86-64 publication wheel,
 commit `5c8955caf1a3b419d092ff7dc0c2cb9fdb0ce370`, SHA-256
 `4abcfe1786432111d9cd17ab6895ca5922cc31d3fb6087217a25dccd907fdbc1`.
