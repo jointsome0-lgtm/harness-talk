@@ -1,11 +1,16 @@
 """Tailscale source validation for the cross-channel profile catalogue."""
 import json
+import os
 from pathlib import Path
+import pwd
+import shlex
+import shutil
 import socket
+import subprocess
 import sys
 import uuid
 
-from compat_support import HtalkCase
+from compat_support import HtalkCase, wait_for
 
 
 class TailscaleCatalog(HtalkCase):
@@ -91,6 +96,111 @@ class TailscaleCatalog(HtalkCase):
         if not self.calls_file.exists():
             return []
         return [json.loads(line) for line in self.calls_file.read_text().splitlines()]
+
+    def test_mismatched_pinned_host_key_blocks_catalogue_before_write(self):
+        sshd = os.environ.get('HTALK_TEST_SSHD') or shutil.which('sshd')
+        keygen = shutil.which('ssh-keygen')
+        if not sshd or not keygen:
+            self.skipTest('OpenSSH server and ssh-keygen are required for the host-key fixture')
+        for peer in ('alice', 'bob'):
+            self.htalk('peer', 'add', peer, '--harness', 'generic', '--delivery', 'pull')
+        config = self.tmp / 'catalog.json'
+        self.htalk('--as', 'alice', 'catalog', 'publish', '--config', config, 'bob',
+                   '--name', 'Reviewer', '--role', 'Review')
+        directory = self.htalk('catalog', 'export', '--config', config, db=False)
+        host = self.tmp / 'host-key'
+        wrong = self.tmp / 'wrong-key'
+        for path in (host, wrong, self.private_key):
+            path.unlink(missing_ok=True)
+            subprocess.run([keygen, '-q', '-t', 'ed25519', '-N', '', '-f', str(path)],
+                           check=True, capture_output=True)
+        with socket.socket() as reservation:
+            reservation.bind(('127.0.0.1', 0))
+            port = reservation.getsockname()[1]
+        endpoint = shlex.join(self.argv(['catalog', 'serve', '--config', str(config)], False))
+        authorized = self.tmp / 'authorized_keys'
+        authorized.write_text('restrict,command="' + endpoint + '" ' +
+                              Path(str(self.private_key) + '.pub').read_text())
+        authorized.chmod(0o600)
+        user = pwd.getpwuid(os.getuid()).pw_name
+        server_config = self.tmp / 'sshd_config'
+        server_config.write_text('\n'.join([
+            f'Port {port}', 'ListenAddress 127.0.0.1', f'HostKey {host}',
+            f'PidFile {self.tmp / "sshd.pid"}', f'AuthorizedKeysFile {authorized}',
+            # The owned temporary directory is under /tmp, outside the login
+            # user's home. This isolated loopback fixture uses only its own key.
+            'StrictModes no', 'PasswordAuthentication no', 'KbdInteractiveAuthentication no',
+            'PubkeyAuthentication yes', 'UsePAM no', 'PermitRootLogin prohibit-password',
+            f'AllowUsers {user}', 'AllowTcpForwarding no', 'X11Forwarding no',
+            'PermitTTY no', 'LogLevel ERROR',
+        ]) + '\n')
+        subprocess.run([sshd, '-t', '-f', str(server_config)], check=True, capture_output=True)
+        log = (self.tmp / 'sshd.log').open('w+')
+        self.addCleanup(log.close)
+        server = subprocess.Popen([sshd, '-D', '-e', '-f', str(server_config)], stderr=log)
+        self.processes.append(server)
+        def listening():
+            if server.poll() is not None:
+                log.seek(0)
+                self.fail('fixture sshd stopped: ' + log.read())
+            try:
+                with socket.create_connection(('127.0.0.1', port), timeout=0.2):
+                    return True
+            except OSError:
+                return False
+        wait_for(listening, message='fixture SSH listener')
+        # This owned fake Tailscale CLI redirects only the fixture peer/port to
+        # loopback. OpenSSH still performs a real host-key check and handshake.
+        self.ts_binary.write_text('''#!%s -B
+import os, select, socket, sys
+if sys.argv[2:] == ['status', '--json']:
+    sys.stdout.write(open(os.environ['HTALK_FAKE_TAILSCALE_STATUS']).read())
+elif sys.argv[2:] == ['nc', '100.64.0.2', '%s']:
+    with socket.create_connection(('127.0.0.1', %s)) as link:
+        while True:
+            ready, _, _ = select.select([0, link], [], [])
+            if 0 in ready:
+                data = os.read(0, 65536)
+                if not data:
+                    break
+                link.sendall(data)
+            if link in ready:
+                data = link.recv(65536)
+                if not data:
+                    break
+                os.write(1, data)
+else:
+    sys.exit(91)
+''' % (sys.executable, port, port))
+        self.status({'nodekey:fixture': {
+            'ID': 'nfixture', 'Online': True, 'TailscaleIPs': ['100.64.0.2'],
+        }})
+        trust, devices = self.tailscale_trust(['nfixture'])
+        device = devices[0]
+        for key in ('device_id', 'mailbox_id', 'generation', 'sender'):
+            device[key] = directory[key]
+        device.update(ssh_port=port, ssh_user=user)
+        trust.write_text(json.dumps({'schema_version': 1, 'devices': devices}))
+        alias = 'htalk-' + directory['device_id']
+        self.known_hosts.write_text(alias + ' ' + Path(str(host) + '.pub').read_text())
+        before = self.db.read_bytes()
+        good = self.discover(trust)
+        log.seek(0)
+        self.assertEqual('reachable', good['devices'][0]['directory_state'], (good, log.read()))
+        self.assertEqual(directory, good['devices'][0]['catalog'])
+        self.known_hosts.write_text(alias + ' ' + Path(str(wrong) + '.pub').read_text())
+        rejected = self.discover(trust)
+        self.assertEqual('unavailable', rejected['devices'][0]['directory_state'])
+        self.assertEqual('catalog_unreachable', rejected['devices'][0]['error'])
+        self.assertEqual('partial', rejected['sources'][0]['status'])
+        blocked = self.run_raw('catalog', 'connect', 'Reviewer', '--trust', trust, '--via', 'tailscale',
+                               '--tailscale-binary', self.ts_binary, '--tailscale-socket', self.ts_socket,
+                               '--seconds', '1', db=False, env=self.env())
+        self.assertEqual(2, blocked.code)
+        self.assertIn('catalog_profile_unavailable', blocked.stderr)
+        self.assertEqual('', blocked.stdout)
+        self.assertEqual(before, self.db.read_bytes())
+        self.assertEqual(0, self.sql('SELECT count(*) FROM messages')[0][0])
 
     def assert_tailscale_source_error(self, trust, expected_error, env=None):
         result = self.run_raw(

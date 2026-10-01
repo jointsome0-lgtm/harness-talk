@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import sys
 import uuid
 
 from compat_support import HtalkCase
@@ -77,11 +78,98 @@ class CatalogCase(HtalkCase):
         client = self.remote(old)
         self.result(client, 'inbox')
         self.publish('bob', profile_id=self.bob['profile_id'])
+        fresh = self.expected(self.bob['profile_id'])
+        self.assertNotEqual(old['profiles'][0]['binding_id'], fresh['profiles'][0]['binding_id'])
         self.assertTrue(client.call('send', 'bob', '--id', str(uuid.uuid4()), '--message', 'stale')['isError'])
         self.assertEqual(0, self.sql('SELECT count(*) FROM messages')[0][0])
         client.close()
+        current = self.remote(fresh)
+        self.result(current, 'send', 'bob', '--id', str(uuid.uuid4()), '--message', 'current binding')
+        self.assertEqual(1, self.sql('SELECT count(*) FROM messages')[0][0])
+        current.close()
         self.htalk('peer', 'retire', 'bob')
         self.assertEqual('retired', self.export()['profiles'][0]['binding_state'])
+
+    def test_publish_cannot_change_fixed_sender_or_mailbox(self):
+        before = self.catalog_config.read_bytes()
+        self.error('--as', 'carol', 'catalog', 'publish', '--config', str(self.catalog_config),
+                   'bob', '--name', 'Reviewer', '--role', 'Check', error='catalog_endpoint_binding_mismatch')
+        other = self.tmp / 'other.sqlite3'
+        shutil.copyfile(self.db, other)
+        self.error('--db', str(other), '--as', 'alice', 'catalog', 'publish',
+                   '--config', str(self.catalog_config), 'bob', '--name', 'Reviewer',
+                   '--role', 'Check', db=False, error='catalog_endpoint_binding_mismatch')
+        self.assertEqual(before, self.catalog_config.read_bytes())
+
+    def test_raw_binding_edit_blocks_open_client_but_descriptions_do_not(self):
+        client = self.remote(self.expected(self.bob['profile_id']))
+        config = json.loads(self.catalog_config.read_text())
+        config['profiles'][0]['display_name'] = 'Updated description'
+        config['profiles'][0]['role'] = 'Updated role'
+        self.catalog_config.write_text(json.dumps(config))
+        self.result(client, 'inbox')
+        config['profiles'][0]['binding_id'] = str(uuid.uuid4())
+        self.catalog_config.write_text(json.dumps(config))
+        blocked = client.call('send', 'bob', '--id', str(uuid.uuid4()), '--message', 'stale')
+        self.assertTrue(blocked['isError'])
+        self.assertIn('before sending', json.dumps(blocked))
+        self.assertEqual(0, self.sql('SELECT count(*) FROM messages')[0][0])
+        client.close()
+
+    def test_lost_catalogue_write_response_is_recovered_without_duplicate(self):
+        mode = self.tmp / 'link-mode'
+        mode.write_text('drop')
+        attempts = self.tmp / 'attempts'
+        connector = self.tmp / 'drop-response.py'
+        connector.write_text('''import json, os, subprocess, sys
+from pathlib import Path
+command = json.loads(sys.argv[3])
+if Path(sys.argv[1]).read_text() == 'online':
+    os.execv(command[0], command)
+child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+try:
+    for line in sys.stdin:
+        frame = json.loads(line)
+        child.stdin.write(line)
+        child.stdin.flush()
+        if 'id' not in frame:
+            continue
+        response = child.stdout.readline()
+        if frame['method'] == 'tools/call':
+            with open(sys.argv[2], 'a') as out:
+                out.write(json.dumps(frame['params']) + '\\n')
+            assert not json.loads(response)['result'].get('isError', False)
+            break  # Real catalogue call committed; do not forward its response.
+        sys.stdout.write(response)
+        sys.stdout.flush()
+finally:
+    child.stdin.close()
+    child.wait(timeout=10)
+''')
+        expected = self.tmp / 'expected.json'
+        expected.write_text(json.dumps(self.expected(self.bob['profile_id'])))
+        expected.chmod(0o600)
+        endpoint = self.argv(['--as', 'alice', 'mcp', '--catalog', str(self.catalog_config)], True)
+        argv = self.argv(['mcp', '--connect', '--expect-catalog', str(expected), '--',
+                          sys.executable, str(connector), str(mode), str(attempts), json.dumps(endpoint)], False)
+        client = McpClient(self, argv=argv)
+        request_id = str(uuid.uuid4())
+        lost = client.call('send', 'bob', '--id', request_id, '--message', 'one request')
+        self.assertTrue(lost['isError'])
+        self.assertIn('outcome is unknown', json.dumps(lost))
+        self.assertEqual(1, len(attempts.read_text().splitlines()))
+        self.assertEqual(1, self.sql('SELECT count(*) FROM messages')[0][0])
+        mode.write_text('online')
+        original = self.result(client, 'show', request_id)
+        retry = self.result(client, 'send', 'bob', '--id', request_id, '--message', 'one request')
+        self.assertFalse(retry['created'])
+        self.assertEqual((request_id, original['created_at']), (retry['id'], retry['created_at']))
+        conflict = client.call('send', 'bob', '--id', request_id, '--message', 'changed request')
+        self.assertTrue(conflict['isError'])
+        self.assertIn('message_id_conflict', json.dumps(conflict))
+        self.assertEqual('one request', self.result(client, 'show', request_id)['body'])
+        self.assertEqual(1, self.sql('SELECT count(*) FROM messages')[0][0])
+        client.close()
 
     def test_export_refuses_legacy_schema_without_migrating(self):
         self.sql('PRAGMA user_version=2')
