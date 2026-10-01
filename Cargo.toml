@@ -1,6 +1,6 @@
 [package]
 name = "harness-talk"
-version = "0.9.6"
+version = "0.10.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Exchange messages between local agent sessions"
@@ -30,6 +30,7 @@ tungstenite = { version = "0.28", default-features = false, features = ["handsha
 ureq = { version = "=3.4.2", default-features = false, features = ["rustls", "json"] }
 url = "2"
 uuid = { version = "1", features = ["v4", "serde"] }
+mdns-sd = { version = "=0.21.4", default-features = false }
 
 [profile.release]
 lto = "thin"

@@ -13,9 +13,9 @@ from compat_support import HtalkCase, wait_for
 
 
 class McpClient:
-    def __init__(self, case, connector=None):
+    def __init__(self, case, connector=None, argv=None):
         self.process = subprocess.Popen(
-            (case.argv(["mcp", "--connect", "--", *connector], False) if connector
+            argv or (case.argv(["mcp", "--connect", "--", *connector], False) if connector
              else case.argv(["--as", "alice", "mcp"], True)), cwd=case.tmp,
             env=case.environment(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
             stderr=subprocess.PIPE, text=True)
@@ -25,7 +25,7 @@ class McpClient:
         self.reader = threading.Thread(target=self.read, daemon=True)
         self.reader.start()
         case.addCleanup(self.dispose)
-        self.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
+        self.info = self.request("initialize", {"protocolVersion": "2025-06-18", "capabilities": {},
                                    "clientInfo": {"name": "htalk-test", "version": "1"}})
         self.send("notifications/initialized")
 
@@ -114,6 +114,26 @@ class MailboxMcp(HtalkCase):
         self.assertEqual(2, missing["structuredContent"]["exit_code"])
         self.assertEqual("error", missing["structuredContent"]["result"]["state"])
         self.assertEqual(2, self.sql("SELECT count(*) FROM messages")[0][0])
+        client.close()
+
+    def test_unbound_connector_preserves_legacy_tool_arguments(self):
+        endpoint = self.tmp / "legacy-endpoint.py"
+        endpoint.write_text("""import json, sys
+for line in sys.stdin:
+    d=json.loads(line)
+    if d['method']=='initialize':
+        result={'protocolVersion':d['params']['protocolVersion'],'capabilities':{'tools':{}},'serverInfo':{'name':'harness-talk','version':'0.9.6'}}
+    elif d['method']=='tools/call':
+        args=d['params']['arguments']
+        result={'content':[], 'isError':set(args)!={'args'}, 'structuredContent':{'exit_code':0,'result':{'state':'legacy_read'}}}
+    else:
+        continue
+    print(json.dumps({'jsonrpc':'2.0','id':d['id'],'result':result}),flush=True)
+""")
+        client=McpClient(self,connector=[sys.executable,str(endpoint)])
+        result=client.call('inbox')
+        self.assertFalse(result.get('isError',False),result)
+        self.assertEqual('legacy_read',result['structuredContent']['result']['state'])
         client.close()
 
     def test_remote_reconnect_and_lost_write_receipt_do_not_replay(self):

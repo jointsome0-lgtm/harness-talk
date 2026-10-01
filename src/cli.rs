@@ -725,6 +725,27 @@ pub fn main() -> i32 {
             return code;
         }
     };
+    if let Some(options) = matches.subcommand_matches("catalog") {
+        return match crate::catalog::run(
+            options,
+            matches.get_one::<String>("db").map(String::as_str),
+            matches.get_one::<String>("actor").map(String::as_str),
+        ) {
+            Ok(()) => 0,
+            Err(error) => {
+                if matches!(options.subcommand_name(), Some("connect" | "serve")) {
+                    eprintln!("htalk catalog: {error}");
+                } else {
+                    let _ = output(&json!({"state":"error","error":error.to_string()}));
+                }
+                if matches!(error, Error::Interrupted) {
+                    130
+                } else {
+                    2
+                }
+            }
+        };
+    }
     if let Some(options) = matches.subcommand_matches("receive") {
         if matches.get_one::<String>("db").is_some() || matches.get_one::<String>("actor").is_some()
         {
@@ -755,7 +776,14 @@ pub fn main() -> i32 {
                 .unwrap()
                 .cloned()
                 .collect();
-            return match crate::mcp::connect(command) {
+            let result = if let Some(path) = options.get_one::<String>("expect_catalog") {
+                crate::catalog::read_binding(Path::new(path))
+                    .map_err(Box::<dyn std::error::Error>::from)
+                    .and_then(|binding| crate::mcp::connect_bound(command, binding))
+            } else {
+                crate::mcp::connect(command)
+            };
+            return match result {
                 Ok(()) => 0,
                 Err(error) => {
                     eprintln!("htalk mcp: {error}");
@@ -776,7 +804,12 @@ pub fn main() -> i32 {
             eprintln!("htalk mcp requires --as NAME or HTALK_PEER: {error}");
             return 2;
         }
-        return match crate::mcp::run(db, peer) {
+        let result = if let Some(path) = options.get_one::<String>("catalog") {
+            crate::mcp::run_catalog(db, peer, path.into())
+        } else {
+            crate::mcp::run(db, peer)
+        };
+        return match result {
             Ok(()) => 0,
             Err(error) => {
                 eprintln!("htalk mcp: {error}");

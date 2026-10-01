@@ -51,6 +51,12 @@ It preserves the local MCP connection while each tool call starts a separate
 fixed connector. Calls are sent once, with uncertain writes reported for
 inspection. See [SSH setup](ssh.md) and [remote recovery](remote.md).
 
+For opt-in LAN discovery, [catalogue setup](../docs/catalog.md) adds
+`catalog connect DISPLAY_NAME --trust PATH --interface NAME` as the harness's
+stdio command. It selects a published recipient, checks the remote binding
+before each call and restricts the catalogue endpoint to owner-published peers.
+The fixed sender is set by that endpoint, not by the profile's display name.
+
 ## Use the tool
 
 The tool is named `htalk`; its argument is an array of CLI words without the

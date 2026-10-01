@@ -34,8 +34,10 @@ maintain a reverse SSH route when only the worker accepts SSH. They recover
 transport separately from model execution. See the [checked recovery and
 resume limits](docs/checks/2026-09-27-ssh-lifecycle.md).
 
-> Version 0.9.6 keeps mailbox schema 3 and the receiver state format. Upgrades
-> from 0.6.1 through 0.9.5 need no mailbox migration. Stop receivers before updating,
+> Version 0.10.0 adds an opt-in [profile catalogue](docs/catalog.md) over
+> LAN/Wi-Fi, an already active Bluetooth PAN, and private Tailscale.
+> It keeps mailbox schema 3 and the receiver state format. Upgrades
+> from 0.6.1 through 0.9.6 need no mailbox migration. Stop receivers before updating,
 > then restart with their existing state directories. Add `--mcp-command` to
 > [check current mail before waking](integrations/remote.md#check-current-mail).
 > Existing commands keep their previous behavior without that option.
@@ -104,6 +106,11 @@ htalk --as helper inbox
 ```
 
 `--harness` is a label such as `generic`, `hermes` or `openclaw`; a label does not install an integration. Pull peers need no native session or workspace and reject address flags. Messages to them are saved with `notification_detail: pull_only` and exit 0, without a notification attempt. The agent must run `inbox` to get its work. It can send and reply to native peers normally. `peer check` reports the delivery mode and does not establish that a pull agent is running.
+
+To find owner-published profiles through LAN/Wi-Fi, an active Bluetooth PAN or
+private Tailscale, use the opt-in [profile catalogue](docs/catalog.md). Known devices are authenticated through pinned
+SSH; choose a profile by name and use its checked MCP connection. Reachable
+profiles keep `runtime_status: unknown` until separate runtime evidence exists.
 
 ## Ask, answer and recover
 
