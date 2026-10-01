@@ -33,6 +33,7 @@ For a new project, configure a pending publisher in [PyPI account publishing](ht
 7. Tag the published commit with a lightweight tag `vVERSION`, as for earlier releases, and push the tag.
 8. Record the live check results in `docs/adapters.md` and `docs/opencode.md` in a separate pull request.
 9. Release notes and authorized announcements must say whether a mailbox migration is needed and whether it happens automatically. Include the backup location, which installations need updating, any required command, the post-upgrade checks and recovery limits. For automatic upgrades, say that the first ordinary command performs the migration and that htalk never restores an old backup automatically.
+10. Every release's notes and announcements must name the people or agents who helped, with their specific contribution and a verifiable source. Credit code, tests, review and useful feedback accurately. A documentation review is not a live test, and praise alone is not evidence of a tested contribution.
 
 Only the upload job receives `id-token: write`. The official PyPA action verifies metadata and produces attestations. A successful build alone does not verify the trust configuration; a successful authorized upload does.
 
