@@ -140,7 +140,15 @@ operator to inspect saved state. A recovery regression covers missing and
 replaced listeners with the original receipts preserved. No automatic rebind,
 worker startup or notification retry is added.
 
-Extend the authenticated route to internet-accessible hosts after the LAN pilot. Evaluate Bluetooth against a working pilot if there is a concrete need. Independent offline mailboxes, synchronization and relay infrastructure require a separate demonstrated need before implementation.
+Version 0.10.0 adds an opt-in owner-published profile catalogue. Known devices
+use pinned SSH endpoints, LAN/Wi-Fi and Bluetooth PAN use interface-scoped
+mDNS discovery, and private Tailscale supplies addresses from its authenticated
+status. A selected MCP connection checks the saved device, mailbox and profile
+bindings before forwarding each call. Discovery reports incomplete coverage
+and leaves runtime status unknown. Bluetooth must already be connected;
+htalk does not activate networks or start agents. See [setup and limits](docs/catalog.md).
+
+Independent offline mailboxes, synchronization and relay infrastructure require a separate demonstrated need before implementation.
 
 ## Native macOS and Windows
 

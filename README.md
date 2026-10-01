@@ -34,8 +34,10 @@ maintain a reverse SSH route when only the worker accepts SSH. They recover
 transport separately from model execution. See the [checked recovery and
 resume limits](docs/checks/2026-09-27-ssh-lifecycle.md).
 
-> Version 0.9.6 keeps mailbox schema 3 and the receiver state format. Upgrades
-> from 0.6.1 through 0.9.5 need no mailbox migration. Stop receivers before updating,
+> Version 0.10.0 adds an opt-in [profile catalogue](docs/catalog.md) over
+> LAN/Wi-Fi, an already active Bluetooth PAN, and private Tailscale.
+> It keeps mailbox schema 3 and the receiver state format. Upgrades
+> from 0.6.1 through 0.9.6 need no mailbox migration. Stop receivers before updating,
 > then restart with their existing state directories. Add `--mcp-command` to
 > [check current mail before waking](integrations/remote.md#check-current-mail).
 > Existing commands keep their previous behavior without that option.
