@@ -1,4 +1,5 @@
 //! Published profiles on known devices. Discovery never registers or messages peers.
+mod transport;
 use crate::{error::Error, model::Peer, os, store, validate};
 use clap::{Arg, ArgMatches, Command as Cli};
 use mdns_sd::{
@@ -12,10 +13,10 @@ use std::{
     collections::{BTreeMap, HashSet},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
-    net::Ipv4Addr,
     os::{
         fd::AsRawFd,
         unix::fs::{MetadataExt, OpenOptionsExt},
+        unix::process::CommandExt,
     },
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -26,6 +27,8 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+pub(crate) use transport::Route;
+use transport::{Pan, TailClient};
 
 const SERVICE: &str = "_htalk._tcp.local.";
 pub(crate) const META_KEY: &str = "harness-talk/catalog";
@@ -253,6 +256,8 @@ struct TrustedDevice {
     ssh_port: u16,
     identity_file: PathBuf,
     known_hosts_file: PathBuf,
+    #[serde(default)]
+    tailscale_peer_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -584,11 +589,17 @@ fn trust(path: &Path) -> Result<Trust, Error> {
         return Err(code("catalog_invalid_trust"));
     }
     let mut seen = HashSet::new();
+    let mut tail_ids = HashSet::new();
     for d in &t.devices {
         for id in [&d.device_id, &d.mailbox_id, &d.generation] {
             uuid(id)?;
         }
         validate::peer_name(&d.sender)?;
+        if let Some(id) = &d.tailscale_peer_id
+            && (!transport::peer_id(id) || !tail_ids.insert(id))
+        {
+            return Err(code("catalog_invalid_trust"));
+        }
         if !seen.insert(&d.device_id)
             || d.ssh_port == 0
             || d.ssh_user.is_empty()
@@ -614,14 +625,12 @@ fn trust(path: &Path) -> Result<Trust, Error> {
     Ok(t)
 }
 
-fn connector(d: &TrustedDevice, ip: Ipv4Addr, interface: &str, operation: &str) -> Vec<String> {
+fn connector(d: &TrustedDevice, route: &Route, operation: &str) -> Vec<String> {
     let mut args = vec![
         "/usr/bin/ssh".into(),
         "-F".into(),
         "/dev/null".into(),
         "-T".into(),
-        "-B".into(),
-        interface.into(),
         "-p".into(),
         d.ssh_port.to_string(),
         "-i".into(),
@@ -629,6 +638,7 @@ fn connector(d: &TrustedDevice, ip: Ipv4Addr, interface: &str, operation: &str) 
         "-l".into(),
         d.ssh_user.clone(),
     ];
+    args.extend(route.ssh_args(d.ssh_port));
     for option in [
         "IdentitiesOnly=yes",
         "IdentityAgent=none",
@@ -653,7 +663,7 @@ fn connector(d: &TrustedDevice, ip: Ipv4Addr, interface: &str, operation: &str) 
         format!("UserKnownHostsFile={}", d.known_hosts_file.display()),
         "-o".into(),
         format!("HostKeyAlias=htalk-{}", d.device_id),
-        ip.to_string(),
+        route.ip().to_string(),
         operation.into(),
     ]);
     args
@@ -665,7 +675,10 @@ fn capture(args: &[String], budget: Duration) -> Result<Vec<u8>, Error> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        .env("LC_ALL", "C")
+        .process_group(0)
         .spawn()?;
+    let group = child.id() as i32;
     let stdout = child.stdout.take().unwrap();
     let reader = thread::spawn(move || {
         let mut bytes = Vec::new();
@@ -692,6 +705,10 @@ fn capture(args: &[String], budget: Duration) -> Result<Vec<u8>, Error> {
         }
         thread::sleep(Duration::from_millis(25));
     };
+    // A ProxyCommand may own descendants that still hold stdout after SSH exits.
+    unsafe {
+        libc::kill(-group, libc::SIGKILL);
+    }
     let received = reader.join();
     if stopped() {
         return Err(Error::Interrupted);
@@ -733,21 +750,6 @@ fn accept(d: &TrustedDevice, directory: &Directory) -> Result<(), Error> {
         {
             return Err(code("catalog_invalid_profile"));
         }
-    }
-    Ok(())
-}
-
-pub(crate) fn route(ip: Ipv4Addr, interface: &str) -> Result<(), Error> {
-    let args = vec![
-        "/usr/sbin/ip".into(),
-        "-j".into(),
-        "route".into(),
-        "get".into(),
-        ip.to_string(),
-    ];
-    let values: Vec<Value> = serde_json::from_slice(&capture(&args, Duration::from_secs(1))?)?;
-    if values.len() != 1 || values[0]["dev"] != interface {
-        return Err(code("catalog_route_interface_changed"));
     }
     Ok(())
 }
@@ -797,11 +799,113 @@ fn daemon(interface: &str) -> Result<Mdns, Error> {
 struct Found {
     directory: Directory,
     device: TrustedDevice,
-    ip: Ipv4Addr,
+    route: Route,
 }
 
 fn discover(options: &ArgMatches) -> Result<(Value, Vec<Found>), Error> {
     let t = trust(Path::new(required(options, "trust")))?;
+    if required(options, "via") == "tailscale" {
+        if options.get_one::<String>("interface").is_some() {
+            return Err(code("catalog_tailscale_omit_interface"));
+        }
+        return discover_tailscale(options, t);
+    }
+    let pan = if required(options, "via") == "bluetooth" {
+        Some(Pan::read(required(options, "interface"))?)
+    } else {
+        None
+    };
+    discover_mdns(options, t, pan)
+}
+
+fn discover_tailscale(options: &ArgMatches, t: Trust) -> Result<(Value, Vec<Found>), Error> {
+    let client = TailClient::new(
+        required(options, "tailscale_binary"),
+        required(options, "tailscale_socket"),
+    )?;
+    let status = client.status()?;
+    let unknown = status
+        .peers
+        .keys()
+        .filter(|id| {
+            !t.devices
+                .iter()
+                .any(|d| d.tailscale_peer_id.as_ref() == Some(id))
+        })
+        .count();
+    let end = Instant::now() + Duration::from_secs(15);
+    let mut devices = Vec::new();
+    let mut found = Vec::new();
+    for device in t.devices {
+        if stopped() {
+            return Err(Error::Interrupted);
+        }
+        let result = (|| {
+            let id = device
+                .tailscale_peer_id
+                .as_ref()
+                .ok_or_else(|| code("catalog_tailscale_not_bound"))?;
+            let ip = status
+                .peers
+                .get(id)
+                .and_then(|v| *v)
+                .ok_or_else(|| code("catalog_tailscale_peer_unavailable"))?;
+            if end.saturating_duration_since(Instant::now()) < Duration::from_secs(1) {
+                return Err(code("catalog_discovery_budget_exhausted"));
+            }
+            let route = Route::Tailscale {
+                ip,
+                client: client.clone(),
+                local_id: status.local_id.clone(),
+                peer_id: id.clone(),
+            };
+            route.check()?;
+            let budget = end
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_secs(5));
+            if budget.is_zero() {
+                return Err(code("catalog_discovery_budget_exhausted"));
+            }
+            let directory = fetch(&connector(&device, &route, "catalog"), budget)?;
+            accept(&device, &directory)?;
+            Ok(Found {
+                directory,
+                device: device.clone(),
+                route,
+            })
+        })();
+        match result {
+            Ok(item) => {
+                devices.push(json!({"device_id":device.device_id,"trust":"known","directory_state":"reachable",
+                    "via":"tailscale","catalog":item.directory}));
+                found.push(item);
+            }
+            Err(Error::Interrupted) => return Err(Error::Interrupted),
+            Err(error) => devices.push(
+                json!({"device_id":device.device_id,"trust":"known","directory_state":"unavailable",
+                "via":"tailscale","error":error.to_string()}),
+            ),
+        }
+    }
+    if stopped() {
+        return Err(Error::Interrupted);
+    }
+    let partial = devices
+        .iter()
+        .any(|d| d["directory_state"] == "unavailable");
+    Ok((
+        json!({"devices":devices,"sources":[{"source":"tailscale","via":"tailscale",
+        "status":if partial { "partial" } else { "ok" },"unknown_peer_count":unknown}],
+        "scope":"Snapshot from the explicitly selected Tailscale daemon. Only locally pinned peer IDs are fetched. Reachability is not agent liveness."}),
+        found,
+    ))
+}
+
+fn discover_mdns(
+    options: &ArgMatches,
+    t: Trust,
+    pan: Option<Pan>,
+) -> Result<(Value, Vec<Found>), Error> {
     let d = daemon(required(options, "interface"))?;
     let monitor = d.monitor().map_err(|_| code("catalog_mdns_unavailable"))?;
     let events = d
@@ -899,22 +1003,24 @@ fn discover(options: &ArgMatches) -> Result<(Value, Vec<Found>), Error> {
                 if fetch_end.saturating_duration_since(Instant::now()) < Duration::from_secs(1) {
                     return Err(code("catalog_discovery_budget_exhausted"));
                 }
-                route(*ip, required(options, "interface"))?;
+                let route = Route::Interface {
+                    ip: *ip,
+                    interface: required(options, "interface").into(),
+                    pan: pan.clone(),
+                };
+                route.check()?;
                 let budget = fetch_end
                     .saturating_duration_since(Instant::now())
                     .min(Duration::from_secs(5));
                 if budget.is_zero() {
                     return Err(code("catalog_discovery_budget_exhausted"));
                 }
-                let directory = fetch(
-                    &connector(device, *ip, required(options, "interface"), "catalog"),
-                    budget,
-                )?;
+                let directory = fetch(&connector(device, &route, "catalog"), budget)?;
                 accept(device, &directory)?;
                 Ok(Found {
                     directory,
                     device: device.clone(),
-                    ip: *ip,
+                    route,
                 })
             });
         match result {
@@ -931,7 +1037,7 @@ fn discover(options: &ArgMatches) -> Result<(Value, Vec<Found>), Error> {
         || rejected > 0
         || truncated;
     Ok((
-        json!({"devices":devices,"sources":[{"source":"mdns","interface":required(options,"interface"),
+        json!({"devices":devices,"sources":[{"source":"mdns","interface":required(options,"interface"),"via":required(options,"via"),
         "status":if partial { "partial" } else { "ok" },"rejected":rejected,"truncated":truncated}],
         "scope":"Snapshot of advertised devices on the selected interface. Unavailable sources do not prove absence; channel reachability is not agent liveness."}),
         found,
@@ -1030,8 +1136,27 @@ fn browse_args(c: Cli) -> Cli {
     .arg(
         Arg::new("interface")
             .long("interface")
-            .required(true)
+            .required_if_eq_any([("via", "lan"), ("via", "bluetooth")])
             .help("Inspect only this local interface."),
+    )
+    .arg(
+        Arg::new("via")
+            .long("via")
+            .default_value("lan")
+            .value_parser(["lan", "bluetooth", "tailscale"])
+            .help("Choose one channel; never fails over a mailbox call."),
+    )
+    .arg(
+        Arg::new("tailscale_binary")
+            .long("tailscale-binary")
+            .default_value("/usr/bin/tailscale")
+            .help("Owned Tailscale 1.102.x executable, used only with --via tailscale."),
+    )
+    .arg(
+        Arg::new("tailscale_socket")
+            .long("tailscale-socket")
+            .default_value("/var/run/tailscale/tailscaled.sock")
+            .help("Local Tailscale daemon socket, used only with --via tailscale."),
     )
     .arg(
         Arg::new("seconds")
@@ -1042,7 +1167,7 @@ fn browse_args(c: Cli) -> Cli {
 }
 
 pub(crate) fn command() -> Cli {
-    Cli::new("catalog").about("Publish profiles and find known devices on one LAN interface.")
+    Cli::new("catalog").about("Publish profiles and find known devices through LAN, active Bluetooth PAN or Tailscale.")
         .long_about("Only explicitly published profiles are exported. Device discovery is unauthenticated; profile reads and mailbox calls require pinned SSH identity and a fixed endpoint. Never launches sessions or retries messages.")
         .subcommand_required(true)
         .subcommand(Cli::new("publish").about("Publish an existing peer; replace a profile binding explicitly with --profile-id.")
@@ -1144,9 +1269,9 @@ pub(crate) fn run(
                     .collect();
                 profiles
                     .into_iter()
-                    .map(move |p| (f.device.clone(), f.ip, p))
+                    .map(move |p| (f.device.clone(), f.route.clone(), p))
             });
-            let (device, ip, profile) = selected
+            let (device, route, profile) = selected
                 .next()
                 .ok_or_else(|| code("catalog_profile_unavailable"))?;
             if selected.next().is_some() {
@@ -1162,13 +1287,8 @@ pub(crate) fn run(
             };
             // The persistent MCP server owns signals after discovery finishes.
             drop(signals);
-            crate::mcp::connect_catalog(
-                connector(&device, ip, required(m, "interface"), "mcp"),
-                expected,
-                ip,
-                required(m, "interface").into(),
-            )
-            .map_err(|_| code("catalog_mcp_failed"))
+            crate::mcp::connect_catalog(connector(&device, &route, "mcp"), expected, route)
+                .map_err(|_| code("catalog_mcp_failed"))
         }
         _ => Err(code("invalid_arguments")),
     }

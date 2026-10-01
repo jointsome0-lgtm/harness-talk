@@ -1,14 +1,17 @@
-# Find profiles on a LAN
+# Find profiles through LAN, Bluetooth or Tailscale
 
 The catalogue is an opt-in directory of registered htalk peers. A device owner
-publishes named profiles; a known client finds that device through mDNS and
-reads its directory over pinned SSH. Choose a unique display name to expose the
+publishes named profiles; a known client finds that device through mDNS on LAN
+or an active Bluetooth PAN, or through its selected Tailscale daemon. It reads
+the directory over pinned SSH. Choose a unique display name to expose the
 profile's MCP connection. Existing sessions keep their usual receivers.
 
-This first version supports Linux, IPv4 and one explicitly selected LAN
-interface. It works on a shared Wi-Fi segment. It does not discover across
-routers, start agents, synchronize mailboxes or switch between transports.
-Tailscale and Bluetooth discovery are not included.
+This version supports Linux and IPv4 with one explicitly selected channel per
+command. LAN mDNS works on a shared Wi-Fi segment; Bluetooth uses an already
+connected NetworkManager PAN. Tailscale supports the 1.102.x status format and
+also works in userspace networking mode. It does not pair Bluetooth devices,
+activate PAN, start agents, synchronize mailboxes or automatically switch a call
+between transports.
 
 ## Publish existing peers
 
@@ -91,9 +94,11 @@ htalk-5ba7cdd8-07aa-4eec-8bb4-2c5c46d12b2b ssh-ed25519 VERIFIED_HOST_PUBLIC_KEY
 
 Private keys and trust files stay outside the repository. SSH uses strict
 host-key checking, the configured key without an agent, no forwarding or
-multiplexing, and the pinned port. Both discovery and each later mailbox call
-verify that the selected interface routes to the device; SSH binds its source
-to that interface.
+multiplexing, and the pinned port. LAN and Bluetooth calls verify the route and
+bind SSH to the selected interface. Bluetooth also requires the same active
+NetworkManager connection UUID, Bluetooth address and PAN mode, and a direct
+route without a gateway. Tailscale calls verify the local node ID and the pinned
+remote node ID, online state and address before connecting through `tailscale nc`.
 
 The mailbox ID and generation are owner-pinned deployment labels in the
 catalogue sidecar, not UUIDs stored inside SQLite. The catalogue also checks the
@@ -121,6 +126,62 @@ htalk catalog discover --trust /absolute/private/htalk/trust.json --interface wl
 htalk catalog connect 'Reviewer' --trust /absolute/private/htalk/trust.json --interface wlan0
 ```
 
+`--via lan` is the default. For Bluetooth, advertise on the publishing device's
+already active PAN interface and select the client's PAN interface explicitly:
+
+```sh
+htalk catalog advertise --config /absolute/private/htalk/catalog.json --interface btnap0
+htalk catalog discover --trust /absolute/private/htalk/trust.json \
+  --via bluetooth --interface enxYOURPAN
+htalk catalog connect 'Reviewer' --trust /absolute/private/htalk/trust.json \
+  --via bluetooth --interface enxYOURPAN
+```
+
+The interface name is an example. Obtain it from the active NetworkManager PAN
+connection's `GENERAL.IP-IFACE`; it need not start with `bnep`. This route uses
+multicast discovery over the connected PAN, not a configured remote IP or a new
+Bluetooth scan. When PAN is inactive or multicast is unavailable, discovery
+fails or reports unavailable coverage. It never activates the connection.
+
+For Tailscale, add `"tailscale_peer_id": "REMOTE_STABLE_NODE_ID"` to the trusted
+device entry. Obtain this ID from the other device's authenticated local
+`tailscale status --json` `Self.ID` through a trusted channel. Display names, DNS
+names and public node keys are not this ID. The peer ID is separate from the
+catalogue device ID; it pins the source of the current transport address.
+
+The publishing device must expose the same restricted SSH catalogue endpoint
+on the pinned port to its tailnet. A userspace installation can use private
+[Tailscale Serve TCP](https://tailscale.com/docs/reference/tailscale-cli/serve)
+to forward that port to its own local SSH endpoint. This is an explicit owner
+setup step; discovery does not modify Serve, daemon settings or existing keys.
+Use private Serve, not a public internet endpoint.
+
+```sh
+htalk catalog discover --trust /absolute/private/htalk/trust.json --via tailscale \
+  --tailscale-binary /absolute/bin/tailscale --tailscale-socket /absolute/run/tailscaled.sock
+htalk catalog connect 'Reviewer' --trust /absolute/private/htalk/trust.json --via tailscale \
+  --tailscale-binary /absolute/bin/tailscale --tailscale-socket /absolute/run/tailscaled.sock
+```
+
+Tailscale does not use `--interface` or mDNS advertisements. Each snapshot reads
+the selected local daemon, resolves only pinned peer IDs to their current IPv4
+addresses and fetches their catalogues over SSH with `tailscale nc`. Unknown
+peers are counted without fetching their directories. Offline, missing or
+unbound known devices are unavailable and make source coverage partial. A
+stopped daemon, unsupported version or malformed status is a source error,
+not an empty successful result. The status JSON format is
+[subject to change](https://tailscale.com/docs/reference/tailscale-cli#status);
+other version families require new validation before being accepted.
+
+The local Tailscale executable and daemon socket must be absolute paths,
+owned by the current user or root. The executable must not be group/world
+writable. The socket's parent directory must also be owned by the user or root
+and must not be group/world writable. Use a protected path hierarchy, such as
+`/run/user/<uid>`; the check covers the immediate parent, not its ancestors.
+Tailscale's permissive socket mode is accepted inside that controlled
+directory. Paths and node IDs
+stay in private client configuration and are not exported in the directory.
+
 `discover` returns JSON with `devices` and source status. Unknown devices are
 shown as `not_checked`; their directories are never fetched. Rejected adverts,
 truncated results and unreachable known devices make coverage partial. An
@@ -139,6 +200,13 @@ sender and profile binding before dispatch. Re-publication or retirement makes
 old bindings unusable. A lost response after a call begins remains `unknown`;
 the call is not replayed. Recover the saved ID in the same mailbox as described
 in [remote recovery](../integrations/remote.md).
+
+The same catalogue keeps its device, mailbox, sender, profile IDs and binding
+versions across channels. Choose the route explicitly and discover again when
+it changes. A checked MCP connection refuses a changed PAN connection,
+Tailscale node or address before starting the mailbox call. Channel reachability
+still does not establish that an agent is running. There is no automatic
+failover or merged multi-channel cache.
 
 To stop publishing a profile, use `catalog unpublish --config PATH PROFILE_UUID`.
 This leaves the peer and its messages intact. Explicitly re-publishing with

@@ -46,7 +46,7 @@ struct Mailbox {
     children: TaskTracker,
     catalog: Option<(PathBuf, crate::catalog::Binding)>,
     expected: Option<crate::catalog::Binding>,
-    route: Option<(std::net::Ipv4Addr, String)>,
+    route: Option<crate::catalog::Route>,
 }
 
 #[derive(Clone)]
@@ -244,17 +244,14 @@ async fn run_remote_checked(
     cancel: CancellationToken,
     shutdown: CancellationToken,
     expected: Option<crate::catalog::Binding>,
-    route: Option<(std::net::Ipv4Addr, String)>,
+    route: Option<crate::catalog::Route>,
 ) -> CallToolResult {
     if cancel.is_cancelled() || shutdown.is_cancelled() {
         return error("Cancelled before connecting to the mailbox.");
     }
-    if route
-        .as_ref()
-        .is_some_and(|(ip, interface)| crate::catalog::route(*ip, interface).is_err())
-    {
+    if route.as_ref().is_some_and(|route| route.check().is_err()) {
         return error(
-            "The selected network interface no longer routes to this device; no mailbox command was sent. Discover the profile again.",
+            "The selected channel binding is unavailable or changed; no mailbox command was sent. Discover the profile again.",
         );
     }
     let mut child = match Command::new(&command[0])
@@ -468,22 +465,16 @@ pub(crate) fn connect_bound(
 pub(crate) fn connect_catalog(
     command: Vec<String>,
     binding: crate::catalog::Binding,
-    ip: std::net::Ipv4Addr,
-    interface: String,
+    route: crate::catalog::Route,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    serve(
-        Backend::Connect(command),
-        None,
-        Some(binding),
-        Some((ip, interface)),
-    )
+    serve(Backend::Connect(command), None, Some(binding), Some(route))
 }
 
 fn serve(
     backend: Backend,
     catalog: Option<(PathBuf, crate::catalog::Binding)>,
     expected: Option<crate::catalog::Binding>,
-    route: Option<(std::net::Ipv4Addr, String)>,
+    route: Option<crate::catalog::Route>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let shutdown = CancellationToken::new();
     let children = TaskTracker::new();
