@@ -1,5 +1,17 @@
 # Client adapters
 
+Checked on 2026-10-01 UTC with the htalk `0.10.0` publication wheel,
+commit `0498932f887865737a6df887773c76c14954dd51`, SHA-256
+`3bdd20ad5c0af3704b55948efbf097b3bd03832c187229cc16c331405a22038c`.
+Codex CLI 0.159.3 and Claude Code 2.1.285 completed both initiating directions
+with GPT-6 Luna. The [publication and catalogue checks](checks/2026-10-01-catalog.md)
+record notices, show before separate ACK, reply correlation, permissions,
+client versions, cleanup limits and the unsuccessful bare-mode preflight.
+The [OpenCode check](opencode.md) used a local canned provider. Both devices
+installed the matching PyPI binary while preserving the existing idle worker
+and receiver ledger. Schema remains 3. Other adapters retain their earlier
+dated observations below and were not rerun for this feature release.
+
 Checked on 2026-09-29 UTC with the htalk `0.9.6` x86-64 publication wheel,
 commit `5c8955caf1a3b419d092ff7dc0c2cb9fdb0ce370`, SHA-256
 `4abcfe1786432111d9cd17ab6895ca5922cc31d3fb6087217a25dccd907fdbc1`.
