@@ -178,6 +178,7 @@ impl Mailbox {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .process_group(0)
             .kill_on_drop(true);
         // Track cleanup independently of the SDK request future. On shutdown
         // we wait for children even if the client has already disconnected.
@@ -268,6 +269,14 @@ async fn run_remote_checked(
             return error("Could not start the configured mailbox connector; no command was sent.");
         }
     };
+    let mut group = match crate::process_cleanup::OwnedGroup::new(child.id().unwrap()) {
+        Ok(group) => group,
+        Err(e) => {
+            return error(format!(
+                "Connector cleanup ownership unavailable: {e}; no command was sent."
+            ));
+        }
+    };
     let transport = (child.stdout.take().unwrap(), child.stdin.take().unwrap());
     let connection = CancellationToken::new();
     let attempted = AtomicBool::new(false);
@@ -317,21 +326,17 @@ async fn run_remote_checked(
     };
     connection.cancel();
     // Closing the protocol connection lets the endpoint cancel its CLI child.
-    // Bound connector cleanup even when a wrapper ignores its closed stdin.
-    if timeout(Duration::from_secs(2), child.wait()).await.is_err() {
-        if let Some(pid) = child.id() {
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGTERM);
-            }
-        }
-        if timeout(Duration::from_secs(2), child.wait()).await.is_err() {
-            if let Some(pid) = child.id() {
-                unsafe {
-                    libc::kill(-(pid as i32), libc::SIGKILL);
-                }
-            }
-            let _ = child.wait().await;
-        }
+    // Do not poll Child::wait before cleanup. Tokio only reaps this retained
+    // child when wait/try_wait is polled or the Child is dropped.
+    if let Err(e) = group.finish_async().await {
+        return error(format!(
+            "Connector cleanup failed: {e}. A write may be saved; inspect sent/show before repeating it. This call was not retried."
+        ));
+    }
+    if let Err(e) = child.wait().await {
+        return error(format!(
+            "Connector reaping failed: {e}. Inspect saved state before repeating a write."
+        ));
     }
     result.unwrap_or_else(|_| error(if attempted.load(Ordering::Relaxed) {
         "Remote mailbox call outcome is unknown. A write may be saved. Inspect sent/show with the saved ID before repeating a write or any task. This call was not retried."
@@ -364,16 +369,23 @@ async fn run_child(
         Ok(child) => child,
         Err(e) => return error(format!("Could not run htalk: {e}")),
     };
-    let pid = child.id().expect("new child has a PID");
+    let mut group = match crate::process_cleanup::OwnedGroup::new(child.id().unwrap()) {
+        Ok(group) => group,
+        Err(e) => {
+            return error(format!(
+                "htalk cleanup ownership unavailable: {e}; inspect saved state before repeating a write."
+            ));
+        }
+    };
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
-    let unreaped = AtomicBool::new(true);
     let output = {
         let capture = async {
             tokio::try_join!(read_output(stdout), read_output(stderr), async {
-                let status = child.wait().await;
-                unreaped.store(false, Ordering::Relaxed);
-                status
+                while !group.exited()? {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+                Ok::<_, io::Error>(())
             })
         };
         tokio::pin!(capture);
@@ -386,23 +398,29 @@ async fn run_child(
                     _ = tokio::time::sleep(Duration::from_secs(120)) => {},
                 }
             } => {
-                // SIGINT lets the CLI finish a write or return recovery JSON.
-                // A descendant could keep a pipe open after the CLI exits.
-                // Do not signal a PID that has already been reaped and reused.
-                if unreaped.load(Ordering::Relaxed) {
-                    unsafe { libc::kill(pid as i32, libc::SIGINT); }
-                }
+                // The retained pidfd targets only the original CLI process.
+                // SIGINT lets it finish a write or return recovery JSON.
+                let _ = group.interrupt();
                 timeout(Duration::from_secs(2), &mut capture).await
                     .unwrap_or_else(|_| Err(io::Error::other("htalk did not finish after interruption")))
             }
         }
     };
-    if child.id().is_some() {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
+    if let Err(e) = group.finish_async().await {
+        return error(format!(
+            "htalk cleanup failed: {e}. A write may be saved; inspect sent/inbox before repeating it."
+        ));
     }
+    let status = match child.wait().await {
+        Ok(status) => status,
+        Err(e) => {
+            return error(format!(
+                "htalk reaping failed: {e}. Inspect saved state before repeating a write."
+            ));
+        }
+    };
     match output {
-        Ok((stdout, stderr, status)) => {
+        Ok((stdout, stderr, ())) => {
             let value = serde_json::json!({
                 "exit_code": status.code(),
                 "result": match serde_json::from_slice::<serde_json::Value>(&stdout) {

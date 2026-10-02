@@ -12,6 +12,7 @@ pub mod notify;
 pub mod opencode;
 pub mod os;
 mod parser;
+mod process_cleanup;
 mod receive;
 mod schema;
 pub mod store;

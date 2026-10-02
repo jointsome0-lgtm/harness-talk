@@ -130,6 +130,36 @@ pub fn run_command(
         .stderr(Stdio::piped())
         .process_group(0)
         .spawn()?;
+    // After inspection failure, only reap for a bounded interval. A numeric
+    // PID signal would assume the ownership premise which just failed.
+    fn reap_direct(child: &mut std::process::Child) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            match child.try_wait() {
+                Ok(Some(_)) | Err(_) => return,
+                Ok(None) => thread::sleep(Duration::from_millis(5)),
+            }
+        }
+    }
+    fn finish(
+        group: &mut crate::process_cleanup::OwnedGroup,
+        child: &mut std::process::Child,
+    ) -> io::Result<std::process::ExitStatus> {
+        let cleanup = group.finish();
+        if cleanup.is_err() {
+            let _ = group.kill_leader();
+            reap_direct(child);
+            cleanup?;
+        }
+        child.wait()
+    }
+    let mut group = match crate::process_cleanup::OwnedGroup::new(child.id()) {
+        Ok(group) => group,
+        Err(e) => {
+            reap_direct(&mut child);
+            return Err(e.into());
+        }
+    };
     let mut stdout = child.stdout.take().ok_or(Failure::Class("OSError"))?;
     let mut stderr = child.stderr.take().ok_or(Failure::Class("OSError"))?;
     for fd in [stdout.as_raw_fd(), stderr.as_raw_fd()] {
@@ -137,14 +167,14 @@ pub fn run_command(
         // inherits an output pipe after the direct child exits.
         let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
         if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(io::Error::last_os_error().into());
+            let error = io::Error::last_os_error();
+            finish(&mut group, &mut child)?;
+            return Err(error.into());
         }
     }
     let deadline = Instant::now() + timeout;
     let (mut out, mut err) = (Vec::new(), Vec::new());
-    let (mut out_done, mut err_done, mut status) = (false, false, None);
+    let (mut out_done, mut err_done) = (false, false);
     let read = |pipe: &mut dyn Read, data: &mut Vec<u8>, done: &mut bool| -> io::Result<()> {
         if *done {
             return Ok(());
@@ -166,22 +196,22 @@ pub fn run_command(
         let result = (|| -> io::Result<()> {
             read(&mut stdout, &mut out, &mut out_done)?;
             read(&mut stderr, &mut err, &mut err_done)?;
-            if status.is_none() {
-                status = child.try_wait()?;
-            }
             Ok(())
         })();
         if let Err(e) = result {
-            unsafe {
-                libc::kill(-(child.id() as i32), libc::SIGKILL);
-            }
-            let _ = child.wait();
+            finish(&mut group, &mut child)?;
             return Err(e.into());
         }
-        if let Some(status) = status
-            && out_done
-            && err_done
-        {
+        let exited = match group.exited() {
+            Ok(exited) => exited,
+            Err(e) => {
+                let _ = group.kill_leader();
+                reap_direct(&mut child);
+                return Err(e.into());
+            }
+        };
+        if exited && out_done && err_done {
+            let status = finish(&mut group, &mut child)?;
             return Ok(std::process::Output {
                 status,
                 stdout: out,
@@ -189,10 +219,7 @@ pub fn run_command(
             });
         }
         if interrupted() || Instant::now() >= deadline {
-            unsafe {
-                libc::kill(-(child.id() as i32), libc::SIGKILL);
-            }
-            let _ = child.wait();
+            finish(&mut group, &mut child)?;
             return Err(Failure::Class(if interrupted() {
                 "KeyboardInterrupt"
             } else {
