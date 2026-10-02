@@ -383,9 +383,12 @@ normally, then use this launcher:
 ```sh
 htalk peer add hands-worker --harness openhands --delivery pull
 export HTALK_PEER=hands-worker HTALK_DB=/absolute/shared/mail.sqlite3
+export HTALK_OPENHANDS_STATE=/absolute/private/hands-worker-admission
 /absolute/path/to/openhands-venv/bin/python \
   "$HTALK_SOURCE/integrations/openhands_receiver.py"
 ```
+
+The admission-state directory is now required and belongs to one conversation and mailbox binding. After an uncertain stop, the launcher refuses to start native work until explicit inspection and recovery; see [OpenHands recovery](openhands.md). Earlier launches had no ledger, so their prior notice consumption cannot be reconstructed automatically. The new admission/recovery boundaries have synthetic contract coverage; native crash behavior remains unverified.
 
 The Python executable must belong to the environment containing OpenHands.
 The launcher accepts its ordinary CLI arguments and preserves model settings,
@@ -396,7 +399,7 @@ message controller. The controller renders the input. A check when consuming
 the notice also defers it during pauses and approval prompts, so an arrival
 cannot implicitly confirm an action. The receiver binds to the conversation selected at
 startup; changing conversation makes further delivery fail visibly. Restart
-the launcher to bind another conversation after inspecting saved mail.
+the launcher with a separate admission-state directory to bind another conversation after inspecting saved mail.
 
 A canned-provider check delivered one notice while idle and a second during a
 held model call. Each appeared once, both completed native MCP show/ACK/reply,
