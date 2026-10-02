@@ -494,7 +494,7 @@ fn malformed_framing_keeps_a_durable_unknown_without_replay() {
 }
 
 #[test]
-fn sigint_during_successful_preflight_prevents_post_and_replay() {
+fn sigint_during_delayed_preflight_prevents_post_and_replay() {
     use harness_talk::store::Store;
     use std::{
         process::{Command, Stdio},
@@ -602,4 +602,134 @@ fn sigint_during_successful_preflight_prevents_post_and_replay() {
         store.get(&id, None).unwrap().row.notification_started_at,
         saved.row.notification_started_at
     );
+}
+
+#[test]
+fn cancellation_after_successful_preflight_prevents_post_and_replay() {
+    use harness_talk::{error::Error, os, store::Store};
+    use std::{
+        cell::RefCell,
+        process::{Command, Stdio},
+        time::Instant,
+    };
+    const CHILD: &str = "HTALK_OPENCODE_PREFLIGHT_CANCEL_TEST_CHILD";
+    // SIGINT's process-wide flag cannot be reset. Isolate it from the other tests.
+    if std::env::var_os(CHILD).is_none() {
+        let dir = fixture::tempdir();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "cancellation_after_successful_preflight_prevents_post_and_replay",
+                "--nocapture",
+            ])
+            .env_clear()
+            .env(CHILD, "1")
+            .env("HOME", dir.path())
+            .env("PATH", "/usr/bin:/bin")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while child.try_wait().unwrap().is_none() {
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                panic!(
+                    "post-preflight cancellation child timed out: {:?}",
+                    child.wait_with_output().unwrap()
+                );
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        return;
+    }
+
+    os::install_interrupt_handler().unwrap();
+    let c = case();
+    let store = Store::open(&c._dir.path().join("mail.sqlite3"), true).unwrap();
+    store
+        .register(&harness_talk::model::Peer::pull("alice", "synthetic"))
+        .unwrap();
+    store
+        .register(
+            &harness_talk::notify::native_peer(
+                "muse",
+                Harness::Opencode,
+                &c.peer.session_id,
+                &c.workspace,
+                None,
+                c.peer.url.as_deref(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let (message, _) = store
+        .save("alice", "muse", "saved intent", None, None)
+        .unwrap();
+    let cancelled = Cell::new(false);
+    let skip = || {
+        // notify invokes this callback only after all three preflight GETs succeed.
+        assert_eq!(
+            c.fake
+                .requests()
+                .iter()
+                .map(|r| r.path.as_str())
+                .collect::<Vec<_>>(),
+            [
+                "/global/health",
+                "/session/ses_synthetic",
+                "/session/status"
+            ]
+        );
+        assert!(!os::interrupted());
+        // raise executes the handler synchronously, without interrupting a socket read.
+        assert_eq!(unsafe { libc::raise(libc::SIGINT) }, 0);
+        assert!(os::interrupted());
+        cancelled.set(true);
+        Ok(None)
+    };
+    let observed = RefCell::new(None);
+    let notify = |_: &harness_talk::model::Peer, _: &Message| {
+        let receipt = opencode::notify(&c.peer, "notice", &skip);
+        *observed.borrow_mut() = Some((receipt.submission, receipt.detail.clone()));
+        receipt
+    };
+    let cleanup = |_: &harness_talk::model::Peer, _: &Message| panic!("no acknowledgment cleanup");
+    assert!(matches!(
+        store.notify_once(&message.row.id, &notify, &cleanup),
+        Err(Error::Interrupted)
+    ));
+    assert!(
+        cancelled.get(),
+        "successful preflight callback was not reached"
+    );
+    assert!(
+        c.fake.posts().is_empty(),
+        "cancellation after successful preflight must prevent POST"
+    );
+    assert_eq!(
+        *observed.borrow(),
+        Some((Submission::NotSubmitted, "KeyboardInterrupt".into()))
+    );
+    let saved = store.get(&message.row.id, None).unwrap();
+    assert_eq!(saved.row.submission, Submission::SubmissionUnknown);
+    assert_eq!(saved.row.body, "saved intent");
+    assert!(saved.row.notification_started_at.is_some());
+    assert!(saved.row.notification_finished_at.is_none());
+    let again = store
+        .notify_once(
+            &message.row.id,
+            &|_, _| panic!("durable claim must prevent replay"),
+            &cleanup,
+        )
+        .unwrap();
+    assert_eq!(
+        again.row.notification_started_at,
+        saved.row.notification_started_at
+    );
+    assert_eq!(again.row.submission, Submission::SubmissionUnknown);
+    assert_eq!(c.fake.requests().len(), 3);
 }
