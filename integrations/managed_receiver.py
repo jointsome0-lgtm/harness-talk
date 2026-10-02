@@ -65,6 +65,18 @@ def _group_members(pid):
     return members
 
 
+def _pidfd_exited(fd):
+    poller = select.poll()
+    poller.register(fd, select.POLLIN | select.POLLHUP)
+    events = poller.poll(0)
+    if not events:
+        return False
+    flags = events[0][1]
+    if flags & (select.POLLNVAL | select.POLLERR):
+        raise RuntimeError("Cannot read managed process handle readiness")
+    return bool(flags & (select.POLLIN | select.POLLHUP))
+
+
 async def _stop_group(process):
     # Never send a delayed signal to a numeric PGID. Pin exact processes instead.
     # New members may be enrolled only while a known, live member proves ownership.
@@ -93,7 +105,7 @@ async def _stop_group(process):
         while True:
             members = _group_members(process.pid)
             if not members:
-                if not any(not select.select([fd], [], [], 0)[0] for _, fd in handles.values()):
+                if not any(not _pidfd_exited(fd) for _, fd in handles.values()):
                     break
                 if loop.time() >= deadline:
                     raise RuntimeError("Pinned managed process remains alive outside visible group; inspect children")
@@ -101,7 +113,7 @@ async def _stop_group(process):
                 continue
             anchors = {pid: record for pid, record in handles.items()
                        if pid in members and record[0][:3] == members[pid][:3]
-                       and not select.select([record[1]], [], [], 0)[0]}
+                       and not _pidfd_exited(record[1])}
             if not anchors:
                 # A snapshot can race an exit. Confirm before refusing ownership.
                 if not _group_members(process.pid):
@@ -121,7 +133,7 @@ async def _stop_group(process):
                         if not current or current[:3] != identity[:3]:
                             del pending[pid]
                             os.close(fd)
-                if not any(not select.select([fd], [], [], 0)[0]
+                if not any(not _pidfd_exited(fd)
                            and (current := _process_identity(pid))
                            and current[:3] == identity[:3]
                            for pid, (identity, fd) in anchors.items()):
@@ -146,7 +158,7 @@ async def _stop_group(process):
                     pass
                 sent.add(pid)
             await asyncio.sleep(0.02)
-        if any(not select.select([fd], [], [], 0)[0] for _, fd in handles.values()):
+        if any(not _pidfd_exited(fd) for _, fd in handles.values()):
             raise RuntimeError("Pinned managed process did not exit; inspect children")
         await asyncio.wait_for(process.wait(), SHUTDOWN_KILL_SECONDS)
     finally:

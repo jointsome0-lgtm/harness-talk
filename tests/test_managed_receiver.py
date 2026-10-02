@@ -1,10 +1,12 @@
 """Owned Linux process groups; no native client, mailbox or installed receiver."""
 import asyncio
 import ctypes
+import fcntl
 import importlib.util
 import json
 import os
 from pathlib import Path
+import resource
 import signal
 import sys
 import tempfile
@@ -165,6 +167,59 @@ class ManagedReceiverDisposal(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(receiver.dispose(self.process), 2)
         self.assertFalse(any(call.args[1] == signal.SIGKILL for call in send.call_args_list))
         self.assertEqual(self.events[0]["live_pids"], [])
+
+    async def test_high_pidfds_stop_owned_group_and_close_every_handle(self):
+        await self.launch("stubborn")
+        previous_limit = resource.getrlimit(resource.RLIMIT_NOFILE)
+        soft, hard = previous_limit
+        self.high_fd_receipt = {"limit_before": previous_limit, "handles": [], "signals": []}
+        real_open = os.pidfd_open
+        real_signal = signal.pidfd_send_signal
+
+        def pin_high(pid):
+            original = real_open(pid)
+            try:
+                high = fcntl.fcntl(original, fcntl.F_DUPFD_CLOEXEC, 1024)
+            finally:
+                os.close(original)
+            self.high_fd_receipt["handles"].append({"pid": pid, "fd": high})
+            self.assertGreaterEqual(high, 1024)
+            self.assertFalse(os.get_inheritable(high))
+            return high
+
+        def send(fd, sig):
+            record = {"fd": fd, "signal": sig}
+            self.high_fd_receipt["signals"].append(record)
+            try:
+                real_signal(fd, sig)
+            except ProcessLookupError:
+                record["result"] = "already_exited"
+                raise
+            else:
+                record["result"] = "sent"
+
+        try:
+            if soft < 1026:
+                if hard != resource.RLIM_INFINITY and hard < 1026:
+                    self.fail("high-pidfd fixture requires an existing hard RLIMIT_NOFILE of at least 1026")
+                resource.setrlimit(resource.RLIMIT_NOFILE, (1026, hard))
+            with patch.object(os, "pidfd_open", side_effect=pin_high), \
+                    patch.object(signal, "pidfd_send_signal", side_effect=send):
+                await asyncio.wait_for(receiver.dispose(self.process), 2)
+            self.assertEqual({item["pid"] for item in self.high_fd_receipt["handles"]},
+                             set(self.identities))
+            self.assertEqual(self.events[0]["live_pids"], [])
+            self.assertEqual(self.live_pids(), [])
+        finally:
+            try:
+                for item in self.high_fd_receipt["handles"]:
+                    with self.assertRaises(OSError):
+                        os.fstat(item["fd"])
+                self.high_fd_receipt["all_handles_closed"] = True
+            finally:
+                resource.setrlimit(resource.RLIMIT_NOFILE, previous_limit)
+                self.high_fd_receipt["limit_after"] = resource.getrlimit(resource.RLIMIT_NOFILE)
+                self.assertEqual(self.high_fd_receipt["limit_after"], previous_limit)
 
     async def test_nondumpable_descendant_is_not_omitted_when_proc_inode_is_root_owned(self):
         await self.launch("nondumpable")
