@@ -541,11 +541,11 @@ The official [App Server documentation](https://learn.chatgpt.com/docs/app-serve
 
 ### Removing acknowledged notifications
 
-`ack` saves the read mark before calling `thread/queue/delete` with the registered thread UUID and the queue UUID from that message's confirmed submission receipt. It never deletes the whole queue. A notice already consumed by the client cannot be recalled.
+`ack` saves the read mark before calling `thread/queue/delete` with the registered thread UUID and the queue ID from that message's confirmed submission receipt. Socket queue IDs are opaque strings and are passed back unchanged. Native CLI receipts require a UUID and are normalized before cleanup. It never deletes the whole queue. A notice already consumed by the client cannot be recalled.
 
-For native CLI addresses, removal repeats the saved-identity check and uses a temporary `codex app-server --stdio` process with the user's normal configuration. It initializes the protocol, deletes the one queue item and closes the process. It never starts or resumes a thread or requests a model turn. Each RPC has a 10-second timeout, with bounded process shutdown. No persistent server is installed or managed. Explicit socket addresses use their registered socket and repeat the live identity check, with no native fallback.
+For native CLI addresses, removal repeats the saved-identity check and uses a temporary `codex app-server --stdio` process with the user's normal configuration. It initializes the protocol, deletes the one queue item and closes the process. It never starts or resumes a thread or requests a model turn. Each RPC has one 10-second deadline covering request writing and response reading, with bounded process shutdown. Stdio writes use nonblocking I/O and poll against that deadline. A write failure can leave a partial request and remains uncertain after an attempted submission. No persistent server is installed or managed. Explicit socket addresses use their registered socket and repeat the live identity check, with no native fallback.
 
-If `ack` races an in-flight submission, the sender tries the same idempotent removal after saving the queue receipt. A crash or unconfirmed submission can leave a queued notice without a known queue UUID; htalk does not search for or replay it. See [cleanup results and recovery](reference.md#notifications-and-recovery).
+If `ack` races an in-flight submission, the sender tries the same idempotent removal after saving the queue receipt. A crash or unconfirmed submission can leave a queued notice without a known queue ID; htalk does not search for or replay it. See [cleanup results and recovery](reference.md#notifications-and-recovery).
 
 ### Discovery
 
@@ -581,4 +581,4 @@ Keep persistence and conversation rules in `Store`. `Peer` stores an open harnes
 
 An adapter must verify available evidence for the exact session address, never broaden delivery to a name match, and never replay an uncertain attempt. Adding a harness also requires registration validation and focused tests. Shared storage, reply correlation, acknowledgments and waiting remain unchanged.
 
-The [Codex RPC transport](../src/codex/rpc.rs) runs tungstenite over a Unix stream with bounded connection and RPC timeouts. Its socket mode accepts Unix sockets only; OpenCode has its separate loopback HTTP transport.
+The [Codex RPC transport](../src/codex/rpc.rs) runs tungstenite over a Unix stream that refreshes the remaining timeout on every underlying read and write. Partial handshake or frame I/O shares the opening, RPC or close deadline of that operation. Its socket mode accepts Unix sockets only; OpenCode has its separate loopback HTTP transport.

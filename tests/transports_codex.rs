@@ -591,6 +591,22 @@ fn socket_queue_add_uses_exact_identity_and_saves_the_receipt() {
         frames[3]["params"]
     );
     assert_eq!("harness-talk", frames[0]["params"]["clientInfo"]["name"]);
+
+    // The same opaque receipt must survive acknowledgment and cleanup, unchanged.
+    let saved = message(&peer, Some(&outcome.detail), outcome.submission, true);
+    let server = serve(&path, app_server(&peer, || (), None));
+    let cleanup = codex::dismiss(&peer, &saved);
+    assert_eq!(cleanup.status, CleanupStatus::Removed);
+    assert_eq!(cleanup.queue_id.as_deref(), Some("queue-receipt"));
+    let frames = server.join().unwrap();
+    assert_eq!(frames[3]["params"]["queuedSubmissionId"], "queue-receipt");
+    assert_eq!(
+        methods(&frames)
+            .iter()
+            .filter(|method| **method == "thread/queue/delete")
+            .count(),
+        1
+    );
 }
 
 #[test]
@@ -831,7 +847,10 @@ fn socket_probe_and_cleanup_repeat_the_live_identity_check() {
     let cleanup = codex::dismiss(&peer, &saved);
     let frames = server.join().unwrap();
     assert_eq!(
-        (CleanupStatus::Removed, Some(QUEUE_ID)),
+        (
+            CleanupStatus::Removed,
+            Some(QUEUE_ID.to_uppercase().as_str())
+        ),
         (cleanup.status, cleanup.queue_id.as_deref())
     );
     assert_eq!(None, cleanup.detail);
@@ -845,7 +864,7 @@ fn socket_probe_and_cleanup_repeat_the_live_identity_check() {
         methods(&frames)
     );
     assert_eq!(
-        json!({"threadId": peer.session_id, "queuedSubmissionId": QUEUE_ID}),
+        json!({"threadId": peer.session_id, "queuedSubmissionId": QUEUE_ID.to_uppercase()}),
         frames[3]["params"]
     );
 
@@ -1237,6 +1256,38 @@ fn stdio_shutdown_is_bounded_for_a_process_that_ignores_eof_and_sigterm() {
     );
 }
 
+#[test]
+fn public_stdio_call_deadline_includes_a_backpressured_write() {
+    let fixture = Fixture::new("stdio-write-deadline");
+    fixture.fake_codex();
+    fixture.mode("backpressure");
+    let mut rpc = Rpc::spawn_stdio().unwrap();
+    let params = json!({"text": "x".repeat(1024 * 1024)});
+    let started = Instant::now();
+    assert_eq!(
+        rpc.call("owned/backpressure", params).unwrap_err(),
+        Failure::coded("codex_rpc_timeout")
+    );
+    let elapsed = started.elapsed();
+    assert!(elapsed >= Duration::from_secs(9));
+    assert!(elapsed < Duration::from_secs(12));
+    drop(rpc);
+    let pid: i32 = fs::read_to_string(fixture.dir.join("bin/pid"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    // SAFETY: observes only this test's recorded, reaped fixture process.
+    assert_eq!(unsafe { libc::kill(pid, 0) }, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::ESRCH)
+    );
+    assert_eq!(
+        methods(&lines(&fixture.dir.join("bin/frames.jsonl"))),
+        ["initialize", "initialized"]
+    );
+}
+
 const FAKE_CODEX: &str = r#"#!/usr/bin/python3 -B
 import json, os, signal, sys, time
 here = os.path.dirname(os.path.abspath(__file__))
@@ -1268,6 +1319,8 @@ for raw in sys.stdin:
     frame = json.loads(raw)
     with open(path("frames.jsonl"), "a") as log: log.write(json.dumps(frame) + "\n")
     if frame["method"] == "initialized":
+        if mode == "backpressure":
+            time.sleep(15); sys.exit(0)
         continue
     if frame["method"] == "thread/queue/delete" and mode == "close_on_delete":
         sys.exit(0)

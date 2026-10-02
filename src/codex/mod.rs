@@ -84,7 +84,13 @@ pub fn dismiss(peer: &Peer, message: &Message) -> Cleanup {
     };
     let mut attempted = false;
     let result = (|| -> Result<(bool, String), Failure> {
-        let queue_id = python_uuid(queued).ok_or(Failure::Class("ValueError"))?;
+        // Socket queue IDs are opaque protocol strings. CLI receipts have a UUID
+        // contract; normalize only those, and round-trip socket receipts unchanged.
+        let queue_id = if socket.is_some() {
+            queued.to_owned()
+        } else {
+            python_uuid(queued).ok_or(Failure::Class("ValueError"))?
+        };
         let mut rpc = match socket {
             Some(path) => {
                 let mut rpc = Rpc::connect_unix(path)?;
