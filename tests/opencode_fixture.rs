@@ -35,6 +35,7 @@ pub enum Reply {
     Raw(Vec<u8>),
     Close,
     Sleep(Duration),
+    Gated(std::sync::mpsc::Receiver<()>, Vec<u8>),
 }
 pub type Hook = Box<dyn Fn(&Request) -> Option<Reply> + Send>;
 
@@ -188,6 +189,12 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>) {
             return;
         }
         Reply::Raw(bytes) => bytes,
+        Reply::Gated(release, bytes) => {
+            release
+                .recv_timeout(Duration::from_secs(10))
+                .expect("release preflight");
+            bytes
+        }
         Reply::Empty(status) => {
             format!("HTTP/1.1 {status} X\r\nContent-Length: 0\r\n\r\n").into_bytes()
         }
