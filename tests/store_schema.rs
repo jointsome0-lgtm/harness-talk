@@ -192,3 +192,175 @@ fn migration_preserves_receipts_replies_sequence_and_retirement() {
             > reply.row.seq
     );
 }
+
+// These mirror the existing legacy compatibility fixtures. Malformed variants
+// below are synthetic; no historical client is claimed to have produced them.
+fn legacy_fixture(path: &std::path::Path, v: i64) {
+    let db = raw(path);
+    db.execute_batch(
+        "CREATE TABLE peers (name TEXT PRIMARY KEY, harness TEXT NOT NULL,
+        session_id TEXT NOT NULL, workspace TEXT NOT NULL, socket TEXT,
+        UNIQUE(harness, session_id));
+        CREATE TABLE messages (seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT UNIQUE NOT NULL, sender TEXT NOT NULL REFERENCES peers(name),
+        recipient TEXT NOT NULL REFERENCES peers(name), in_reply_to TEXT UNIQUE REFERENCES messages(id),
+        body TEXT NOT NULL, created_at REAL NOT NULL, ack_at REAL,
+        submission TEXT NOT NULL CHECK(submission IN ('not_submitted', 'submission_unknown', 'submitted')),
+        notification_started_at REAL, notification_finished_at REAL, notification_detail TEXT);
+        INSERT INTO peers VALUES ('fixture', 'claude', 'fixture-session', '/tmp/fixture-workspace', NULL);
+        INSERT INTO messages (id, sender, recipient, body, created_at, submission)
+        VALUES ('fixture-message', 'fixture', 'fixture', 'Preserve this', 1.0, 'submission_unknown');",
+    ).unwrap();
+    if v == 2 {
+        db.execute_batch("ALTER TABLE peers ADD COLUMN url TEXT")
+            .unwrap();
+    }
+    db.execute_batch(&format!("PRAGMA user_version={v}"))
+        .unwrap();
+}
+
+fn backup_dir(path: &std::path::Path) -> std::path::PathBuf {
+    let mut directory = path.as_os_str().to_os_string();
+    directory.push(".backups");
+    directory.into()
+}
+
+fn backup_files(path: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let directory = backup_dir(path);
+    if !directory.exists() {
+        return Vec::new();
+    }
+    let mut files: Vec<_> = fs::read_dir(directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|v| v == "sqlite3"))
+        .collect();
+    files.sort();
+    files
+}
+
+#[test]
+fn legacy_missing_socket_stops_repeated_opens_before_new_backups() {
+    for v in [1, 2] {
+        let temp = Temp::new();
+        legacy_fixture(&temp.db(), v);
+        raw(&temp.db())
+            .execute_batch("ALTER TABLE peers DROP COLUMN socket")
+            .unwrap();
+        let before = fs::read(temp.db()).unwrap();
+        let errors: Vec<_> = (0..2)
+            .map(|_| Store::open(&temp.db(), false).unwrap_err().to_string())
+            .collect();
+        assert!(
+            backup_files(&temp.db()).is_empty(),
+            "repeated rejected opens created backups for schema {v}"
+        );
+        assert_eq!(
+            errors,
+            ["invalid_database_schema", "invalid_database_schema"]
+        );
+        assert_eq!(before, fs::read(temp.db()).unwrap());
+        assert_eq!(v, version(&raw(&temp.db())));
+    }
+}
+
+#[test]
+fn malformed_legacy_shapes_preserve_existing_completed_backup() {
+    for modification in [
+        "ALTER TABLE messages DROP COLUMN body",
+        "DROP TABLE messages",
+        "CREATE TABLE waits (token TEXT PRIMARY KEY)",
+        "CREATE TABLE retired_peers (name TEXT PRIMARY KEY)",
+        "DROP TABLE peers; CREATE VIEW peers AS SELECT 'fixture' AS name, 'claude' AS harness,
+         'fixture-session' AS session_id, '/tmp/fixture-workspace' AS workspace, NULL AS socket",
+    ] {
+        let temp = Temp::new();
+        legacy_fixture(&temp.db(), 1);
+        let directory = backup_dir(&temp.db());
+        fs::create_dir(&directory).unwrap();
+        let completed = directory.join("schema-1-before-3-preserved.sqlite3");
+        fs::copy(temp.db(), &completed).unwrap();
+        let backup_before = fs::read(&completed).unwrap();
+        raw(&temp.db())
+            .execute_batch(&format!("PRAGMA foreign_keys=OFF; {modification}"))
+            .unwrap();
+        let before = fs::read(temp.db()).unwrap();
+        for _ in 0..2 {
+            assert_eq!(
+                "invalid_database_schema",
+                code(Store::open(&temp.db(), false)),
+                "{modification}"
+            );
+        }
+        assert_eq!(vec![completed.clone()], backup_files(&temp.db()));
+        assert_eq!(backup_before, fs::read(&completed).unwrap());
+        assert_eq!(before, fs::read(temp.db()).unwrap());
+        assert_eq!(1, version(&raw(&temp.db())));
+    }
+}
+
+#[test]
+fn valid_legacy_column_variants_migrate_once_with_verified_backup() {
+    for v in [1, 2] {
+        for optional in [false, true] {
+            let temp = Temp::new();
+            legacy_fixture(&temp.db(), v);
+            if optional {
+                raw(&temp.db()).execute_batch(
+                    "ALTER TABLE messages ADD COLUMN wait_returned_at REAL;
+                     ALTER TABLE messages ADD COLUMN extra TEXT;
+                     ALTER TABLE peers ADD COLUMN extra TEXT;
+                     CREATE TABLE waits (token TEXT PRIMARY KEY, message_id TEXT NOT NULL REFERENCES messages(id), actor TEXT NOT NULL, until REAL NOT NULL);
+                     CREATE TABLE retired_peers (name TEXT PRIMARY KEY REFERENCES peers(name), retired_at REAL NOT NULL);").unwrap();
+            }
+            raw(&temp.db())
+                .execute_batch("ALTER TABLE peers RENAME COLUMN socket TO SOCKET")
+                .unwrap();
+            let original_peers = columns(&raw(&temp.db()), "peers");
+            let original_messages = columns(&raw(&temp.db()), "messages");
+            Store::open(&temp.db(), false).unwrap();
+            Store::open(&temp.db(), false).unwrap();
+            let backups = backup_files(&temp.db());
+            assert_eq!(1, backups.len());
+            let backup = raw(&backups[0]);
+            assert_eq!(v, version(&backup));
+            assert_eq!(
+                "ok",
+                backup
+                    .query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))
+                    .unwrap()
+            );
+            assert_eq!(original_peers, columns(&backup, "peers"));
+            assert_eq!(original_messages, columns(&backup, "messages"));
+            assert_eq!(
+                "Preserve this",
+                backup
+                    .query_row(
+                        "SELECT body FROM messages WHERE id='fixture-message'",
+                        [],
+                        |r| r.get::<_, String>(0)
+                    )
+                    .unwrap()
+            );
+            let migrated = raw(&temp.db());
+            assert_eq!(3, version(&migrated));
+            assert_eq!(
+                "Preserve this",
+                migrated
+                    .query_row(
+                        "SELECT body FROM messages WHERE id='fixture-message'",
+                        [],
+                        |r| r.get::<_, String>(0)
+                    )
+                    .unwrap()
+            );
+            assert_eq!(
+                "native",
+                migrated
+                    .query_row("SELECT delivery FROM peers WHERE name='fixture'", [], |r| r
+                        .get::<_, String>(0))
+                    .unwrap()
+            );
+        }
+    }
+}
