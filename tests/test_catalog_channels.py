@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import pwd
+import queue
 import shlex
 import shutil
 import socket
@@ -11,6 +12,7 @@ import sys
 import uuid
 
 from compat_support import HtalkCase, wait_for
+from test_mcp import McpClient
 
 
 class TailscaleCatalog(HtalkCase):
@@ -85,6 +87,9 @@ class TailscaleCatalog(HtalkCase):
         value.update(extra or {})
         return value
 
+    def environment(self, extra=None):
+        return super().environment(self.env(extra))
+
     def discover(self, trust):
         return self.htalk(
             'catalog', 'discover', '--trust', trust, '--via', 'tailscale',
@@ -97,7 +102,7 @@ class TailscaleCatalog(HtalkCase):
             return []
         return [json.loads(line) for line in self.calls_file.read_text().splitlines()]
 
-    def test_mismatched_pinned_host_key_blocks_catalogue_before_write(self):
+    def ssh_fixture(self):
         sshd = os.environ.get('HTALK_TEST_SSHD') or shutil.which('sshd')
         keygen = shutil.which('ssh-keygen')
         if not sshd or not keygen:
@@ -152,7 +157,9 @@ class TailscaleCatalog(HtalkCase):
         # This owned fake Tailscale CLI redirects only the fixture peer/port to
         # loopback. OpenSSH still performs a real host-key check and handshake.
         self.ts_binary.write_text('''#!%s -B
-import os, select, socket, sys
+import json, os, select, socket, sys
+with open(os.environ['HTALK_FAKE_TAILSCALE_CALLS'], 'a') as out:
+    out.write(json.dumps(sys.argv[1:]) + '\\n')
 if sys.argv[2:] == ['status', '--json']:
     sys.stdout.write(open(os.environ['HTALK_FAKE_TAILSCALE_STATUS']).read())
 elif sys.argv[2:] == ['nc', '100.64.0.2', '%s']:
@@ -183,6 +190,26 @@ else:
         trust.write_text(json.dumps({'schema_version': 1, 'devices': devices}))
         alias = 'htalk-' + directory['device_id']
         self.known_hosts.write_text(alias + ' ' + Path(str(host) + '.pub').read_text())
+        return config, trust, directory, wrong, log
+
+    def connected(self, trust, selector):
+        # All discovery, route checks and SSH calls use this fixture's files and
+        # loopback listener; no installed Tailscale daemon or remote host is used.
+        try:
+            return McpClient(self, argv=self.argv([
+                'catalog', 'connect', selector, '--trust', trust, '--via', 'tailscale',
+                '--tailscale-binary', self.ts_binary, '--tailscale-socket', self.ts_socket,
+                '--seconds', '1',
+            ], False))
+        except queue.Empty:
+            process = self.processes[-1]
+            if process.poll() is not None:
+                self.fail('catalog connect failed before MCP initialization: ' + process.stderr.read())
+            raise
+
+    def test_mismatched_pinned_host_key_blocks_catalogue_before_write(self):
+        _, trust, directory, wrong, log = self.ssh_fixture()
+        alias = 'htalk-' + directory['device_id']
         before = self.db.read_bytes()
         good = self.discover(trust)
         log.seek(0)
@@ -199,6 +226,69 @@ else:
         self.assertEqual(2, blocked.code)
         self.assertIn('catalog_profile_unavailable', blocked.stderr)
         self.assertEqual('', blocked.stdout)
+        self.assertEqual(before, self.db.read_bytes())
+        self.assertEqual(0, self.sql('SELECT count(*) FROM messages')[0][0])
+
+    def test_changed_channel_binding_blocks_open_client_before_connector(self):
+        _, trust, _, _, _ = self.ssh_fixture()
+        client = self.connected(trust, 'Reviewer')
+        healthy = {'ID': 'nfixture', 'Online': True, 'TailscaleIPs': ['100.64.0.2']}
+        self.assertFalse(client.call('inbox').get('isError', False))
+        for label, peer, local_id in (
+            ('selected peer changed', {**healthy, 'ID': 'nreplacement'}, 'nlocal'),
+            ('selected peer address changed', {**healthy, 'TailscaleIPs': ['100.64.0.3']}, 'nlocal'),
+            ('local daemon identity changed', healthy, 'nreplacement'),
+            ('selected peer went offline', {**healthy, 'Online': False}, 'nlocal'),
+        ):
+            with self.subTest(label=label):
+                self.status({'nodekey:fixture': peer})
+                status = json.loads(self.status_file.read_text())
+                status['Self']['ID'] = local_id
+                self.status_file.write_text(json.dumps(status))
+                connectors_before = [call for call in self.ts_calls() if 'nc' in call]
+                blocked = client.call('send', 'bob', '--id', str(uuid.uuid4()), '--message', label)
+                self.assertTrue(blocked['isError'])
+                self.assertIn('selected channel binding', json.dumps(blocked))
+                self.assertIn('no mailbox command was sent', json.dumps(blocked))
+                self.assertEqual(0, self.sql('SELECT count(*) FROM messages')[0][0])
+                self.assertEqual(connectors_before, [call for call in self.ts_calls() if 'nc' in call])
+                self.status({'nodekey:fixture': healthy})
+                self.assertFalse(client.call('inbox').get('isError', False))
+        client.close()
+
+    def test_uuid_selector_selects_identity_and_shadow_name_uses_own_uuid(self):
+        config, trust, directory, _, _ = self.ssh_fixture()
+        profile_id = directory['profiles'][0]['profile_id']
+        self.htalk('peer', 'add', 'carol', '--harness', 'generic', '--delivery', 'pull')
+        shadow = self.htalk('--as', 'alice', 'catalog', 'publish', '--config', config,
+                            'carol', '--name', profile_id, '--role', 'Review')
+        for selector, expected_peer in ((profile_id, 'bob'), (shadow['profile_id'], 'carol')):
+            client = self.connected(trust, selector)
+            result = client.call('peer', 'list')
+            self.assertFalse(result.get('isError', False), result)
+            self.assertEqual([expected_peer], [p['name'] for p in result['structuredContent']['result']['peers']])
+            client.close()
+        self.assertEqual(0, self.sql('SELECT count(*) FROM messages')[0][0])
+
+    def test_missing_uuid_selector_never_falls_back_to_display_name(self):
+        config, trust, _, _, _ = self.ssh_fixture()
+        missing = str(uuid.uuid4())
+        self.htalk('--as', 'alice', 'catalog', 'publish', '--config', config,
+                   'bob', '--name', missing, '--role', 'Review')
+        before = self.db.read_bytes()
+        initialize = json.dumps({'jsonrpc': '2.0', 'id': 1, 'method': 'initialize', 'params': {
+            'protocolVersion': '2025-06-18', 'capabilities': {},
+            'clientInfo': {'name': 'fixture', 'version': '1'},
+        }}) + '\n' + json.dumps({'jsonrpc': '2.0', 'method': 'notifications/initialized'}) + '\n'
+        result = subprocess.run(self.argv([
+            'catalog', 'connect', missing, '--trust', trust, '--via', 'tailscale',
+            '--tailscale-binary', self.ts_binary, '--tailscale-socket', self.ts_socket,
+            '--seconds', '1',
+        ], False), input=initialize, capture_output=True, text=True, timeout=15,
+            env=self.environment(self.env()), cwd=self.tmp)
+        self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+        self.assertIn('catalog_profile_unavailable', result.stderr)
+        self.assertEqual('', result.stdout)
         self.assertEqual(before, self.db.read_bytes())
         self.assertEqual(0, self.sql('SELECT count(*) FROM messages')[0][0])
 

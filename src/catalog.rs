@@ -806,6 +806,43 @@ struct Found {
     route: Route,
 }
 
+// Canonical UUID input names an identity and never falls back to a description.
+fn select_profile(
+    found: Vec<Found>,
+    selector: &str,
+) -> Result<(TrustedDevice, Route, ProfileBinding), Error> {
+    let identity_only = uuid(selector).is_ok();
+    let mut selected = found.into_iter().flat_map(|f| {
+        let profiles: Vec<_> = f
+            .directory
+            .profiles
+            .iter()
+            .filter(|p| {
+                (if identity_only {
+                    p.profile_id == selector
+                } else {
+                    p.display_name == selector
+                }) && p.binding_state == "current"
+            })
+            .map(|p| ProfileBinding {
+                profile_id: p.profile_id.clone(),
+                binding_id: p.binding_id.clone(),
+                peer_name: p.peer_name.clone(),
+            })
+            .collect();
+        profiles
+            .into_iter()
+            .map(move |p| (f.device.clone(), f.route.clone(), p))
+    });
+    let (device, route, profile) = selected
+        .next()
+        .ok_or_else(|| code("catalog_profile_unavailable"))?;
+    if selected.next().is_some() {
+        return Err(code("catalog_ambiguous_profile"));
+    }
+    Ok((device, route, profile))
+}
+
 fn discover(options: &ArgMatches) -> Result<(Value, Vec<Found>), Error> {
     let t = trust(Path::new(required(options, "trust")))?;
     if required(options, "via") == "tailscale" {
@@ -1188,7 +1225,7 @@ pub(crate) fn command() -> Cli {
             .arg(Arg::new("seconds").long("seconds").default_value("0").value_parser(clap::value_parser!(u64).range(0..=86400))))
         .subcommand(browse_args(Cli::new("discover").about("Find advertisements; fetch profiles only from known, pinned devices.")))
         .subcommand(browse_args(Cli::new("connect").about("Find this published profile and expose its checked MCP route on stdio.")
-            .arg(Arg::new("profile").required(true).help("Exact display name, or profile UUID when names are ambiguous."))))
+            .arg(Arg::new("profile").required(true).help("Canonical UUID selects only that profile identity, with no name fallback. Other inputs match display names exactly. For UUID-shaped or duplicate names, use the profile's own UUID."))))
 }
 
 fn emit(v: &Value) -> Result<(), Error> {
@@ -1256,31 +1293,7 @@ pub(crate) fn run(
             let selector = required(m, "profile");
             text(selector, 128)?;
             let (_, found) = discover(m)?;
-            let mut selected = found.into_iter().flat_map(|f| {
-                let profiles: Vec<_> = f
-                    .directory
-                    .profiles
-                    .iter()
-                    .filter(|p| {
-                        (p.profile_id == selector || p.display_name == selector)
-                            && p.binding_state == "current"
-                    })
-                    .map(|p| ProfileBinding {
-                        profile_id: p.profile_id.clone(),
-                        binding_id: p.binding_id.clone(),
-                        peer_name: p.peer_name.clone(),
-                    })
-                    .collect();
-                profiles
-                    .into_iter()
-                    .map(move |p| (f.device.clone(), f.route.clone(), p))
-            });
-            let (device, route, profile) = selected
-                .next()
-                .ok_or_else(|| code("catalog_profile_unavailable"))?;
-            if selected.next().is_some() {
-                return Err(code("catalog_ambiguous_profile"));
-            }
+            let (device, route, profile) = select_profile(found, selector)?;
             let expected = Binding {
                 schema_version: 1,
                 device_id: device.device_id.clone(),
@@ -1295,5 +1308,120 @@ pub(crate) fn run(
                 .map_err(|_| code("catalog_mcp_failed"))
         }
         _ => Err(code("invalid_arguments")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const ID: &str = "4b1f7f0e-2f4c-4a5e-9d1b-6f0c2d9e8a71";
+    const OTHER: &str = "0c4a1c0e-3a55-4c1f-a8f5-7d3b1f7e2a10";
+
+    fn found(id: &str, name: &str, state: &str) -> Found {
+        let device_id = uuid::Uuid::new_v4().to_string();
+        Found {
+            directory: serde_json::from_value(json!({
+                "schema_version":1,"device_id":device_id,"device_name":"fixture",
+                "mailbox_id":ID,"generation":ID,"sender":"alice",
+                "profiles":[{"profile_id":id,"display_name":name,"role":"review",
+                    "binding_id":OTHER,"peer_name":"bob","harness":"generic",
+                    "delivery":"pull","binding_state":state,"runtime_status":"unknown"}]
+            }))
+            .unwrap(),
+            device: serde_json::from_value(json!({
+                "device_id":device_id,"mailbox_id":ID,"generation":ID,"sender":"alice",
+                "ssh_user":"fixture","identity_file":"/unused","known_hosts_file":"/unused"
+            }))
+            .unwrap(),
+            // Selector tests never inspect or open the route.
+            route: Route::Interface {
+                ip: "127.0.0.1".parse().unwrap(),
+                interface: "unused".into(),
+                pan: None,
+            },
+        }
+    }
+
+    fn error(found: Vec<Found>, selector: &str) -> String {
+        match select_profile(found, selector) {
+            Ok(_) => panic!("selector unexpectedly resolved"),
+            Err(error) => error.to_string(),
+        }
+    }
+
+    #[test]
+    fn canonical_uuid_selects_identity_despite_shadow_name() {
+        let (_, _, selected) = select_profile(
+            vec![
+                found(ID, "Reviewer", "current"),
+                found(OTHER, ID, "current"),
+            ],
+            ID,
+        )
+        .unwrap();
+        assert_eq!(ID, selected.profile_id);
+        let (_, _, shadow) = select_profile(vec![found(OTHER, ID, "current")], OTHER).unwrap();
+        assert_eq!(OTHER, shadow.profile_id);
+    }
+
+    #[test]
+    fn missing_and_retired_uuid_never_fall_back_to_shadow_name() {
+        assert_eq!(
+            "catalog_profile_unavailable",
+            error(vec![found(OTHER, ID, "current")], ID)
+        );
+        assert_eq!(
+            "catalog_profile_unavailable",
+            error(
+                vec![
+                    found(ID, "Reviewer", "retired"),
+                    found(OTHER, ID, "current")
+                ],
+                ID,
+            )
+        );
+    }
+
+    #[test]
+    fn duplicate_current_names_and_identities_across_devices_fail_closed() {
+        assert_eq!(
+            "catalog_ambiguous_profile",
+            error(
+                vec![
+                    found(ID, "Reviewer", "current"),
+                    found(OTHER, "Reviewer", "current")
+                ],
+                "Reviewer",
+            )
+        );
+        assert_eq!(
+            "catalog_ambiguous_profile",
+            error(
+                vec![
+                    found(ID, "Reviewer", "current"),
+                    found(ID, "Other", "current")
+                ],
+                ID,
+            )
+        );
+    }
+
+    #[test]
+    fn names_match_exactly_without_uuid_alias_normalization() {
+        assert_eq!(
+            "catalog_profile_unavailable",
+            error(vec![found(ID, "Reviewer", "current")], "reviewer")
+        );
+        assert_eq!(
+            "catalog_profile_unavailable",
+            error(vec![found(ID, "Reviewer", "current")], &ID.to_uppercase())
+        );
+        let (_, _, selected) = select_profile(
+            vec![found(OTHER, &ID.to_uppercase(), "current")],
+            &ID.to_uppercase(),
+        )
+        .unwrap();
+        assert_eq!(OTHER, selected.profile_id);
     }
 }

@@ -117,9 +117,13 @@ class CatalogCase(HtalkCase):
         current = self.remote(fresh)
         self.result(current, 'send', 'bob', '--id', str(uuid.uuid4()), '--message', 'current binding')
         self.assertEqual(1, self.sql('SELECT count(*) FROM messages')[0][0])
-        current.close()
         self.htalk('peer', 'retire', 'bob')
         self.assertEqual('retired', self.export()['profiles'][0]['binding_state'])
+        blocked = current.call('send', 'bob', '--id', str(uuid.uuid4()), '--message', 'retired binding')
+        self.assertTrue(blocked['isError'])
+        self.assertIn('before sending', json.dumps(blocked))
+        self.assertEqual(1, self.sql('SELECT count(*) FROM messages')[0][0])
+        current.close()
 
     def test_publish_cannot_change_fixed_sender_or_mailbox(self):
         before = self.catalog_config.read_bytes()

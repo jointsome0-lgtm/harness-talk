@@ -200,10 +200,14 @@ is a fresh snapshot with no saved discovery cache.
 
 `connect` is an MCP stdio server for a harness, so its output is protocol data.
 Configure it using the same command and arguments as any local MCP server.
-It finds a unique current profile by exact display name or profile UUID.
-Duplicate names require the UUID from discovery; names never silently select
-the first match. The configured sender remains fixed, and the selected profile
-is the recipient. `peer list` shows that selected peer.
+It finds a unique current profile by exact display name or canonical profile UUID.
+A canonical UUID selects only that identity, even if a different profile has
+that UUID as its display name. A missing or retired identity does not fall back
+to a name. Other inputs match display names exactly. Use a profile's own UUID
+from discovery to select a UUID-shaped display name or resolve duplicate names.
+Duplicate matching identities or names return `catalog_ambiguous_profile`;
+neither selects the first match. The configured sender remains fixed, and the
+selected profile is the recipient. `peer list` shows that selected peer.
 
 Catalogue `show`, `inbox` and `sent` return full message IDs, reply correlation
 and saved state; `show` returns full bodies. These scoped reads omit the ordinary
