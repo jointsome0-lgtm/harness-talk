@@ -123,6 +123,21 @@ CLI without a shell and returns its output. When narrowing Hermes toolsets,
 include `htalk`, for example `hermes --cli --toolsets terminal,htalk`. A tool
 timeout does not prove a write failed; inspect `sent` before retrying.
 
+The Hermes tool permits `inbox`, `show`, `ack`, `send`, `reply`, `sent`, `wait`,
+`peer list`, `peer check`, and help/version options. Setup, discovery, migration,
+watch, MCP server and receiver commands require the operator's CLI. The child
+has no access to Hermes stdin. Send/reply retain CLI body options, including
+`--message-file`, which reads a local text file using the Hermes host's filesystem
+and permissions.
+
+Hermes, OpenClaw and Agent Zero direct tools recommend generating and saving a
+new UUID before `send`, then passing `--id YOUR_NEW_UUID`. The option remains
+optional in these tools; htalk generates an ID when it is omitted. Inspect the
+saved receipt with `show`, or recover outgoing IDs with `sent`, before considering
+an explicit retry. Keep the original UUID, recipient and body unchanged, and
+never resend uncertain work under a new ID. These tools do not retry automatically.
+The MCP tool has its own stricter command, file-input and required-ID contract.
+
 For sessions using only a few tools, Hermes's `tools.tool_search.enabled: "off"`
 setting exposes their schemas directly. This avoids separate search/describe
 calls before htalk can be used. Local Hermes tools accept one call at a time;
