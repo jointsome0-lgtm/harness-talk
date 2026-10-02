@@ -200,21 +200,17 @@ impl Binding {
                             .map_err(|_| code("seq_cursor_must_be_a_positive_integer"))
                     })
                     .transpose()?;
-                let page = store::catalog_page(
-                    db,
-                    &self.sender,
-                    &names,
-                    sent,
-                    limit,
-                    cursor,
-                    sent && options.get_flag("bodies"),
-                )?;
+                let bodies = sent && options.get_flag("bodies");
+                let page =
+                    store::catalog_page(db, &self.sender, &names, sent, limit, cursor, bodies)?;
                 let next = page.messages.last().filter(|_| page.omitted > 0).map(|m| {
                     format!(
-                        "htalk {} --{} {}",
+                        "htalk {} --limit {} --{} {}{}",
                         name,
+                        limit,
                         if sent { "before-seq" } else { "after-seq" },
-                        m["seq"]
+                        m["seq"],
+                        if bodies { " --bodies" } else { "" }
                     )
                 });
                 let mut value = serde_json::to_value(page)?;
@@ -471,6 +467,14 @@ fn lock(path: &Path) -> Result<File, Error> {
     if m.uid() != unsafe { libc::getuid() } || m.mode() & 0o022 != 0 {
         return Err(code("catalog_directory_not_owned"));
     }
+    // Keep normal config writers coordinated with older clients. A .lock config
+    // must use a separate inode so acquiring its lock never creates the config.
+    let mut lock_path = path.with_extension("lock");
+    if lock_path == path {
+        let mut name = path.as_os_str().to_os_string();
+        name.push(".lock");
+        lock_path = name.into();
+    }
     let f = OpenOptions::new()
         .read(true)
         .write(true)
@@ -478,7 +482,7 @@ fn lock(path: &Path) -> Result<File, Error> {
         .truncate(false)
         .mode(0o600)
         .custom_flags(libc::O_NOFOLLOW)
-        .open(path.with_extension("lock"))?;
+        .open(lock_path)?;
     let m = f.metadata()?;
     if !m.is_file() || m.uid() != unsafe { libc::getuid() } || m.mode() & 0o077 != 0 {
         return Err(code("catalog_invalid_lock"));

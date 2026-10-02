@@ -21,14 +21,25 @@ separate temporary endpoint.
 
 The CLI suite covers registration, request/reply/ACK states, pagination, recovery, migration and native/pull exchanges. Rust tests cover storage races and adapter-specific identity, discovery and delivery failures. Keep a behavior in one layer when another test already exercises the same failure; retain separate tests for distinct races and transport boundaries.
 
-Two MCP cases exercise the same compiled executable through stdio: message
-exchange with pinned identity and saved-error reporting, and cancellation or
-client loss without duplicate writes or leftover children. They also check that
-terminal Ctrl-C preserves the server connection. Run these on a host that permits
+MCP tests exercise the same compiled executable through stdio. They cover
+message exchange with pinned identity and saved-error reporting, legacy tool
+arguments through an unbound connector, reconnecting after remote failure
+without replaying a lost write, and cancellation or client loss without duplicate
+writes or leftover children. They also check that terminal Ctrl-C preserves the
+server connection. Run these on a host that permits
 async signal/IPC handling; restricted sandboxes can prevent that handling.
 The receiver cancellation checks require the same host access; a sandbox-only
 shutdown timeout must be compared with an ordinary host run before changing
 the product's signal handling.
+
+Managed Python receivers require Linux kernel 5.3 or newer, Python 3.11+ with
+`os.pidfd_open` and `signal.pidfd_send_signal`, and a mounted `/proc` readable
+for entries owned by the launcher's effective UID and ambiguous root-owned
+processes. They check this support
+before native launch and refuse to launch on unsupported hosts. Group cleanup
+covers members that remain in the managed session and process group and retain
+that UID. Descendants that leave the group or change UID are outside this
+guarantee. Isolated process fixtures do not verify native adapter cleanup.
 
 Check what each assertion protects for the caller before preserving it. Old Python behavior and a passing test do not establish a requirement. Compare JSON fields and values without requiring key order or spacing. Isolate invalid inputs unless error precedence itself affects recovery. Delivery outcomes must follow whether submission could have begun, not the exception class that happened to escape an older adapter.
 

@@ -298,10 +298,10 @@ impl Drop for Registration<'_> {
     fn drop(&mut self) {
         if let Some(token) = &self.token {
             // A leftover row only makes one later reply wait WAIT_GRACE.
-            let _ = self
-                .store
-                .connect()
-                .and_then(|db| Ok(db.execute("DELETE FROM waits WHERE token=?", [token])?));
+            let _ = self.store.connect().and_then(|db| {
+                db.busy_handler(None)?;
+                Ok(db.execute("DELETE FROM waits WHERE token=?", [token])?)
+            });
         }
     }
 }
@@ -521,7 +521,7 @@ impl Store {
         if sender == recipient {
             return Err(code("sender_and_recipient_must_differ"));
         }
-        let id = match id.filter(|v| !v.is_empty()) {
+        let id = match id {
             Some(v) => validate::uuid(v)?,
             None => uuid::Uuid::new_v4().to_string(),
         };
@@ -690,6 +690,9 @@ impl Store {
         if request.row.sender != actor || request.row.in_reply_to.is_some() {
             return Err(code("wait_requires_own_request"));
         }
+        if request.reply.is_some() {
+            return self.return_wait_answer(request, actor);
+        }
         // Register the poll so a reply saved meanwhile waits briefly for this
         // command to return it; the return itself is recorded on the answer.
         let deadline = Instant::now() + Duration::from_secs_f64(seconds);
@@ -714,12 +717,8 @@ impl Store {
                 return Err(Error::Interrupted);
             }
             let mut result = self.get(id, Some(actor))?;
-            if let Some(reply) = &result.reply {
-                if os::interrupted() {
-                    return Err(Error::Interrupted);
-                }
-                self.record_wait_return(&reply.id, actor);
-                return self.get(id, Some(actor));
+            if result.reply.is_some() {
+                return self.return_wait_answer(result, actor);
             }
             let now = Instant::now();
             if now >= deadline {
@@ -730,13 +729,32 @@ impl Store {
         }
     }
 
-    /// The recipient's wait is returning this answer: a durable receipt that a
-    /// not-yet-sent notice is redundant. Not an acknowledgment.
-    fn record_wait_return(&self, answer_id: &str, actor: &str) {
-        // On failure the answer is still returned; at worst a redundant notice follows.
-        let _ = self.connect().and_then(|db| Ok(db.execute(
-            "UPDATE messages SET wait_returned_at=COALESCE(wait_returned_at, ?) WHERE id=? AND recipient=?",
-            params![os::now(), answer_id, actor])?));
+    fn return_wait_answer(&self, mut request: Message, actor: &str) -> Result<Message, Error> {
+        if os::interrupted() {
+            return Err(Error::Interrupted);
+        }
+        let answer = request.reply.as_mut().expect("wait found an answer");
+        // This receipt suppresses a redundant notice; it is not an ACK. A busy
+        // writer must not delay an answer we have already read.
+        if answer.wait_returned_at.is_none() {
+            let recorded = self.connect().and_then(|db| {
+                db.busy_handler(None)?;
+                db.execute(
+                    "UPDATE messages SET wait_returned_at=COALESCE(wait_returned_at, ?)
+                        WHERE id=? AND recipient=?",
+                    params![os::now(), answer.id, actor],
+                )?;
+                Ok(db.query_row(
+                    "SELECT wait_returned_at FROM messages WHERE id=? AND recipient=?",
+                    params![answer.id, actor],
+                    |row| row.get(0),
+                )?)
+            });
+            if let Ok(recorded) = recorded {
+                answer.wait_returned_at = recorded;
+            }
+        }
+        Ok(request)
     }
 
     /// One page of the actor's matching messages, ordered by seq. Counts and rows

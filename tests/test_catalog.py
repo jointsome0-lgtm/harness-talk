@@ -1,8 +1,10 @@
 """Owned catalogues, restricted mailbox calls and checked endpoint bindings."""
+import fcntl
 import hashlib
 import json
 import os
 from pathlib import Path
+import shlex
 import shutil
 import sys
 import uuid
@@ -72,6 +74,35 @@ class CatalogCase(HtalkCase):
         self.htalk('catalog', 'unpublish', '--config', str(self.catalog_config), self.bob['profile_id'], db=False)
         self.assertEqual(['carol'], [p['peer_name'] for p in self.export()['profiles']])
         self.assertEqual(4, len(self.htalk('peer', 'list')['peers']))
+
+    def test_config_lock_is_distinct_and_preserves_existing_writer_lock_names(self):
+        for filename in ('catalog.json', 'catalog.lock', 'catalog'):
+            with self.subTest(filename=filename):
+                parent = self.tmp / ('private-' + filename)
+                parent.mkdir(mode=0o700)
+                self.catalog_config = parent / filename
+                published = self.publish('bob')
+                lock_name = 'catalog.lock.lock' if filename == 'catalog.lock' else 'catalog.lock'
+                lock = parent / lock_name
+                self.assertEqual(0o700, parent.stat().st_mode & 0o777)
+                for path in (self.catalog_config, lock):
+                    self.assertEqual(0o600, path.stat().st_mode & 0o777)
+                self.assertNotEqual(self.catalog_config.stat().st_ino, lock.stat().st_ino)
+                self.assertEqual([published['profile_id']], [p['profile_id'] for p in self.export()['profiles']])
+                before = self.catalog_config.read_bytes()
+                with lock.open('r+') as holder:
+                    fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    self.error('--as', 'alice', 'catalog', 'publish', '--config', str(self.catalog_config),
+                               'carol', '--name', 'Reviewer', '--role', 'Check', error='catalog_writer_active')
+                    self.assertEqual(before, self.catalog_config.read_bytes())
+                    self.error('catalog', 'unpublish', '--config', str(self.catalog_config),
+                               published['profile_id'], db=False, error='catalog_writer_active')
+                    self.assertEqual(before, self.catalog_config.read_bytes())
+                second = self.publish('carol')
+                self.assertEqual({'bob', 'carol'}, {p['peer_name'] for p in self.export()['profiles']})
+                self.htalk('catalog', 'unpublish', '--config', str(self.catalog_config),
+                           second['profile_id'], db=False)
+                self.assertEqual(['bob'], [p['peer_name'] for p in self.export()['profiles']])
 
     def test_republish_and_retirement_invalidate_selected_binding(self):
         old = self.expected(self.bob['profile_id'])
@@ -241,6 +272,53 @@ finally:
         self.result(client, 'ack', reply['id'])
         self.assertEqual(2, self.sql('SELECT count(*) FROM messages')[0][0])
         client.close()
+
+    def test_issued_pages_preserve_limit_body_mode_order_and_profile_scope(self):
+        self.publish('carol')
+        messages = {'inbox': [], 'sent': []}
+        for n in range(3):
+            for peer in ('bob', 'hidden', 'carol'):
+                incoming = self.htalk('--as', peer, 'send', 'alice', '--message', f'{peer} inbox {n}\nfull body')
+                outgoing = self.htalk('--as', 'alice', 'send', peer, '--message', f'{peer} sent {n}\nfull body')
+                messages['inbox'].append(incoming)
+                messages['sent'].append(outgoing)
+        before = self.sql('SELECT id,ack_at,wait_returned_at FROM messages ORDER BY seq')
+        for selected in (False, True):
+            client = self.remote(self.expected(self.bob['profile_id'])) if selected else self.local()
+            for command, bodies in (('inbox', False), ('sent', False), ('sent', True)):
+                with self.subTest(selected=selected, command=command, bodies=bodies):
+                    scope = {'bob'} if selected else {'bob', 'carol'}
+                    other = 'recipient' if command == 'sent' else 'sender'
+                    expected = sorted((m for m in messages[command] if m[other] in scope),
+                                      key=lambda m: m['seq'], reverse=command == 'sent')
+                    args = [command, '--limit', '1'] + (['--bodies'] if bodies else [])
+                    for index, message in enumerate(expected):
+                        page = self.result(client, *args)
+                        self.assertEqual((len(expected), len(expected) - index - 1),
+                                         (page['total'], page['omitted']))
+                        self.assertEqual([message['id']], [m['id'] for m in page['messages']])
+                        row = page['messages'][0]
+                        if command == 'inbox' or bodies:
+                            self.assertEqual(message['body'], row['body'])
+                            self.assertNotIn('body_preview', row)
+                        else:
+                            self.assertNotIn('body', row)
+                            self.assertEqual(message['body'].splitlines()[0], row['body_preview'])
+                        if page['omitted']:
+                            continuation = page['recovery']['next_page']
+                            self.assertNotIn(str(self.tmp), continuation)
+                            self.assertNotIn('--db', continuation)
+                            self.assertNotIn('--as', continuation)
+                            words = shlex.split(continuation)
+                            self.assertEqual('htalk', words[0])
+                            args = words[1:]
+                        else:
+                            self.assertNotIn('recovery', page)
+            self.assertTrue(client.call('send', 'hidden', '--id', str(uuid.uuid4()), '--message', 'blocked')['isError'])
+            if selected:
+                self.assertTrue(client.call('send', 'carol', '--id', str(uuid.uuid4()), '--message', 'blocked')['isError'])
+            client.close()
+        self.assertEqual(before, self.sql('SELECT id,ack_at,wait_returned_at FROM messages ORDER BY seq'))
 
     def test_mismatched_metadata_refuses_write_before_call(self):
         for key in ('device_id', 'mailbox_id', 'generation', 'sender', 'profile_id', 'binding_id', 'peer_name'):

@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import select
 import signal
 import shutil
 import sys
@@ -13,6 +14,8 @@ import uuid
 
 
 STATE_FILE = "state.json"
+SHUTDOWN_GRACE_SECONDS = 5
+SHUTDOWN_KILL_SECONDS = 1
 
 
 def emit(event, **fields):
@@ -34,18 +37,138 @@ def save(path, state):
     emit("state", **state)
 
 
+def _process_identity(pid):
+    """Linux process identity, including the session created by our launcher."""
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_bytes().rsplit(b")", 1)[1].split()
+        return (int(fields[2]), int(fields[3]), int(fields[19]), fields[0].decode("ascii"), int(fields[1]))
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+
+
+def _group_members(pid):
+    # Managed groups retain our effective UID. Setuid descendants and processes
+    # that leave this session/group are outside this shutdown contract.
+    members = {}
+    for path in Path("/proc").iterdir():
+        if path.name.isdecimal():
+            try:
+                # Non-dumpable processes get root-owned proc entries without a
+                # credential change. Root ownership cannot prove an unrelated UID.
+                if path.stat().st_uid not in (os.geteuid(), 0):
+                    continue
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            identity = _process_identity(int(path.name))
+            if identity and identity[:2] == (pid, pid) and identity[3] not in ("Z", "X"):
+                members[int(path.name)] = identity
+    return members
+
+
+async def _stop_group(process):
+    # Never send a delayed signal to a numeric PGID. Pin exact processes instead.
+    # New members may be enrolled only while a known, live member proves ownership.
+    handles = {}
+    terminated, killed = set(), set()
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + SHUTDOWN_GRACE_SECONDS
+    killing = False
+    try:
+        leader = _process_identity(process.pid)
+        expected = getattr(process, "_htalk_group_identity", None)
+        if leader and leader[:2] == (process.pid, process.pid) and leader[4] == os.getpid():
+            if expected is None and process.returncode is None:
+                expected = leader
+            if expected and leader[:3] == expected[:3]:
+                try:
+                    fd = os.pidfd_open(process.pid)
+                except ProcessLookupError:
+                    pass
+                else:
+                    handles[process.pid] = (leader, fd)
+                    current = _process_identity(process.pid)
+                    if not current or current[:3] != leader[:3]:
+                        del handles[process.pid]
+                        os.close(fd)
+        while True:
+            members = _group_members(process.pid)
+            if not members:
+                if not any(not select.select([fd], [], [], 0)[0] for _, fd in handles.values()):
+                    break
+                if loop.time() >= deadline:
+                    raise RuntimeError("Pinned managed process remains alive outside visible group; inspect children")
+                await asyncio.sleep(0.02)
+                continue
+            anchors = {pid: record for pid, record in handles.items()
+                       if pid in members and record[0][:3] == members[pid][:3]
+                       and not select.select([record[1]], [], [], 0)[0]}
+            if not anchors:
+                # A snapshot can race an exit. Confirm before refusing ownership.
+                if not _group_members(process.pid):
+                    await asyncio.sleep(0)
+                    continue
+                raise RuntimeError("Cannot prove managed process-group ownership; inspect children")
+            pending = {}
+            try:
+                for pid, identity in members.items():
+                    if pid not in handles:
+                        try:
+                            fd = os.pidfd_open(pid)
+                        except ProcessLookupError:
+                            continue
+                        pending[pid] = (identity, fd)
+                        current = _process_identity(pid)
+                        if not current or current[:3] != identity[:3]:
+                            del pending[pid]
+                            os.close(fd)
+                if not any(not select.select([fd], [], [], 0)[0]
+                           and (current := _process_identity(pid))
+                           and current[:3] == identity[:3]
+                           for pid, (identity, fd) in anchors.items()):
+                    continue
+                handles.update(pending)
+                pending = {}
+            finally:
+                for _, fd in pending.values():
+                    os.close(fd)
+            if loop.time() >= deadline:
+                if killing:
+                    raise TimeoutError("Managed process group did not stop after SIGKILL")
+                killing = True
+                deadline = loop.time() + SHUTDOWN_KILL_SECONDS
+            sent = killed if killing else terminated
+            for pid, (_, fd) in handles.items():
+                if pid in sent:
+                    continue
+                try:
+                    signal.pidfd_send_signal(fd, signal.SIGKILL if killing else signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                sent.add(pid)
+            await asyncio.sleep(0.02)
+        if any(not select.select([fd], [], [], 0)[0] for _, fd in handles.values()):
+            raise RuntimeError("Pinned managed process did not exit; inspect children")
+        await asyncio.wait_for(process.wait(), SHUTDOWN_KILL_SECONDS)
+    finally:
+        for _, fd in handles.values():
+            os.close(fd)
+
+
 async def dispose(process):
     if process is None:
         return
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    try:
-        await asyncio.wait_for(process.wait(), 5)
-    except asyncio.TimeoutError:
-        os.killpg(process.pid, signal.SIGKILL)
-        await process.wait()
+    shutdown = asyncio.create_task(_stop_group(process))
+    cancelled = False
+    while True:
+        try:
+            await asyncio.shield(shutdown)
+            break
+        except asyncio.CancelledError:
+            if shutdown.cancelled():
+                raise
+            cancelled = True
+    if cancelled:
+        raise asyncio.CancelledError
     emit("child_stopped", pid=process.pid, exit_code=process.returncode)
 
 
@@ -110,6 +233,14 @@ async def worker(args, state, adapter):
              pending=state["pending"])
         return 3
 
+    # Fail before native launch if this host cannot provide stable process handles
+    # or inspect this user's processes. Do not fall back to numeric group signals.
+    fd = os.pidfd_open(os.getpid())
+    try:
+        signal.pidfd_send_signal(fd, 0)
+        _group_members(0)
+    finally:
+        os.close(fd)
     adapter.prepare(args, state)
     creating = state["phase"] == "new"
     state["phase"] = "starting"
@@ -123,6 +254,7 @@ async def worker(args, state, adapter):
         watch = await asyncio.create_subprocess_exec(
             binding["htalk"], "--db", binding["db"], "--as", binding["peer"], "watch",
             stdout=asyncio.subprocess.PIPE, stderr=sys.stderr, start_new_session=True)
+        watch._htalk_group_identity = _process_identity(watch.pid)
         emit("child_started", kind="watch", pid=watch.pid)
         turns = 0
         while True:
@@ -174,13 +306,19 @@ async def worker(args, state, adapter):
             if args.max_turns and turns >= args.max_turns:
                 return 0
     finally:
-        await dispose(watch)
         try:
-            await session.close()
+            await dispose(watch)
         except Exception:
             state["phase"] = "needs_inspection"
             save(state_file, state)
             raise
+        finally:
+            try:
+                await session.close()
+            except Exception:
+                state["phase"] = "needs_inspection"
+                save(state_file, state)
+                raise
 
 
 def read_state(directory):

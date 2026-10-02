@@ -223,7 +223,14 @@ Acknowledgment after the final check can still race with delivery. The inspected
 
 ## Discovery
 
-`opencode.discover(urls, workspace=None)` is read-only. For each URL it lists sessions (`GET /session`) with their server-reported status (`GET /session/status`); with `workspace` both requests carry `directory=WORKSPACE` so the intended project is queried, otherwise the server's own project answers. Child sessions (`parentID`) and archived sessions are skipped. It then reads the local metadata database at `$XDG_DATA_HOME/opencode/opencode.db` (default `~/.local/share/opencode/opencode.db`, the path printed by `opencode db path`) in read-only mode, taking the 50 most recently updated unarchived root sessions. Saved sessions carry `runtime_status: "unknown"` with `runtime_reason: "saved_metadata_only"` and no URL: a saved session is not evidence of a running server. Titles, messages and credential tables are never read.
+Use the read-only CLI discovery command:
+
+```sh
+htalk peer discover --harness opencode --opencode-url http://127.0.0.1:4096 \
+  --workspace /absolute/project
+```
+
+Repeat `--opencode-url URL` to inspect several servers. Omit `--workspace` to query each server's own project. Discovery uses only GET requests. For each URL it lists sessions (`GET /session`) with their server-reported status (`GET /session/status`); with `--workspace PATH` both requests carry `directory=PATH` so the intended project is queried. Child sessions (`parentID`) and archived sessions are skipped. It then reads the local metadata database at `$XDG_DATA_HOME/opencode/opencode.db` (default `~/.local/share/opencode/opencode.db`, the path printed by `opencode db path`) in read-only mode, taking the 50 most recently updated unarchived root sessions. Saved sessions carry `runtime_status: "unknown"` with `runtime_reason: "saved_metadata_only"` and no URL: a saved session is not evidence of a running server. Titles, messages and credential tables are never read.
 
 Every source entry carries `harness: "opencode"`, a `status` of `ok`, `partial` or `unavailable`, an `error` code and a `detail` code. A malformed or non-loopback URL makes only its own source `unavailable` with `invalid_opencode_url` or `opencode_url_must_be_loopback`, reported without the submitted text; other URLs and the saved metadata are still read. Unreachable, unauthorized, oversized (`opencode_response_too_large`, above 4 MiB) or malformed answers are `unavailable` with a fixed code. When more saved sessions exist than the limit, the saved source is `partial` with `opencode_saved_session_limit_reached`; a missing file is `unavailable` with `opencode_saved_metadata_missing`.
 

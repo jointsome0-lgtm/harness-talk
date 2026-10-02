@@ -553,6 +553,8 @@ pipe also stops a watcher left behind by an abrupt harness exit.
 For separate persistent sessions, see the [managed Goose adapter](goose.md),
 [managed Letta adapter](letta.md) and [Antigravity SDK adapter](antigravity.md).
 They share the notice and recovery loop.
+
+The managed Python receivers require Linux 5.3 or newer with pidfds and readable `/proc` stat entries for their effective UID and ambiguous root-owned processes. A preflight rejects unsupported hosts before native launch. Shutdown tracks processes that stay in the managed session and group with the launcher's effective UID. Changed credentials, escaped groups and forks after all known ownership anchors exit are outside this guarantee; an uncertain cleanup requires inspection rather than a successful stop receipt.
 All three are included in the 0.8.0 source archive and do not attach to the terminals
 described below.
 

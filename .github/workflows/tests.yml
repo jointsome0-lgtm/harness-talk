@@ -44,12 +44,14 @@ jobs:
           sudo apt-get install -y --no-install-recommends openssh-server
           export HTALK_TEST_SSHD=/usr/sbin/sshd
           export HTALK_TEST_COMMAND="$(python -c 'import json, shutil; print(json.dumps([shutil.which("htalk")]))')"
-          cp tests/compat_support.py tests/test_cli_compat.py tests/test_mcp.py tests/test_receive.py tests/test_catalog.py tests/test_catalog_channels.py "$RUNNER_TEMP/"
+          cp tests/compat_support.py tests/test_cli_compat.py tests/test_mcp.py tests/test_receive.py tests/test_catalog.py tests/test_catalog_channels.py tests/test_mail_recovery.py "$RUNNER_TEMP/"
           cd "$RUNNER_TEMP"
-          python -B -m unittest test_cli_compat test_mcp test_receive test_catalog test_catalog_channels -v
+          python -B -m unittest test_cli_compat test_mcp test_receive test_catalog test_catalog_channels test_mail_recovery -v
       - name: Test Agent Zero pause handling
         if: matrix.python == '3.14'
         run: python -B -m unittest discover -s tests -p test_agent_zero.py -v
+      - name: Test managed receiver process cleanup
+        run: python -B -m unittest discover -s tests -p test_managed_receiver.py -v
       - name: Test reverse SSH socket recovery
         run: python -B -m unittest discover -s tests -p test_ssh_sockets.py -v
 

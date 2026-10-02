@@ -24,6 +24,17 @@ fn invalid_requests_do_not_wait_for_a_writer() {
         "badly formed hexadecimal UUID string",
         code(store.save("alice", "bob", "Hi", Some("bad"), None))
     );
+    assert_eq!(
+        "badly formed hexadecimal UUID string",
+        code(store.save("alice", "bob", "Hi", Some(""), None))
+    );
+    assert_eq!(
+        0,
+        writer
+            .query_row("SELECT COUNT(*) FROM messages", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap()
+    );
     writer.execute_batch("ROLLBACK").unwrap();
 }
 

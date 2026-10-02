@@ -2,9 +2,10 @@
 
 Start with the [first exchange](../README.md). Commands print JSON; `--help` describes their arguments. [Client adapters](adapters.md) document notification and discovery compatibility.
 
-`htalk mcp` is the exception to line-oriented CLI results: it runs the
-[MCP stdio server](../integrations/mcp.md), with one mailbox tool and a fixed
-peer identity. Model and provider settings remain in the client.
+`htalk mcp` and `htalk catalog connect` run MCP stdio servers instead of
+returning a single CLI result. Each exposes one mailbox tool with a fixed
+peer identity. See [MCP setup](../integrations/mcp.md) and the
+[catalogue guide](catalog.md). Model and provider settings remain in the client.
 
 ## Database and peers
 
@@ -70,11 +71,11 @@ None proves model receipt. `ack_at` records the recipient's explicit acknowledgm
 
 A message acknowledged before the notification claim is not submitted. Every client route rechecks the saved state after its preflight, immediately before the one write: the Claude socket frame, the OpenCode `prompt_async` POST, the native `codex queue` command and the app-server `thread/queue/add` call. An acknowledgment received during preflight prevents transmission and records `not_submitted` with `acknowledged_before_notification`. The message and read mark remain saved; the one-attempt rule still applies.
 
-`wait` and `send --wait` write `wait_returned_at` on an answer just before returning it. The answer stays in the inbox, `ack_at` is untouched, and questions are not closed. A claimed notification that sees this record at its final check is skipped with `not_submitted` and `returned_by_recipient_wait`, exit 0. The record can precede the notification attempt or appear during client preflight. `show`, `inbox` and `sent` write nothing.
+`wait` and `send --wait` try to save `wait_returned_at` on an answer just before returning it, without waiting for a SQLite writer lock. This best-effort receipt suppresses redundant notices; a ready answer is still returned if the receipt cannot be saved, so a redundant notice may follow. The answer stays in the inbox, `ack_at` is untouched, and the receipt proves neither acknowledgment nor task completion. A claimed notification that sees this record at its final check is skipped with `not_submitted` and `returned_by_recipient_wait`, exit 0. The record can precede the notification attempt or appear during client preflight. `show`, `inbox` and `sent` write nothing.
 
 This local record does not prove that command output reached the caller or that a model read it. A failure after the record is saved can suppress the notice even if the output is lost. Recover the saved answer through `show`, `wait` or `inbox` after interruption, then acknowledge it after reading.
 
-While a wait is running it also registers itself in an additive `waits` table and removes that row when it ends, times out or is interrupted. A reply saved during it gives the poll up to one second to record the answer before notifying. The registration never suppresses a notice by itself: a waiter killed before recording the answer only delays notification by up to one second. `wait --seconds 0` registers nothing but still records an answer it returns.
+A positive wait registers itself in an additive `waits` table only if its initial read finds no answer. `wait --seconds 0` and a wait that finds an answer immediately register nothing; both still try to save the return receipt without waiting for a writer lock. A reply saved during a registered wait gives the poll up to one second to record the answer before notifying. When the wait ends, times out or is interrupted, it tries to remove its registration. This cleanup is best effort: a busy database can leave the row behind. A registration never suppresses a notice by itself; a leftover row or a waiter killed before recording the answer can only delay notification by up to one second.
 
 A race after the final check, including a notice already accepted by the client, remains possible. This check cannot recall such a notice or guarantee that it never causes another model turn.
 
@@ -82,9 +83,9 @@ The command's `notification_cleanup` describes this removal attempt. `removed` c
 
 If the sending process stops before saving its completion receipt, `pending` can remain indefinitely. Repeating `ack` preserves the read mark but cannot reconstruct the missing queue receipt or remove a notice without it. A child client that finishes after the sender stops does not update the htalk database. The saved message remains available through `show` and `inbox`; this uncertainty never permits another notification attempt.
 
-`show` retrieves one message and its correlated answer. `inbox` finds incoming work, oldest first; `sent` recovers outgoing IDs, newest first. Both return at most `--limit` messages (default 20, up to 500) with `total`, the count of all matching messages, and `omitted`, the count beyond this page. When `omitted` is above 0, `recovery.next_page` continues with the same options from a `seq` cursor: `--after-seq` for `inbox`, `--before-seq` for `sent`. `sent` summarizes each text, including a correlated answer's, as `body_bytes` (UTF-8 size) and `body_preview`, the first nonblank line up to 120 characters; `show` and `sent --bodies` return full texts. Results carry executable `recovery` commands with the database, peer name and full IDs. Read an answer before executing `ack_after_reading`.
+`show` retrieves one message and its correlated answer. `inbox` finds incoming work, oldest first; `sent` recovers outgoing IDs, newest first. Both return at most `--limit` messages (default 20, up to 500) with `total`, the count of all matching messages, and `omitted`, the count beyond this page. When `omitted` is above 0, `recovery.next_page` continues with the same options from a `seq` cursor: `--after-seq` for `inbox`, `--before-seq` for `sent`. `sent` summarizes each text, including a correlated answer's, as `body_bytes` (UTF-8 size) and `body_preview`, the first nonblank line up to 120 characters; `show` and `sent --bodies` return full texts. Ordinary local CLI results carry executable `recovery` commands with the database, peer name and full IDs. Read an answer before executing `ack_after_reading`. [Catalogue reads](catalog.md#find-and-choose) retain IDs and saved state but omit these per-message action commands.
 
-`wait REQUEST_UUID --seconds N` polls only the database for 0 to 45 seconds and records an answer before returning it. A later notification check skips an answer carrying that record. Resume the wait after timeout or interruption. It never resends or acknowledges. `--no-notify` saves a message for polling only. `--message-file PATH` supplies a multiline body, including paths to artifacts the recipient should inspect.
+`wait REQUEST_UUID --seconds N` polls only the database for 0 to 45 seconds and tries to save the suppression receipt before returning an answer. A later notification check skips an answer carrying that record. Resume the wait after timeout or interruption. It never resends or acknowledges. `--no-notify` saves a message for polling only. `--message-file PATH` supplies a multiline body, including paths to artifacts the recipient should inspect.
 
 For repeatable automation, generate and retain a UUID before `send --id UUID`. Identical retries return the saved request; differing contents are rejected. The same applies to an identical `reply` retry. There is no notification replay command. After interrupted output, inspect `recovery`, `message_id` and `persistence`; `unknown` persistence requires checking the database before deciding what happened.
 
@@ -116,7 +117,7 @@ setup](../integrations/README.md) for session lifecycle and recovery behavior.
 | 2 | Invalid input, a missing database, all discovery sources unavailable, or this invocation attempted notification without confirmed submission, acknowledgment or a saved answer. The message may already be saved. |
 | 130 | Interrupted; read the recovery guidance. |
 
-Retrieval, acknowledgment and identical retries can exit 0 even if the original notification failed. A `send --wait` that returns an answer exits 0 and keeps its request's unconfirmed `submission`. Acknowledgment also exits 0 if queue cleanup fails; inspect `notification_cleanup` separately. There is no daemon, remote-host transport or Boardmail dependency.
+Retrieval, acknowledgment and identical retries can exit 0 even if the original notification failed. A `send --wait` that returns an answer exits 0 and keeps its request's unconfirmed `submission`. Acknowledgment also exits 0 if queue cleanup fails; inspect `notification_cleanup` separately. Mailbox storage is local SQLite on its host. Remote clients can use SSH connectors and the catalogue transport. htalk installs no daemon and has no Boardmail dependency.
 
 ## Source installation and tests
 
