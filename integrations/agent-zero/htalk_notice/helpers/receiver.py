@@ -1,6 +1,7 @@
 """One watcher for one explicitly selected Agent Zero context."""
 import atexit
 import json
+import logging
 import os
 from pathlib import Path
 import select
@@ -14,6 +15,8 @@ from helpers.state_monitor_integration import mark_dirty_for_context
 
 PLUGIN = "htalk_notice"
 OWNER = "_htalk_notice_receiver"
+ORIGIN = "_htalk_notice_origin"
+log = logging.getLogger(__name__)
 
 
 def enabled(context):
@@ -46,7 +49,7 @@ def reconcile():
     # Keep ownership on the context class: Agent Zero can reload plugin modules.
     with AgentContext._contexts_lock:
         previous = getattr(AgentContext, OWNER, None)
-        if (isinstance(previous, Receiver) and previous.context is context
+        if (previous is not None and previous.context is context
                 and previous.config == config
                 and (previous.failed or not previous.stopped.is_set())):
             return
@@ -89,7 +92,7 @@ class Receiver:
         self.pending += 1
 
     def flush(self):
-        if self.pending <= self.accepted:
+        if self.stopped.is_set() or not self.active() or self.pending <= self.accepted:
             return
         context = self.context
         wake = UserMessage(
@@ -102,9 +105,13 @@ class Receiver:
         agent = context.get_agent()
         # Native queue auto-drain ignores pause. Keep our pending wake outside
         # that queue. Read shared state last; check/start is still not atomic.
-        if mq.has_queue(context) or context.paused or context.is_running():
+        if (self.stopped.is_set() or not self.active() or mq.has_queue(context)
+                or context.paused or context.is_running()):
             return
         self.wake, self.wake_generation = wake, self.pending
+        # DeferredTask retains this exact UserMessage, even if OWNER is replaced
+        # or this module is reloaded before the process-chain hook runs.
+        setattr(wake, ORIGIN, (self, self.wake_generation))
         # Pinned AgentContext.communicate's idle branch, without paused = False.
         # The process-chain hook rechecks pause and confirms acceptance.
         context.task = context.run_task(context._process_chain, agent, wake)
@@ -162,11 +169,32 @@ def accept_wake(data):
     args, kwargs = data.get("args", ()), data.get("kwargs", {})
     context = args[0] if args else None
     message = args[2] if len(args) > 2 else kwargs.get("msg")
-    receiver = getattr(AgentContext, OWNER, None)
-    if receiver and receiver.context is context and message is receiver.wake:
-        if receiver.stopped.is_set() or context.paused or not receiver.active():
-            data["result"] = None
-            return
-        receiver.accepted = receiver.wake_generation
+    origin = getattr(message, ORIGIN, None)
+    if origin is None:
+        return  # Ordinary owner input has no plugin origin.
+    receiver, generation = origin
+    if (receiver.context is not context or message is not receiver.wake
+            or generation != receiver.wake_generation or receiver.stopped.is_set()
+            or context.paused or not receiver.active()):
+        data["result"] = None
+        return
+    try:
         mq.log_user_message(context, message.message, [], message_id=message.id, source=" (htalk)")
         mark_dirty_for_context(context.id, reason="htalk_wake")
+    except Exception as error:
+        # Logging may already have printed or saved part of the wake. Its outcome
+        # is uncertain, so retain pending state and require explicit recovery.
+        # Never retry user-visible logging automatically.
+        receiver.failed = True
+        receiver.stopped.set()
+        data["result"] = None
+        failure = (f"htalk wake stopped ({type(error).__name__}). Logging may be partial; "
+                   "inspect the chat and saved inbox before restarting Agent Zero. "
+                   "Saved mail is unchanged; this wake will not be retried automatically.")
+        log.error(failure)
+        try:
+            context.log.log(type="error", content=failure)
+        except Exception:
+            pass  # The Python logger remains available if the UI logger failed.
+        return
+    receiver.accepted = generation
