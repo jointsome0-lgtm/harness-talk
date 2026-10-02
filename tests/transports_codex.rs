@@ -1288,6 +1288,112 @@ fn public_stdio_call_deadline_includes_a_backpressured_write() {
     );
 }
 
+/// Only recorded owned fixture processes are signalled, through stable pidfds.
+struct FixtureProcess(std::os::fd::OwnedFd);
+
+impl FixtureProcess {
+    fn capture(pid: i32) -> Self {
+        use std::os::fd::FromRawFd;
+        // SAFETY: opens a stable handle to a PID read from this test's private fixture directory.
+        let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+        assert!(fd >= 0, "{}", std::io::Error::last_os_error());
+        Self(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd as i32) })
+    }
+
+    fn exited(&self) -> bool {
+        use std::os::fd::AsRawFd;
+        let mut poll = libc::pollfd {
+            fd: self.0.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: poll observes the live owned pidfd without reaping or signalling.
+        assert!(unsafe { libc::poll(&mut poll, 1, 0) } >= 0);
+        assert_eq!(poll.revents & (libc::POLLNVAL | libc::POLLERR), 0);
+        poll.revents != 0
+    }
+}
+
+impl Drop for FixtureProcess {
+    fn drop(&mut self) {
+        use std::os::fd::AsRawFd;
+        // Independent fixture cleanup targets the pinned process even if the assertion fails.
+        // SAFETY: sends KILL only through this fixture's owned pidfd; PID reuse cannot retarget it.
+        unsafe {
+            libc::syscall(
+                libc::SYS_pidfd_send_signal,
+                self.0.as_raw_fd(),
+                libc::SIGKILL,
+                std::ptr::null::<libc::siginfo_t>(),
+                0,
+            );
+        }
+    }
+}
+
+#[test]
+fn stdio_drop_stops_owned_descendant_after_wrapper_exit_or_stall() {
+    check_stdio_descendant_cleanup(false);
+}
+
+#[test]
+fn stdio_close_confirms_descendant_cleanup_and_is_terminal() {
+    check_stdio_descendant_cleanup(true);
+}
+
+fn check_stdio_descendant_cleanup(explicit_close: bool) {
+    for mode in ["wrapper_exits", "wrapper_stubborn"] {
+        let fixture = Fixture::new(mode);
+        fixture.fake_codex();
+        fixture.mode(mode);
+        let mut rpc = Rpc::spawn_stdio().unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let descendant = loop {
+            if let Ok(pid) = fs::read_to_string(fixture.dir.join("bin/descendant"))
+                && let Ok(pid) = pid.parse::<i32>()
+            {
+                break pid;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "fixture descendant did not report readiness"
+            );
+            thread::sleep(Duration::from_millis(5));
+        };
+        let descendant = FixtureProcess::capture(descendant);
+        let wrapper_pid: i32 = fs::read_to_string(fixture.dir.join("bin/pid"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let wrapper = FixtureProcess::capture(wrapper_pid);
+        let started = Instant::now();
+        if explicit_close {
+            rpc.close().unwrap();
+            assert_eq!(
+                rpc.call("owned/after-close", json!({})).unwrap_err(),
+                Failure::coded("codex_rpc_closed")
+            );
+            rpc.close().unwrap();
+        }
+        drop(rpc);
+        let elapsed = started.elapsed();
+        assert!(elapsed < Duration::from_secs(6), "{mode}: {elapsed:?}");
+        assert!(wrapper.exited(), "{mode}: wrapper still running");
+        assert!(
+            descendant.exited(),
+            "{mode}: descendant still running after RPC Drop"
+        );
+        // The only protocol write was initialize, followed by its notification.
+        assert_eq!(
+            methods(&lines(&fixture.dir.join("bin/frames.jsonl"))),
+            ["initialize", "initialized", "exit"]
+        );
+        eprintln!(
+            "explicit_close={explicit_close}, {mode}: wrapper and descendant stopped in {elapsed:?}"
+        );
+    }
+}
+
 const FAKE_CODEX: &str = r#"#!/usr/bin/python3 -B
 import json, os, signal, sys, time
 here = os.path.dirname(os.path.abspath(__file__))
@@ -1309,8 +1415,18 @@ if sys.argv[1] == "queue":
     sys.stdout.write(out[mode]); sys.stdout.flush()
     sys.exit(1 if mode == "fail" else 0)
 assert sys.argv[1:] == ["app-server", "--stdio"]
-with open(path("pid"), "w") as f: f.write(str(os.getpid()))
-if mode == "stubborn": signal.signal(signal.SIGTERM, signal.SIG_IGN)
+def record_pid(name):
+    with open(path(name + ".tmp"), "w") as f: f.write(str(os.getpid()))
+    os.replace(path(name + ".tmp"), path(name))
+record_pid("pid")
+if mode in ("stubborn", "wrapper_stubborn"): signal.signal(signal.SIGTERM, signal.SIG_IGN)
+if mode in ("wrapper_exits", "wrapper_stubborn"):
+    descendant = os.fork()
+    if descendant == 0:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.alarm(20)
+        record_pid("descendant")
+        while True: time.sleep(1)
 if mode == "close_at_start":
     sys.stdin.readline(); sys.exit(0)
 def send(frame):
@@ -1335,6 +1451,7 @@ for raw in sys.stdin:
     else:
         send({"id": frame["id"], "result": result})
 with open(path("frames.jsonl"), "a") as log: log.write(json.dumps({"method": "exit"}) + "\n")
-if mode == "stubborn":
+if mode in ("stubborn", "wrapper_stubborn"):
+    signal.alarm(20)
     while True: time.sleep(1)
 "#;
