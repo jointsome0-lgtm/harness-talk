@@ -1057,12 +1057,6 @@ fn server_sessions(url: &str, workspace: Option<&str>) -> (Vec<Value>, Value) {
     (found, source)
 }
 
-enum Cell {
-    Int(i64),
-    Text(String),
-    Other,
-}
-
 /// Unarchived root sessions from the local SQLite metadata, read-only. Liveness is unknown.
 fn saved_sessions(path: &Path) -> (Vec<Value>, Value) {
     let mut source = json!({"harness": "opencode", "source": "opencode_saved", "path": path_text(path), "status": "ok",
@@ -1084,29 +1078,29 @@ fn saved_sessions(path: &Path) -> (Vec<Value>, Value) {
             WHERE parent_id IS NULL AND time_archived IS NULL
             ORDER BY time_updated DESC LIMIT ?",
         )?;
-        let cell = |value: ValueRef<'_>| -> Result<Cell, Failure> {
-            Ok(match value {
-                ValueRef::Integer(v) => Cell::Int(v),
-                ValueRef::Text(t) => Cell::Text(
-                    std::str::from_utf8(t)
-                        .map_err(|_| Failure::Class("OperationalError"))?
-                        .to_owned(),
-                ),
-                _ => Cell::Other,
-            })
+        let text = |value: ValueRef<'_>| match value {
+            ValueRef::Text(t) => std::str::from_utf8(t).ok().map(str::to_owned),
+            _ => None,
         };
         let mut rows = statement.query([SAVED_LIMIT as i64 + 1])?;
         let mut out = Vec::new();
+        let mut limited = false;
         while let Some(row) = rows.next()? {
-            out.push((
-                cell(row.get_ref(0)?)?,
-                cell(row.get_ref(1)?)?,
-                cell(row.get_ref(2)?)?,
-            ));
+            // The extra row detects the limit; its cells are never interpreted.
+            if out.len() == SAVED_LIMIT {
+                limited = true;
+                break;
+            }
+            // Timestamps are optional integers. Do not decode unused TEXT values.
+            let updated = match row.get_ref(2)? {
+                ValueRef::Integer(v) => Some(v),
+                _ => None,
+            };
+            out.push((text(row.get_ref(0)?), text(row.get_ref(1)?), updated));
         }
-        Ok::<_, Failure>(out)
+        Ok::<_, Failure>((out, limited))
     })();
-    let mut rows = match rows {
+    let (rows, limited) = match rows {
         Ok(rows) => rows,
         Err(failure) => {
             source["status"] = json!("unavailable");
@@ -1118,30 +1112,24 @@ fn saved_sessions(path: &Path) -> (Vec<Value>, Value) {
             return (Vec::new(), source);
         }
     };
-    if rows.len() > SAVED_LIMIT {
-        rows.truncate(SAVED_LIMIT);
+    if limited {
         source["status"] = json!("partial");
         source["detail"] = json!("opencode_saved_session_limit_reached");
     }
     for (id, directory, updated) in rows {
         let row = match (&id, &directory) {
-            (Cell::Text(id), Cell::Text(directory)) if !directory.is_empty() => {
-                session_id(id).ok().map(|id| {
-                    let updated = match updated {
-                        Cell::Int(v) => json!(v.div_euclid(1000)),
-                        _ => Value::Null,
-                    };
-                    candidate(
-                        &id,
-                        directory,
-                        "unknown",
-                        "saved_metadata_only",
-                        "opencode_saved",
-                        None,
-                        updated,
-                    )
-                })
-            }
+            (Some(id), Some(directory)) if !directory.is_empty() => session_id(id).ok().map(|id| {
+                let updated = updated.map_or(Value::Null, |v| json!(v.div_euclid(1000)));
+                candidate(
+                    &id,
+                    directory,
+                    "unknown",
+                    "saved_metadata_only",
+                    "opencode_saved",
+                    None,
+                    updated,
+                )
+            }),
             _ => None,
         };
         match row {

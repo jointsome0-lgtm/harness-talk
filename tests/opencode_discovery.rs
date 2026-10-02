@@ -353,3 +353,251 @@ fn malformed_saved_rows_preserve_valid_addresses_and_limit_diagnostics() {
         (Some("ok"), None)
     );
 }
+
+#[test]
+fn saved_utf8_address_errors_reject_only_their_rows() {
+    let dir = fixture::tempdir();
+    let path = dir.path().join("opencode.db");
+    saved_db(
+        &path,
+        &[
+            (
+                json!("ses_first"),
+                None,
+                json!("/synthetic/first"),
+                json!(5000),
+                None,
+            ),
+            (
+                json!("ses_bad_id"),
+                None,
+                json!("/synthetic/bad-id"),
+                json!(4000),
+                None,
+            ),
+            (
+                json!("ses_bad_directory"),
+                None,
+                json!("/synthetic/bad-directory"),
+                json!(3000),
+                None,
+            ),
+            (
+                json!("ses_last"),
+                None,
+                json!("/synthetic/last"),
+                json!(2000),
+                None,
+            ),
+        ],
+    );
+    let db = Connection::open(&path).unwrap();
+    db.execute(
+        "UPDATE session SET id=CAST(x'ff' AS TEXT) WHERE id='ses_bad_id'",
+        [],
+    )
+    .unwrap();
+    db.execute(
+        "UPDATE session SET directory=CAST(x'fe' AS TEXT) WHERE id='ses_bad_directory'",
+        [],
+    )
+    .unwrap();
+    drop(db);
+    let before = std::fs::read(&path).unwrap();
+    let result = discover_with(Some(&[]), None, Some(&path));
+    assert_eq!(ids(&result.sessions), ["ses_first", "ses_last"]);
+    assert_eq!(result.sources[0]["status"], "partial");
+    assert_eq!(result.sources[0]["rejected"], 2);
+    assert_eq!(
+        result.sources[0]["detail"],
+        "opencode_invalid_saved_metadata"
+    );
+    assert_eq!(result.sources[0]["error"], Value::Null);
+    assert_eq!(before, std::fs::read(&path).unwrap());
+}
+
+#[test]
+fn saved_noninteger_timestamps_do_not_require_text_decoding() {
+    let dir = fixture::tempdir();
+    let path = dir.path().join("opencode.db");
+    saved_db(
+        &path,
+        &[
+            (
+                json!("ses_invalid_text"),
+                None,
+                json!("/synthetic"),
+                json!(1),
+                None,
+            ),
+            (json!("ses_blob"), None, json!("/synthetic"), json!(2), None),
+            (
+                json!("ses_text"),
+                None,
+                json!("/synthetic"),
+                json!("1234"),
+                None,
+            ),
+            (
+                json!("ses_float"),
+                None,
+                json!("/synthetic"),
+                json!(2000.5),
+                None,
+            ),
+            (
+                json!("ses_null"),
+                None,
+                json!("/synthetic"),
+                Value::Null,
+                None,
+            ),
+            (
+                json!("ses_integer"),
+                None,
+                json!("/synthetic"),
+                json!(-1500),
+                None,
+            ),
+        ],
+    );
+    let db = Connection::open(&path).unwrap();
+    db.execute(
+        "UPDATE session SET time_updated=CAST(x'ff' AS TEXT) WHERE id='ses_invalid_text'",
+        [],
+    )
+    .unwrap();
+    db.execute(
+        "UPDATE session SET time_updated=x'fe' WHERE id='ses_blob'",
+        [],
+    )
+    .unwrap();
+    drop(db);
+    let before = std::fs::read(&path).unwrap();
+    let result = discover_with(Some(&[]), None, Some(&path));
+    assert_eq!(result.sessions.len(), 6);
+    for row in &result.sessions {
+        let expected = if row["session_id"] == "ses_integer" {
+            json!(-2)
+        } else {
+            Value::Null
+        };
+        assert_eq!(row["updated_at"], expected);
+    }
+    assert_eq!(result.sources[0]["status"], "ok");
+    assert!(result.sources[0].get("rejected").is_none());
+    assert_eq!(result.sources[0]["detail"], Value::Null);
+    assert_eq!(result.sources[0]["error"], Value::Null);
+    assert_eq!(before, std::fs::read(&path).unwrap());
+}
+
+#[test]
+fn saved_limit_sentinel_is_existence_only_even_with_invalid_text() {
+    let dir = fixture::tempdir();
+    for column in ["id", "directory", "time_updated"] {
+        let path = dir.path().join(format!("sentinel-{column}.db"));
+        // TEXT timestamps sort ahead of the malformed sentinel's leading 'a'.
+        let rows: Vec<_> = (0..51)
+            .map(|i| {
+                (
+                    json!(format!("ses_{i:02}")),
+                    None,
+                    json!("/synthetic"),
+                    json!(format!("z{:03}", 51 - i)),
+                    None,
+                )
+            })
+            .collect();
+        saved_db(&path, &rows);
+        let db = Connection::open(&path).unwrap();
+        db.execute(
+            &format!("UPDATE session SET {column}=CAST(x'61ff' AS TEXT) WHERE rowid=51"),
+            [],
+        )
+        .unwrap();
+        let last: i64 = db
+            .query_row(
+                "SELECT rowid FROM session ORDER BY time_updated DESC LIMIT 1 OFFSET 50",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(last, 51, "fixture sentinel must be the 51st selected row");
+        drop(db);
+        let before = std::fs::read(&path).unwrap();
+        let result = discover_with(Some(&[]), None, Some(&path));
+        assert_eq!(result.sessions.len(), 50, "{column}");
+        let expected: Vec<_> = (0..50).map(|i| format!("ses_{i:02}")).collect();
+        assert_eq!(ids(&result.sessions), expected, "{column}");
+        assert_eq!(result.sources[0]["status"], "partial");
+        assert_eq!(
+            result.sources[0]["detail"],
+            "opencode_saved_session_limit_reached"
+        );
+        assert!(result.sources[0].get("rejected").is_none());
+        assert_eq!(result.sources[0]["error"], Value::Null);
+        assert_eq!(before, std::fs::read(&path).unwrap());
+    }
+}
+
+#[test]
+fn saved_utf8_rejection_at_row_fifty_does_not_backfill_from_sentinel() {
+    let dir = fixture::tempdir();
+    let path = dir.path().join("opencode.db");
+    let rows: Vec<_> = (0..51)
+        .map(|i| {
+            (
+                json!(format!("ses_{i:02}")),
+                None,
+                json!("/synthetic"),
+                json!(10_000 - i),
+                None,
+            )
+        })
+        .collect();
+    saved_db(&path, &rows);
+    let db = Connection::open(&path).unwrap();
+    db.execute(
+        "UPDATE session SET directory=CAST(x'ff' AS TEXT) WHERE rowid=50",
+        [],
+    )
+    .unwrap();
+    drop(db);
+    let before = std::fs::read(&path).unwrap();
+    let result = discover_with(Some(&[]), None, Some(&path));
+    let expected: Vec<_> = (0..49).map(|i| format!("ses_{i:02}")).collect();
+    assert_eq!(ids(&result.sessions), expected);
+    assert_eq!(result.sources[0]["status"], "partial");
+    assert_eq!(result.sources[0]["rejected"], 1);
+    assert_eq!(
+        result.sources[0]["detail"],
+        "opencode_saved_session_limit_reached"
+    );
+    assert_eq!(result.sources[0]["error"], Value::Null);
+    assert_eq!(before, std::fs::read(&path).unwrap());
+}
+
+#[test]
+fn saved_storage_failures_remain_unavailable() {
+    let dir = fixture::tempdir();
+    for (name, expected) in [
+        ("not-sqlite.db", "opencode_saved_DatabaseError"),
+        ("missing-schema.db", "opencode_saved_OperationalError"),
+    ] {
+        let path = dir.path().join(name);
+        if name == "not-sqlite.db" {
+            std::fs::write(&path, b"synthetic invalid SQLite file").unwrap();
+        } else {
+            let db = Connection::open(&path).unwrap();
+            db.execute("CREATE TABLE unrelated (value)", []).unwrap();
+        }
+        let before = std::fs::read(&path).unwrap();
+        let result = discover_with(Some(&[]), None, Some(&path));
+        assert!(result.sessions.is_empty());
+        assert_eq!(result.sources[0]["status"], "unavailable");
+        assert_eq!(result.sources[0]["error"], expected);
+        assert_eq!(result.sources[0]["detail"], Value::Null);
+        assert!(result.sources[0].get("rejected").is_none());
+        assert_eq!(before, std::fs::read(&path).unwrap());
+    }
+}
