@@ -351,8 +351,9 @@ class ManagedWorkerCleanup(unittest.IsolatedAsyncioTestCase):
             args = SimpleNamespace(state=Path(directory))
             adapter = SimpleNamespace(prepare=Mock(), Session=Mock())
             with patch.object(os, "pidfd_open", side_effect=OSError("pidfds unavailable")):
-                with self.assertRaises(OSError):
+                with self.assertRaisesRegex(RuntimeError, "Managed receivers require usable Linux pidfd handles") as raised:
                     await receiver.worker(args, state, adapter)
+                self.assertIsInstance(raised.exception.__cause__, OSError)
             adapter.prepare.assert_not_called()
             adapter.Session.assert_not_called()
             self.assertEqual(state["phase"], "new")
