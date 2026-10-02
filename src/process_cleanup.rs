@@ -49,6 +49,13 @@ fn parse_identity(stat: &[u8]) -> io::Result<Identity> {
     })
 }
 
+// A proc entry can disappear after open but before read, which Linux reports as
+// ESRCH rather than ENOENT. This is safe to skip only for enumerated members;
+// the retained group anchor must still match exactly.
+fn member_disappeared(error: &io::Error) -> bool {
+    error.kind() == io::ErrorKind::NotFound || error.raw_os_error() == Some(libc::ESRCH)
+}
+
 fn pin(pid: i32) -> io::Result<OwnedFd> {
     #[cfg(target_os = "linux")]
     {
@@ -194,7 +201,7 @@ impl OwnedGroup {
             };
             let found = match identity(pid) {
                 Ok(found) => found,
-                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) if member_disappeared(&e) => continue,
                 Err(e) => return Err(e),
             };
             if found.group != self.leader {
@@ -202,7 +209,7 @@ impl OwnedGroup {
             }
             let metadata = match entry.metadata() {
                 Ok(metadata) => metadata,
-                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) if member_disappeared(&e) => continue,
                 Err(e) => return Err(e),
             };
             if metadata.uid() != unsafe { libc::geteuid() } {
@@ -226,7 +233,7 @@ impl OwnedGroup {
                     self.members.insert(key, fd);
                 }
                 Ok(_) => continue,
-                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) if member_disappeared(&e) => continue,
                 Err(e) => return Err(e),
             }
         }
@@ -289,6 +296,35 @@ mod tests {
         os::unix::process::CommandExt,
         process::{Command, Stdio},
     };
+
+    #[test]
+    fn reaped_owned_proc_entry_is_a_member_disappearance_but_not_a_valid_anchor() {
+        use std::io::Read;
+        let mut child = Command::new("/bin/true").process_group(0).spawn().unwrap();
+        let group = OwnedGroup::new(child.id()).unwrap();
+        let mut stat = fs::File::open(format!("/proc/{}/stat", child.id())).unwrap();
+        child.wait().unwrap();
+        let error = stat.read_to_end(&mut Vec::new()).unwrap_err();
+        assert_eq!(error.raw_os_error(), Some(libc::ESRCH));
+        assert!(member_disappeared(&error));
+        assert!(
+            group.check_anchor().is_err(),
+            "a disappeared anchor must fail closed"
+        );
+    }
+
+    #[test]
+    fn member_disappearance_does_not_hide_permission_or_other_io_failures() {
+        for errno in [libc::ENOENT, libc::ESRCH] {
+            assert!(member_disappeared(&io::Error::from_raw_os_error(errno)));
+        }
+        for errno in [libc::EPERM, libc::EACCES, libc::EIO] {
+            assert!(!member_disappeared(&io::Error::from_raw_os_error(errno)));
+        }
+        assert!(!member_disappeared(&io::Error::other(
+            "Invalid process stat"
+        )));
+    }
 
     #[test]
     fn retained_tokio_wrapper_is_not_reaped_by_the_signal_driver() {
