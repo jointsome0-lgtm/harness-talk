@@ -57,6 +57,10 @@ jobs:
           node-version: "24"
       - name: Test JavaScript watcher lifecycle
         run: node --experimental-vm-modules --test tests/test_js_watchers.mjs
+      - name: Test adapter tool and recovery contracts
+        run: |
+          python -B -m unittest discover -s tests -p test_agent_tools.py -v
+          python -B -m unittest discover -s tests -p test_adapter_recovery.py -v
       - name: Test managed receiver process cleanup
         run: python -B -m unittest discover -s tests -p test_managed_receiver.py -v
       - name: Test the installed wheel outside the checkout

@@ -60,6 +60,10 @@ jobs:
       - name: Test JavaScript watcher lifecycle
         if: matrix.python == '3.14'
         run: node --experimental-vm-modules --test tests/test_js_watchers.mjs
+      - name: Test adapter tool and recovery contracts
+        run: |
+          python -B -m unittest discover -s tests -p test_agent_tools.py -v
+          python -B -m unittest discover -s tests -p test_adapter_recovery.py -v
       - name: Test managed receiver process cleanup
         run: python -B -m unittest discover -s tests -p test_managed_receiver.py -v
       - name: Test reverse SSH socket recovery

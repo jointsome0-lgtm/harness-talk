@@ -9,6 +9,8 @@ python3 -B -m unittest discover -s tests -p 'test_*.py' -v
 node --experimental-vm-modules --test tests/test_js_watchers.mjs
 ```
 
+Python adapter tests cover owned stdin, mailbox command selection, and recovery boundaries with fake SDK protocols and disposable processes. CI runs these tool and recovery fixtures on both CI Python versions. They do not establish provider durability or native crash recovery.
+
 JavaScript watcher tests require Node 24 and use the actual adapters with modeled SDK calls and disposable local watcher processes. They need no npm dependencies and do not establish native client compatibility.
 
 The CLI suite uses `target/debug/htalk`, temporary databases, fake client executables, Unix sockets and a loopback HTTP server. It never falls back to an installed `htalk`. To test a specific executable, set `HTALK_TEST_COMMAND` to a JSON argument list starting with its absolute path.
