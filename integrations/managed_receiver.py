@@ -237,6 +237,12 @@ def settled(message):
 
 async def worker(args, state, adapter):
     state_file, binding = args.state / STATE_FILE, state["binding"]
+    clean_shutdown = getattr(adapter, "CLEAN_SHUTDOWN_REQUIRED", False)
+    # Older idle records predate the enforced active-runtime phase. Their
+    # native process lifetime cannot be reconstructed from the saved cursor.
+    if clean_shutdown and state["phase"] == "idle" and state.get("lifecycle_version") != 1:
+        state["phase"] = "needs_inspection"
+        save(state_file, state)
 
     # Native resume can continue work. Stop uncertain dispatches before launch,
     # irrespective of whether the mailbox already has a reply.
@@ -255,13 +261,15 @@ async def worker(args, state, adapter):
         os.close(fd)
     adapter.prepare(args, state)
     creating = state["phase"] == "new"
+    if clean_shutdown:
+        state["lifecycle_version"] = 1
     state["phase"] = "starting"
     save(state_file, state)
     watch = None
     session = adapter.Session(args, state)
     try:
         await session.start(creating)
-        state["phase"] = "idle"
+        state["phase"] = "active" if clean_shutdown else "idle"
         save(state_file, state)
         watch = await asyncio.create_subprocess_exec(
             binding["htalk"], "--db", binding["db"], "--as", binding["peer"], "watch",
@@ -310,7 +318,8 @@ async def worker(args, state, adapter):
                 save(state_file, state)
                 emit("recovery_required", message_id=message_id, stop_reason=stop_reason)
                 return 3
-            state.update(phase="idle", pending=None, last_seq=event["seq"])
+            state.update(phase="active" if clean_shutdown else "idle",
+                         pending=None, last_seq=event["seq"])
             save(state_file, state)
             emit("turn_completed", message_id=message_id,
                  reply_id=shown["reply"]["id"] if shown.get("reply") else None)
@@ -320,17 +329,24 @@ async def worker(args, state, adapter):
     finally:
         try:
             await dispose(watch)
-        except Exception:
-            state["phase"] = "needs_inspection"
-            save(state_file, state)
+        except BaseException as error:
+            if isinstance(error, Exception) or clean_shutdown:
+                state["phase"] = "needs_inspection"
+                save(state_file, state)
             raise
         finally:
             try:
                 await session.close()
-            except Exception:
-                state["phase"] = "needs_inspection"
-                save(state_file, state)
+            except BaseException as error:
+                if isinstance(error, Exception) or clean_shutdown:
+                    state["phase"] = "needs_inspection"
+                    save(state_file, state)
                 raise
+        if clean_shutdown and state["phase"] == "active":
+            # Only successful native close and owned-process disposal release
+            # the active-runtime phase. Turn results alone do not do so.
+            state["phase"] = "idle"
+            save(state_file, state)
 
 
 def read_state(directory):

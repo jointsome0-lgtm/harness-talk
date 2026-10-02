@@ -11,6 +11,7 @@ import uuid
 from managed_receiver import dispose, emit, entrypoint
 
 INITIAL_PATHS = {"lock"}
+CLEAN_SHUTDOWN_REQUIRED = True
 RECOVERY_NOTE = "Conversation retired; private SDK session files retained"
 TOOL_INSTRUCTION = (
     'Access htalk with call_mcp_tool: ServerName="htalk", ToolName="htalk", '

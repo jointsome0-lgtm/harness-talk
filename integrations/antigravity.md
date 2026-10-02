@@ -89,6 +89,25 @@ startup without a saved ID requires `--discard-session unknown`.
 The next explicit run creates a fresh conversation. Old native session files
 remain for inspection. See [Goose recovery](goose.md) for the shared lifecycle.
 
+The receiver now saves an `active` lifecycle phase for the whole native
+process lifetime. A successful turn and mailbox ACK can advance notice
+handling, but cannot make the session resumable. Only verified clean native
+close and owned-process cleanup restore `idle`. Loss of the controller and
+native host, even between turns, therefore requires inspection. This is a
+conservative restart guard; it does not prove what an orphan native runtime
+would do or that a native memory sync is durable after power loss.
+
+This update changes restart compatibility for old state. Saved `idle` state
+from older receivers lacks the lifecycle-version marker. The first updated
+run refuses native launch and preserves its session ID, binding and cursor as `needs_inspection`. Inspect native history and mail,
+then stop any remaining owned processes. `status` reports the preserved state.
+Use the existing explicit `recover` command with the saved `--discard-session` ID. When no notice is pending,
+omit `--message` and use `--disposition settled`. Recovery writes a retirement
+receipt before creating fresh-session state. Choosing `--discard-session`
+explicitly loses the old conversation context for future runs; native files
+remain for inspection. The upgrade itself resets no context. Recovery requires
+an explicit operator decision and leaves mailbox records unchanged.
+
 ## Verification
 
 On 2026-09-25, this receiver completed a delegated htalk exchange across

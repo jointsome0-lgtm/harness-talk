@@ -10,6 +10,7 @@ import sys
 from managed_receiver import approve, dispose, emit, entrypoint
 
 INITIAL_PATHS = {"lock", "profile"}
+CLEAN_SHUTDOWN_REQUIRED = True
 RECOVERY_NOTE = "Conversation discarded; agent memory and settings retained"
 
 
