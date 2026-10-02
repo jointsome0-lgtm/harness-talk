@@ -6,7 +6,10 @@ The executable is Rust. Python 3.11+ is used for package installation and the in
 cargo build --locked
 cargo test --locked
 python3 -B -m unittest discover -s tests -p 'test_*.py' -v
+node --experimental-vm-modules --test tests/test_js_watchers.mjs
 ```
+
+JavaScript watcher tests require Node 24 and use the actual adapters with modeled SDK calls and disposable local watcher processes. They need no npm dependencies and do not establish native client compatibility.
 
 The CLI suite uses `target/debug/htalk`, temporary databases, fake client executables, Unix sockets and a loopback HTTP server. It never falls back to an installed `htalk`. To test a specific executable, set `HTALK_TEST_COMMAND` to a JSON argument list starting with its absolute path.
 
@@ -31,6 +34,17 @@ async signal/IPC handling; restricted sandboxes can prevent that handling.
 The receiver cancellation checks require the same host access; a sandbox-only
 shutdown timeout must be compared with an ordinary host run before changing
 the product's signal handling.
+
+Rust MCP connectors, watch receivers and bounded command capture use Linux
+pidfds and readable `/proc` process metadata to stop their private groups. This
+requires Linux 5.3 or newer. The direct child remains unreaped until cleanup
+finishes; signals target inspected process handles, so a saved numeric group ID
+cannot target a later group. Cleanup covers members that remain in the group
+with process metadata owned by the current effective UID. Escaped descendants,
+changed ownership and inaccessible metadata are outside the success guarantee;
+inspection failures produce errors. Two-second TERM grace and four-second cleanup
+budgets are checked between `/proc` scans; scanning and scheduler delays can
+extend elapsed cleanup time.
 
 Managed Python receivers require Linux kernel 5.3 or newer, Python 3.11+ with
 `os.pidfd_open` and `signal.pidfd_send_signal`, and a mounted `/proc` readable
