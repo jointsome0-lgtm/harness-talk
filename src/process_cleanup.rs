@@ -20,17 +20,26 @@ struct Identity {
 }
 
 fn identity(pid: i32) -> io::Result<Identity> {
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat"))?;
-    let fields: Vec<_> = stat
-        .rsplit_once(')')
-        .ok_or_else(|| io::Error::other("Invalid process stat"))?
-        .1
-        .split_whitespace()
+    parse_identity(&fs::read(format!("/proc/{pid}/stat"))?)
+}
+
+fn parse_identity(stat: &[u8]) -> io::Result<Identity> {
+    // Linux comm is arbitrary bytes and can include ')'. Only the tail
+    // after its final delimiter contains the ASCII fields needed here.
+    let end = stat
+        .iter()
+        .rposition(|byte| *byte == b')')
+        .ok_or_else(|| io::Error::other("Invalid process stat"))?;
+    let fields: Vec<_> = stat[end + 1..]
+        .split(|byte| byte.is_ascii_whitespace())
+        .filter(|field| !field.is_empty())
         .collect();
     let parse = |index: usize| -> io::Result<u64> {
-        fields
+        let field = fields
             .get(index)
-            .ok_or_else(|| io::Error::other("Incomplete process stat"))?
+            .ok_or_else(|| io::Error::other("Incomplete process stat"))?;
+        std::str::from_utf8(field)
+            .map_err(io::Error::other)?
             .parse()
             .map_err(io::Error::other)
     };
@@ -327,6 +336,25 @@ mod tests {
         let mut group = group;
         assert!(group.step(libc::SIGKILL).is_err());
         drop(files);
+    }
+
+    #[test]
+    fn stat_identity_accepts_non_utf8_comm_with_embedded_delimiters() {
+        // comm is arbitrary bytes and can include parentheses or whitespace.
+        // The final ')' separates it from the kernel's ASCII numeric fields.
+        let mut stat = b"123 (odd\xff) name\n) S 1 123".to_vec();
+        for _ in 3..19 {
+            stat.extend_from_slice(b" 0");
+        }
+        stat.extend_from_slice(b" 456 0 0\n");
+        let found = parse_identity(&stat).unwrap();
+        assert_eq!((found.group, found.start), (123, 456));
+        assert!(parse_identity(b"123 (odd\xff) S 1").is_err());
+        assert!(parse_identity(b"123 (odd\xff S 1 123").is_err());
+        let mut malformed = stat.clone();
+        malformed.truncate(malformed.len() - b"456 0 0\n".len());
+        malformed.extend_from_slice(b"\xff 0 0\n");
+        assert!(parse_identity(&malformed).is_err());
     }
 
     #[test]
