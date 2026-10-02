@@ -235,12 +235,39 @@ def settled(message):
             else message.get("reply") is not None)
 
 
+def require_process_handles():
+    """Check the run prerequisite without creating or changing receiver state."""
+    missing = [name for owner, name in ((os, "pidfd_open"), (signal, "pidfd_send_signal"))
+               if not callable(getattr(owner, name, None))]
+    if missing:
+        raise RuntimeError("Managed receivers require Linux pidfd support in this Python build; "
+                           + ", ".join(name + " unavailable" for name in missing)
+                           + ". Use a supported interpreter; "
+                           "status and recover remain available.")
+    try:
+        fd = os.pidfd_open(os.getpid())
+        try:
+            signal.pidfd_send_signal(fd, 0)
+            _group_members(0)
+        finally:
+            os.close(fd)
+    except OSError as error:
+        raise RuntimeError("Managed receivers require usable Linux pidfd handles and /proc "
+                           "access; inspect this host before running") from error
+
+
+def legacy_idle(state, adapter):
+    return (getattr(adapter, "CLEAN_SHUTDOWN_REQUIRED", False)
+            and state["phase"] == "idle" and state.get("lifecycle_version") != 1)
+
+
 async def worker(args, state, adapter):
+    require_process_handles()
     state_file, binding = args.state / STATE_FILE, state["binding"]
     clean_shutdown = getattr(adapter, "CLEAN_SHUTDOWN_REQUIRED", False)
     # Older idle records predate the enforced active-runtime phase. Their
     # native process lifetime cannot be reconstructed from the saved cursor.
-    if clean_shutdown and state["phase"] == "idle" and state.get("lifecycle_version") != 1:
+    if legacy_idle(state, adapter):
         state["phase"] = "needs_inspection"
         save(state_file, state)
 
@@ -251,14 +278,6 @@ async def worker(args, state, adapter):
              pending=state["pending"])
         return 3
 
-    # Fail before native launch if this host cannot provide stable process handles
-    # or inspect this user's processes. Do not fall back to numeric group signals.
-    fd = os.pidfd_open(os.getpid())
-    try:
-        signal.pidfd_send_signal(fd, 0)
-        _group_members(0)
-    finally:
-        os.close(fd)
     adapter.prepare(args, state)
     creating = state["phase"] == "new"
     if clean_shutdown:
@@ -357,7 +376,7 @@ def read_state(directory):
 
 
 async def recover(args, state, adapter):
-    if state["phase"] in ("new", "idle"):
+    if state["phase"] in ("new", "idle") and not legacy_idle(state, adapter):
         raise RuntimeError("This session has no uncertain dispatch to recover")
     if args.discard_session != (state["session_id"] or "unknown"):
         raise RuntimeError("Saved session differs; inspect status again before discarding context")
@@ -429,6 +448,7 @@ def main(adapter):
             if not args.task.strip():
                 parser.error("The owner task file must contain a task")
             args.task_sha256 = hashlib.sha256(task_bytes).hexdigest()
+        require_process_handles()
         args.state.mkdir(parents=True, exist_ok=True)
     with (args.state / "lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

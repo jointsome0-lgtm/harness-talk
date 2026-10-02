@@ -7,6 +7,12 @@ This adapter is included in the 0.8.0 source archive and checkout.
 It requires Linux, a Python 3.11+ controller and a separate Python environment
 with the pinned SDK. It does not attach to an Antigravity CLI or IDE window.
 
+The controller Python build must expose `os.pidfd_open` and
+`signal.pidfd_send_signal`, with usable Linux pidfd handles and `/proc` access.
+Python version alone does not guarantee these APIs. An unsupported build refuses
+`run` before creating or changing receiver state; passive `status` and `recover`
+remain available.
+
 ## Setup
 
 Use a fresh test mailbox and private state directory. Keep `antigravity.py`,
@@ -98,10 +104,14 @@ conservative restart guard; it does not prove what an orphan native runtime
 would do or that a native memory sync is durable after power loss.
 
 This update changes restart compatibility for old state. Saved `idle` state
-from older receivers lacks the lifecycle-version marker. The first updated
-run refuses native launch and preserves its session ID, binding and cursor as `needs_inspection`. Inspect native history and mail,
+from older receivers lacks the lifecycle-version marker. On a supported controller,
+the first updated run refuses native launch and preserves its session ID, binding
+and cursor as `needs_inspection`. An unsupported interpreter preserves it unchanged.
+Inspect native history and mail,
 then stop any remaining owned processes. `status` reports the preserved state.
-Use the existing explicit `recover` command with the saved `--discard-session` ID. When no notice is pending,
+Use the existing explicit `recover` command with the saved `--discard-session` ID.
+Legacy idle can be retired directly after inspection, even on an unsupported
+interpreter; launching the native session first is unnecessary. When no notice is pending,
 omit `--message` and use `--disposition settled`. Recovery writes a retirement
 receipt before creating fresh-session state. Choosing `--discard-session`
 explicitly loses the old conversation context for future runs; native files

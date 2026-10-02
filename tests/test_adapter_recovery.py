@@ -1,6 +1,6 @@
 """Synthetic adapter contracts. No installed SDK, provider, native client or mailbox."""
 import asyncio
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import importlib.util
 import json
 import os
@@ -38,10 +38,11 @@ def initial_state(phase='new', lifecycle=True):
 
 
 class ManagedLifecycle(unittest.IsolatedAsyncioTestCase):
-    async def run_fixture(self, directory, state, close, *, failure=None):
+    async def run_fixture(self, directory, state, close, *, failure=None, notice_seq=1):
         reader = asyncio.get_running_loop().create_future()
         output = asyncio.StreamReader()
-        output.feed_data(b'{"event":"message","id":"notice","seq":1,"notification":"synthetic"}\n')
+        output.feed_data((json.dumps({'event': 'message', 'id': f'notice-{notice_seq}',
+            'seq': notice_seq, 'notification': 'synthetic'}) + '\n').encode())
         session = NS(start=AsyncMock(side_effect=failure), prompt=AsyncMock(return_value='end_turn'),
                      close=close, reader=reader)
         adapter = NS(CLEAN_SHUTDOWN_REQUIRED=agy.CLEAN_SHUTDOWN_REQUIRED,
@@ -79,13 +80,19 @@ class ManagedLifecycle(unittest.IsolatedAsyncioTestCase):
                 prepare.assert_not_called()
             release.set()
             self.assertEqual(await task, 0)
-            self.assertEqual(managed.read_state(Path(directory))['phase'], 'idle')
-            # Positive clean-close restart resumes, with the same saved ID.
-            adapter.Session.return_value = NS(start=AsyncMock(side_effect=RuntimeError('resumed fixture')),
-                close=AsyncMock(), reader=session.reader)
-            with self.assertRaisesRegex(RuntimeError, 'resumed fixture'):
-                await managed.worker(args, state, adapter)
-            adapter.Session.return_value.start.assert_awaited_once_with(False)
+            # Reload the durable record, not the mutable first-run object.
+            resumed = managed.read_state(Path(directory))
+            self.assertEqual((resumed['phase'], resumed['session_id']), ('idle', saved['session_id']))
+            args, adapter, session, task = await self.run_fixture(directory, resumed, AsyncMock(),
+                                                               notice_seq=2)
+            self.assertEqual(await task, 0)
+            adapter.Session.assert_called_once_with(args, resumed)
+            session.start.assert_awaited_once_with(False)
+            session.prompt.assert_awaited_once()
+            session.close.assert_awaited_once()
+            final = managed.read_state(Path(directory))
+            self.assertEqual((final['phase'], final['session_id'], final['last_seq']),
+                             ('idle', saved['session_id'], 2))
 
     async def test_actual_letta_clean_close_waits_eof_cleanup_before_resumable_idle(self):
         self.assertTrue(letta.CLEAN_SHUTDOWN_REQUIRED)
@@ -94,22 +101,44 @@ class ManagedLifecycle(unittest.IsolatedAsyncioTestCase):
             args = NS(state=Path(directory))
             native = letta.Session(args, {**state, 'binding': {**state['binding'],
                 'letta': '/fixture/letta', 'agent': 'agent-local-fixture'}})
-            entered, release = asyncio.Event(), asyncio.Event()
-            native.reader = asyncio.get_running_loop().create_future()
+            wait_entered, wait_release = asyncio.Event(), asyncio.Event()
+            reader_entered, reader_release = asyncio.Event(), asyncio.Event()
+            dispose_entered, dispose_release = asyncio.Event(), asyncio.Event()
+            class ReaderBarrier:
+                def __await__(self):
+                    async def read():
+                        reader_entered.set()
+                        await reader_release.wait()
+                    return read().__await__()
+            native.reader = ReaderBarrier()
             async def wait():
-                entered.set()
-                await release.wait()
+                wait_entered.set()
+                await wait_release.wait()
                 native.process.returncode = 0
-                native.reader.set_result(None)
                 return 0
+            async def cleanup(process):
+                self.assertIs(process, native.process)
+                dispose_entered.set()
+                await dispose_release.wait()
             native.process = NS(stdin=NS(close=Mock()), returncode=None, wait=wait)
-            with patch.object(letta, 'dispose', AsyncMock()) as dispose:
+            with patch.object(letta, 'dispose', AsyncMock(side_effect=cleanup)) as dispose:
                 args, adapter, _, task = await self.run_fixture(directory, state, native.close)
                 adapter.CLEAN_SHUTDOWN_REQUIRED = letta.CLEAN_SHUTDOWN_REQUIRED
-                await asyncio.wait_for(entered.wait(), 1)
+                await asyncio.wait_for(wait_entered.wait(), 1)
                 self.assertEqual(managed.read_state(Path(directory))['phase'], 'active')
                 native.process.stdin.close.assert_called_once()
-                release.set()
+                self.assertFalse(reader_entered.is_set())
+                dispose.assert_not_awaited()
+                wait_release.set()
+                await asyncio.wait_for(reader_entered.wait(), 1)
+                self.assertEqual(managed.read_state(Path(directory))['phase'], 'active')
+                self.assertFalse(task.done())
+                dispose.assert_not_awaited()
+                reader_release.set()
+                await asyncio.wait_for(dispose_entered.wait(), 1)
+                self.assertEqual(managed.read_state(Path(directory))['phase'], 'active')
+                self.assertFalse(task.done())
+                dispose_release.set()
                 self.assertEqual(await task, 0)
                 dispose.assert_awaited_once_with(native.process)
                 self.assertEqual(managed.read_state(Path(directory))['phase'], 'idle')
@@ -124,6 +153,30 @@ class ManagedLifecycle(unittest.IsolatedAsyncioTestCase):
                     await task
                 self.assertEqual(managed.read_state(Path(directory))['phase'], 'needs_inspection')
                 self.assertEqual(state['last_seq'], 1)
+
+    async def test_task_cancel_while_actual_letta_close_waits_preserves_inspection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = initial_state()
+            native = letta.Session(NS(state=Path(directory)), {**state,
+                'binding': {**state['binding'], 'letta': '/fixture/letta', 'agent': 'fixture'}})
+            entered = asyncio.Event()
+            async def wait():
+                entered.set()
+                await asyncio.Event().wait()
+            native.process = NS(stdin=NS(close=Mock()), returncode=None, wait=wait)
+            native.reader = asyncio.get_running_loop().create_future()
+            self.addCleanup(native.reader.cancel)
+            with patch.object(letta, 'dispose', AsyncMock()) as dispose:
+                _, adapter, _, task = await self.run_fixture(directory, state, native.close)
+                adapter.CLEAN_SHUTDOWN_REQUIRED = letta.CLEAN_SHUTDOWN_REQUIRED
+                await asyncio.wait_for(entered.wait(), 1)
+                self.assertEqual(managed.read_state(Path(directory))['phase'], 'active')
+                self.assertTrue(task.cancel())
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+                dispose.assert_awaited_once_with(native.process)
+                saved = managed.read_state(Path(directory))
+                self.assertEqual((saved['phase'], saved['last_seq']), ('needs_inspection', 1))
 
     async def test_start_and_prompt_failures_do_not_release_lease(self):
         for where in ['start', 'prompt']:
@@ -154,6 +207,112 @@ class ManagedLifecycle(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(receipt['binding'], state['binding'])
             self.assertEqual(receipt['phase'], 'needs_inspection')
             self.assertEqual((state['phase'], state['session_id']), ('new', None))
+
+
+@contextmanager
+def missing_api(owner, name):
+    # Absence models the unsupported build. Setting None misrepresents asyncio's
+    # capability probe on Python 3.14, which correctly checks hasattr first.
+    with patch.object(owner, name, create=True):
+        delattr(owner, name)
+        yield
+
+
+class ManagedPrerequisites(unittest.TestCase):
+    def test_missing_api_refuses_worker_before_legacy_state_mutation(self):
+        for owner, name in [(managed.os, 'pidfd_open'), (managed.signal, 'pidfd_send_signal')]:
+            with self.subTest(api=name), tempfile.TemporaryDirectory() as directory:
+                state = initial_state('idle', lifecycle=False)
+                state_file = Path(directory) / managed.STATE_FILE
+                state_file.write_text(json.dumps(state))
+                before = state_file.read_bytes()
+                adapter = NS(CLEAN_SHUTDOWN_REQUIRED=True, prepare=Mock(), Session=Mock())
+                with missing_api(owner, name), patch.object(managed, 'save') as save:
+                    with self.assertRaisesRegex(RuntimeError, name + ' unavailable'):
+                        asyncio.run(managed.worker(NS(state=Path(directory)), state, adapter))
+                self.assertEqual(state, json.loads(before))
+                self.assertEqual(state_file.read_bytes(), before)
+                save.assert_not_called()
+                adapter.prepare.assert_not_called()
+                adapter.Session.assert_not_called()
+
+    def test_missing_api_refuses_main_before_state_creation_and_leaves_status_usable(self):
+        adapter = NS(__doc__='fixture', arguments=lambda *a: None, prepare=Mock(),
+                     Session=Mock(), binding=Mock(), INITIAL_PATHS={'lock'}, RECOVERY_NOTE='fixture')
+        for owner, name in [(managed.os, 'pidfd_open'), (managed.signal, 'pidfd_send_signal')]:
+            with self.subTest(api=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                new = root / 'new'
+                argv = ['fixture', 'run', '--state', str(new), '--db', str(root / 'unused.db'),
+                        '--htalk', '/fixture/htalk', '--peer', 'receiver', '--allow-mail']
+                with missing_api(owner, name), patch.object(sys, 'argv', argv), \
+                        patch.object(managed, 'save') as save:
+                    with self.assertRaisesRegex(RuntimeError, name + ' unavailable'):
+                        managed.main(adapter)
+                self.assertFalse(new.exists())
+                save.assert_not_called()
+                adapter.binding.assert_not_called()
+                adapter.prepare.assert_not_called()
+                adapter.Session.assert_not_called()
+                state = initial_state('active')
+                state_file = root / managed.STATE_FILE
+                state_file.write_text(json.dumps(state))
+                before = state_file.read_bytes()
+                with missing_api(owner, name), patch.object(sys, 'argv',
+                        ['fixture', 'status', '--state', str(root)]), patch.object(managed, 'emit'):
+                    self.assertEqual(managed.main(adapter), 0)
+                self.assertEqual(state_file.read_bytes(), before)
+                argv[argv.index('--state') + 1] = str(root)
+                with missing_api(owner, name), patch.object(sys, 'argv', argv), \
+                        patch.object(managed, 'save') as save:
+                    with self.assertRaisesRegex(RuntimeError, name + ' unavailable'):
+                        managed.main(adapter)
+                self.assertEqual(state_file.read_bytes(), before)
+                self.assertFalse((root / 'lock').exists())
+                save.assert_not_called()
+                # Explicit passive retirement still works without process handles.
+                with missing_api(owner, name), patch.object(sys, 'argv',
+                        ['fixture', 'recover', '--state', str(root), '--discard-session',
+                         'session', '--disposition', 'settled']), patch.object(managed, 'emit'):
+                    self.assertEqual(managed.main(adapter), 0)
+                self.assertEqual(managed.read_state(root)['phase'], 'new')
+                receipt = json.loads(next((root / 'retired').glob('*.json')).read_text())
+                self.assertEqual(receipt['session_id'], 'session')
+                adapter.prepare.assert_not_called()
+                adapter.Session.assert_not_called()
+
+
+    def test_direct_legacy_idle_retirement_preserves_receipt_and_verified_idle_is_refused(self):
+        for flag in [agy.CLEAN_SHUTDOWN_REQUIRED, letta.CLEAN_SHUTDOWN_REQUIRED]:
+            with self.subTest(flag=flag), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                adapter = NS(__doc__='fixture', arguments=lambda *a: None,
+                    CLEAN_SHUTDOWN_REQUIRED=flag, prepare=Mock(), Session=Mock(), RECOVERY_NOTE='fixture')
+                state_file = root / managed.STATE_FILE
+                original = initial_state('idle', lifecycle=False)
+                state_file.write_text(json.dumps(original))
+                before = state_file.read_bytes()
+                argv = ['fixture', 'recover', '--state', str(root), '--discard-session',
+                        'wrong', '--disposition', 'settled']
+                with missing_api(managed.os, 'pidfd_open'), patch.object(sys, 'argv', argv), \
+                        patch.object(managed, 'emit'):
+                    with self.assertRaisesRegex(RuntimeError, 'Saved session differs'):
+                        managed.main(adapter)
+                    self.assertEqual(state_file.read_bytes(), before)
+                    argv[argv.index('--discard-session') + 1] = 'session'
+                    self.assertEqual(managed.main(adapter), 0)
+                receipt = json.loads(next((root / 'retired').glob('*.json')).read_text())
+                self.assertEqual(receipt, {**original, 'recovery_disposition': 'settled'})
+                self.assertEqual(managed.read_state(root)['phase'], 'new')
+                for phase in ['idle', 'new']:
+                    state_file.write_text(json.dumps(initial_state(phase)))
+                    before = state_file.read_bytes()
+                    with missing_api(managed.os, 'pidfd_open'), patch.object(sys, 'argv', argv):
+                        with self.assertRaisesRegex(RuntimeError, 'no uncertain dispatch'):
+                            managed.main(adapter)
+                    self.assertEqual(state_file.read_bytes(), before)
+                adapter.prepare.assert_not_called()
+                adapter.Session.assert_not_called()
 
 
 class AntigravityProtocol(unittest.IsolatedAsyncioTestCase):
