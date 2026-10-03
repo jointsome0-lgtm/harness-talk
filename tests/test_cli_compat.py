@@ -247,6 +247,54 @@ class SchemaCompatibility(HtalkCase):
         backup, = self.backups()
         self.assertEqual(before, self.snapshot(backup))
 
+    def test_send_and_reply_wait_after_migration_begins_without_replaying_it(self):
+        for version in (1, 2):
+            for command in ("send", "reply"):
+                with self.subTest(version=version, command=command):
+                    path = self.tmp / ("v%d-%s" % (version, command)) / "mail.sqlite3"
+                    ids = self.legacy_v1(path)
+                    if version == 2:
+                        self.sql("ALTER TABLE peers ADD COLUMN url TEXT", path=path)
+                        self.sql("PRAGMA user_version=2", path=path)
+                    before = self.snapshot(path)
+                    words = (["--as", "alice", "send", "bob", "--id", str(uuid.uuid4())]
+                             if command == "send" else ["--as", "bob", "reply", ids["q2"]])
+                    words += ["--message", "Migration commit contention", "--no-notify"]
+                    with closing(sqlite3.connect(path)) as reader:
+                        reader.execute("BEGIN")
+                        reader.execute("SELECT COUNT(*) FROM messages").fetchone()
+                        process = self.spawn(*words, db=path)
+
+                        def migration_wrote():
+                            if process.poll() is not None:
+                                stdout, stderr = process.communicate(timeout=5)
+                                self.fail("command exited before migration commit contention: %s\n%s\n%s"
+                                          % (process.returncode, stdout, stderr))
+                            # A verified backup requires successful migration BEGIN;
+                            # the journal then proves migration writes have started.
+                            return self.backups(path) and Path(str(path) + "-journal").exists()
+
+                        wait_for(migration_wrote, message="migration backup and write journal")
+                        time.sleep(.1)
+                        self.assertIsNone(process.poll(), "migration did not wait for the reader")
+                        self.assertFalse(Path(str(path) + "-htalk-turn").exists(),
+                                         "migration entered admission after its write transaction began")
+                        backup, = self.backups(path)
+                        self.assertEqual(before, self.snapshot(backup))
+                        self.assertEqual(version, reader.execute("PRAGMA user_version").fetchone()[0])
+                        reader.rollback()
+                    sent = self.finish(process)
+                    self.assert_current_schema(path)
+                    self.assertEqual([backup], self.backups(path), "migration was replayed")
+                    self.assertEqual(5, len(self.sql("SELECT id FROM messages", path=path)))
+                    self.assertEqual("Migration commit contention", sent["body"])
+                    self.assertEqual(ids["q2"] if command == "reply" else None, sent["in_reply_to"])
+                    repeated = self.htalk(*words, db=path)
+                    self.assertEqual((False, sent["id"]), (repeated["created"], repeated["id"]))
+                    self.assertEqual([("ok",)], self.sql("PRAGMA integrity_check", path=path))
+                    self.assertEqual([], self.sql("PRAGMA foreign_key_check", path=path))
+        self.assertEqual([], self.calls(), "--no-notify crossed a client boundary")
+
     def test_concurrent_first_opens_migrate_and_back_up_once(self):
         self.legacy_v1(self.db)
         before = self.snapshot(self.db)

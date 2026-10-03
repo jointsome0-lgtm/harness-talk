@@ -229,6 +229,7 @@ pub fn ensure(db: &mut Connection, path: &Path) -> Result<(), Error> {
 
 fn change(db: &mut Connection, path: &Path) -> Result<(), Error> {
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    crate::write_turn::started_write();
     let v = version(&tx)?;
     check_version(v)?;
     if v == SCHEMA_VERSION {
