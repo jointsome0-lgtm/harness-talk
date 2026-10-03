@@ -1,5 +1,30 @@
 # OpenCode sessions
 
+Checked on 2026-10-03 UTC with the htalk `0.11.1` x86-64 publication wheel,
+commit `3c86ebb62151fe77ef5019082269f3ea2020665f`, SHA-256
+`0283d9d04398fe884ee59834fa42bc90c4514ac24703df6a353f793d60b9427b`.
+The wheel and matching source archive came from
+[publication run 37141672055](https://github.com/jointsome0-lgtm/harness-talk/actions/runs/37141672055).
+OpenCode 1.18.32 used a fresh native headless server session, fake provider keys
+and canned loopback responses. Other tools were denied; only the bound htalk
+MCP tool was allowed. This was one of the 14 mandatory native client exchanges;
+the core Codex/Claude dialogue used actual models, while OpenCode and the other
+11 noncore clients used canned providers. See the
+[0.11.1 native check](checks/2026-10-03-0.11.1-native.md) for the full gate and
+publication evidence.
+
+One native notice led to full MCP show once, a separate request ACK and one
+correlated reply. The controller read and separately ACKed the reply. Both
+rows were ACKed, both final inboxes were empty, and the recorded owned processes
+and listeners closed. The server ended after controller SIGTERM with exit
+`-15`; this proves owned closure, not normal spontaneous exit. Requested port 0
+selected 4096, so an OS-assigned ephemeral port and historical port uniqueness
+were not proved. Native ACK cleanup was `unsupported`; controller cleanup was
+`skipped/pull_only`. TUI attachment, notification removal, external inference
+and model reasoning were not established. Provider configuration constrained
+the fixture; no OS egress firewall proof is claimed. Earlier dated checks below
+remain historical evidence.
+
 Checked on 2026-10-03 UTC with the htalk `0.11.0` x86-64 publication wheel,
 commit `a8177d79cf53f810c4db45007df99b66a945a680`, SHA-256
 `b3f098ad5cc63b8552bfbd98996e51678e69faf7c743b73aae2a01379c2df3b3`.
