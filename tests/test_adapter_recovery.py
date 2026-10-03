@@ -1,7 +1,8 @@
 """Synthetic adapter contracts. No installed SDK, provider, native client or mailbox."""
 import asyncio
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, redirect_stdout
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -430,12 +431,82 @@ class AntigravitySDKContracts(unittest.TestCase):
         self.assertFalse(worker.complete_response(agent, response, 'old'))
 
 
+class ManagedPersistenceProtocol(unittest.TestCase):
+    def test_save_emits_state_after_durable_replace(self):
+        state = {'version': 1, 'phase': 'idle', 'pending': None, 'last_seq': 7}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'state.json'
+            output = io.StringIO()
+            with redirect_stdout(output), patch.object(managed.os, 'fsync', wraps=os.fsync) as fsync:
+                managed.save(path, state)
+            self.assertEqual(json.loads(path.read_text()), state)
+            self.assertFalse(path.with_suffix('.tmp').exists())
+            self.assertEqual(fsync.call_count, 2)  # File, then replacement directory.
+            self.assertEqual(output.getvalue(), json.dumps({'event': 'state', **state}) + '\n')
+
+    def test_save_does_not_emit_when_durability_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'state.json'
+            output = io.StringIO()
+            with redirect_stdout(output), patch.object(managed.os, 'fsync', side_effect=OSError('fsync failed')):
+                with self.assertRaisesRegex(OSError, 'fsync failed'):
+                    managed.save(path, {'phase': 'active'})
+            self.assertEqual(output.getvalue(), '')
+            self.assertFalse(path.exists())
+
+
 class OpenHandsAdmission(unittest.TestCase):
+    def test_recovery_command_emits_only_final_state(self):
+        with tempfile.TemporaryDirectory() as directory:
+            ledger = oh.AdmissionLedger(directory)
+            try:
+                ledger.bind({'conversation_id': 'session'})
+                ledger.reserve('notice', 7)
+            finally:
+                ledger.close()
+            output = io.StringIO()
+            argv = ['openhands_receiver.py', 'htalk-recover', '--state', directory,
+                    '--conversation', 'session', '--message', 'notice', '--disposition', 'consumed']
+            with redirect_stdout(output), patch.object(oh.sys, 'argv', argv), patch.object(oh.os, 'umask'):
+                oh.main()
+            saved = json.loads((Path(directory) / 'state.json').read_text())
+            self.assertEqual((saved['phase'], saved['pending'], saved['last_seq']), ('idle', None, 7))
+            self.assertEqual(output.getvalue(), json.dumps({'event': 'state', **saved}) + '\n')
+
+    def test_mutations_and_recovery_persist_without_stdout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = io.StringIO()
+            with redirect_stdout(output):
+                ledger = oh.AdmissionLedger(directory)
+                try:
+                    binding = {'conversation_id': 'session'}
+                    transitions = [
+                        (lambda: ledger.bind(binding), ('active', None, 0)),
+                        (lambda: ledger.reserve('notice', 7), ('active', {'id': 'notice', 'seq': 7}, 0)),
+                        (lambda: ledger.consume('notice', 7), ('active', None, 7)),
+                        (ledger.finish, ('idle', None, 7)),
+                    ]
+                    for mutate, expected in transitions:
+                        mutate()
+                        saved = json.loads(ledger.path.read_text())
+                        self.assertEqual((saved['phase'], saved['pending'], saved['last_seq']), expected)
+                        self.assertFalse(ledger.path.with_suffix('.tmp').exists())
+                    ledger.bind(binding)
+                    ledger.reserve('uncertain', 8)
+                    ledger.recover('session', 'uncertain', 'consumed')
+                    saved = json.loads(ledger.path.read_text())
+                    self.assertEqual((saved['phase'], saved['pending'], saved['last_seq']), ('idle', None, 8))
+                    receipt = json.loads(next((Path(directory) / 'recovery').glob('*.json')).read_text())
+                    self.assertEqual(receipt['pending'], {'id': 'uncertain', 'seq': 8})
+                finally:
+                    ledger.close()
+            self.assertEqual(output.getvalue(), '')
+
     def test_crash_guard_exact_binding_and_explicit_consumed_recovery(self):
         with tempfile.TemporaryDirectory() as directory:
             ledger = oh.AdmissionLedger(directory)
             binding = {'conversation_id': 'session', 'peer': 'peer', 'db': '/unused', 'htalk': '/fake'}
-            with patch.object(oh, 'save', wraps=managed.save), patch.object(managed, 'emit'):
+            with patch.object(oh, 'save_state', wraps=managed.save_state), patch.object(managed, 'emit'):
                 ledger.bind(binding)
                 ledger.reserve('notice', 7)
                 ledger.close()  # Model controller/lock loss, not a native crash.

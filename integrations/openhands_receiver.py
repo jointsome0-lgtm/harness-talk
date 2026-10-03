@@ -10,7 +10,7 @@ import shutil
 import sys
 import uuid
 
-from managed_receiver import save
+from managed_receiver import emit, save_state
 
 
 class AdmissionLedger:
@@ -44,24 +44,24 @@ class AdmissionLedger:
             self.state = {"version": 1, "binding": binding, "phase": "idle", "pending": None,
                           "last_seq": 0}
         self.state["phase"] = "active"
-        save(self.path, self.state)
+        save_state(self.path, self.state)
 
     def reserve(self, message_id, seq):
         if self.state["pending"] is not None or seq <= self.state["last_seq"]:
             raise RuntimeError("Unexpected concurrent or repeated notice admission")
         self.state["pending"] = {"id": message_id, "seq": seq}
-        save(self.path, self.state)
+        save_state(self.path, self.state)
 
     def consume(self, message_id, seq):
         if self.state["pending"] != {"id": message_id, "seq": seq}:
             raise RuntimeError("Uncorrelated native notice completion")
         self.state.update(last_seq=seq, pending=None)
-        save(self.path, self.state)
+        save_state(self.path, self.state)
 
     def finish(self):
         if self.state["pending"] is None:
             self.state["phase"] = "idle"
-            save(self.path, self.state)
+            save_state(self.path, self.state)
 
     def recover(self, conversation_id, message_id, disposition):
         if self.state is None or self.state["phase"] != "active":
@@ -75,11 +75,11 @@ class AdmissionLedger:
             raise RuntimeError("No pending admission; use consumed without --message")
         retired = self.directory / "recovery"
         retired.mkdir(exist_ok=True)
-        save(retired / f"{uuid.uuid4()}.json", {**self.state, "disposition": disposition})
+        save_state(retired / f"{uuid.uuid4()}.json", {**self.state, "disposition": disposition})
         if pending and disposition == "consumed":
             self.state["last_seq"] = pending["seq"]
         self.state.update(phase="idle", pending=None)
-        save(self.path, self.state)
+        save_state(self.path, self.state)
 
     def close(self):
         self.lock.close()
@@ -276,6 +276,7 @@ def main():
                 if not args.conversation or not args.disposition:
                     parser.error("Recovery requires --conversation and --disposition")
                 ledger.recover(args.conversation, args.message, args.disposition)
+                emit("state", **ledger.state)
         finally:
             ledger.close()
         return

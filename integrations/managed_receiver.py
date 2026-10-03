@@ -22,7 +22,8 @@ def emit(event, **fields):
     print(json.dumps({"event": event, **fields}), flush=True)
 
 
-def save(path, state):
+def save_state(path, state):
+    """Durably replace state without emitting a protocol event."""
     temporary = path.with_suffix(".tmp")
     with temporary.open("w") as stream:
         json.dump(state, stream)
@@ -34,6 +35,10 @@ def save(path, state):
         os.fsync(directory)
     finally:
         os.close(directory)
+
+
+def save(path, state):
+    save_state(path, state)
     emit("state", **state)
 
 

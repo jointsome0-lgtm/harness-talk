@@ -116,6 +116,20 @@ pub fn run_command(
     args: &[&str],
     timeout: Duration,
 ) -> Result<std::process::Output, Failure> {
+    run_command_with_group(
+        program,
+        args,
+        timeout,
+        crate::process_cleanup::OwnedGroup::new,
+    )
+}
+
+fn run_command_with_group(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+    make_group: impl FnOnce(u32) -> io::Result<crate::process_cleanup::OwnedGroup>,
+) -> Result<std::process::Output, Failure> {
     use std::os::{fd::AsRawFd, unix::process::CommandExt};
     use std::{
         io::Read,
@@ -130,8 +144,7 @@ pub fn run_command(
         .stderr(Stdio::piped())
         .process_group(0)
         .spawn()?;
-    // After inspection failure, only reap for a bounded interval. A numeric
-    // PID signal would assume the ownership premise which just failed.
+    // Keep direct-child reaping bounded even if termination cannot complete.
     fn reap_direct(child: &mut std::process::Child) {
         let deadline = Instant::now() + Duration::from_secs(2);
         while Instant::now() < deadline {
@@ -153,9 +166,12 @@ pub fn run_command(
         }
         child.wait()
     }
-    let mut group = match crate::process_cleanup::OwnedGroup::new(child.id()) {
+    let mut group = match make_group(child.id()) {
         Ok(group) => group,
         Err(e) => {
+            // The retained, unreaped Child still owns this direct process.
+            // Group ownership has not been established, so signal no group.
+            let _ = child.kill();
             reap_direct(&mut child);
             return Err(e.into());
         }
@@ -229,3 +245,7 @@ pub fn run_command(
         thread::sleep(Duration::from_millis(5));
     }
 }
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "../tests/unit/os_process_cleanup.rs"]
+mod process_cleanup_tests;
