@@ -1327,6 +1327,28 @@ class WriteAdmission(HtalkCase):
         db.execute(statement)
         return db
 
+    def admission_locks(self, identity):
+        """Read kernel lock owners and waiters for one admission directory."""
+        try:
+            lines = Path("/proc/locks").read_text().splitlines()
+        except OSError as exc:
+            self.fail("admission readiness requires readable /proc/locks: %s" % exc)
+        matches = []
+        for line in lines:
+            fields = line.split()
+            blocked = len(fields) > 1 and fields[1] == "->"
+            fields = fields[2:] if blocked else fields[1:]
+            try:
+                kind, scope, mode, pid, key, start, end = fields
+                major, minor, inode = key.split(":")
+                key = (int(major, 16), int(minor, 16), int(inode))
+                owner = int(pid)
+            except ValueError:
+                self.fail("unsupported /proc/locks entry: %r" % line)
+            if key == identity:
+                matches.append((blocked, kind, scope, mode, owner, start, end))
+        return matches
+
     def test_contended_send_keeps_the_first_message_file_contents(self):
         body = self.tmp / "body.txt"
         body.write_bytes(b"First\r\nSecond\rThird")
@@ -1356,14 +1378,45 @@ class WriteAdmission(HtalkCase):
         holder = os.open(self.turn, os.O_RDONLY | os.O_DIRECTORY)
         self.addCleanup(os.close, holder)
         fcntl.flock(holder, fcntl.LOCK_EX)
+        directory = os.fstat(holder)
+        identity = (os.major(directory.st_dev), os.minor(directory.st_dev), directory.st_ino)
+        held = (False, "FLOCK", "ADVISORY", "WRITE", os.getpid(), "0", "EOF")
+        self.assertEqual([held], self.admission_locks(identity),
+                         "cannot observe the held admission FLOCK; /proc/locks observation unsupported")
         writer = self.hold("BEGIN IMMEDIATE")
         proc = self.spawn("--as", "alice", "send", "bob", "--message", "Interrupted", "--no-notify")
-        tasks = Path("/proc") / str(proc.pid) / "task"
-        wait_for(lambda: len(list(tasks.iterdir())) >= 2, message="admission helper waiting")
+        waiting = (True, "FLOCK", "ADVISORY", "WRITE", proc.pid, "0", "EOF")
+
+        def blocked_on_admission():
+            if proc.poll() is not None:
+                stdout, stderr = proc.communicate(timeout=5)
+                self.fail("send exited before its admission FLOCK waiter was observed: exit %s\nstdout=%s\nstderr=%s"
+                          % (proc.returncode, stdout, stderr))
+            locks = self.admission_locks(identity)
+            self.assertIn(held, locks, "the admission holder disappeared before interruption")
+            return waiting in locks
+
+        # Observe readiness before the CLI's five-second admission timeout.
+        wait_for(blocked_on_admission, timeout=3, message="this child's blocked admission FLOCK on %r" % (identity,))
         writer.rollback()
         proc.send_signal(signal.SIGINT)
         self.assertEqual("interrupted", self.finish(proc, code=130)["state"])
         self.assertEqual([], self.sql("SELECT id FROM messages"))
+        self.assertFalse(Path("/proc/%d" % proc.pid).exists(), "the interrupted child still has process resources")
+        self.assertTrue(proc.stdout.closed)
+        self.assertTrue(proc.stderr.closed)
+        self.assertEqual([held], self.admission_locks(identity), "the child's admission lock waiter survived exit")
+        fcntl.flock(holder, fcntl.LOCK_UN)
+        self.assertEqual([], self.admission_locks(identity))
+        probe = os.open(self.turn, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            self.assertEqual(directory.st_ino, os.fstat(probe).st_ino)
+            self.assertEqual(directory.st_dev, os.fstat(probe).st_dev)
+            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertEqual([held], self.admission_locks(identity))
+        finally:
+            os.close(probe)
+        self.assertEqual([], self.admission_locks(identity))
 
     def test_admission_is_released_before_the_notification_attempt(self):
         ident = str(uuid.uuid4())
