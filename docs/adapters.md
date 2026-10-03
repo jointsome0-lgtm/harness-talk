@@ -1,5 +1,85 @@
 # Client adapters
 
+Checked on 2026-10-03 UTC with the htalk `0.11.0` x86-64 publication wheel,
+commit `a8177d79cf53f810c4db45007df99b66a945a680`, SHA-256
+`b3f098ad5cc63b8552bfbd98996e51678e69faf7c743b73aae2a01379c2df3b3`.
+The wheel and matching source archive came from
+[publication run 37088715347](https://github.com/jointsome0-lgtm/harness-talk/actions/runs/37088715347).
+All 119 included Git files matched the release tree, including all 34 adapter
+files. Each client used a fresh profile and mailbox, the wheel executable, and
+adapters from that source archive.
+
+Codex CLI 0.160.0 with GPT-6.1 Sol high and Claude Code 2.1.288 with
+Opus 5.5 high completed both initiating directions. Four native notices led to
+full show results before separate ACKs, two correlated replies, and two empty
+final native inboxes. All four messages were submitted and ACKed. Codex retained
+workspace-write and normal approval review, with individually reviewed host
+execution for the exact htalk commands. Claude retained manual per-command
+approvals and managed restrictions. Recorded owned processes closed and protected
+configuration hashes were unchanged. ACK cleanup was `absent` for Codex and
+`unsupported` for Claude; neither proves notification removal.
+
+Earlier core attempts exposed fixture-controller errors, a completed recipient
+discovery rejection, and a missed manual approval deadline after confirmed native
+delivery and show. They remain separate records without replay. A separate
+no-model probe found that an owned host PID was invisible in the default
+executor's different PID namespace. The earlier native command did not record
+its namespace, so this is a plausible explanation rather than a proven cause of
+that rejection. The passing case verified host visibility before sending and
+used ordinary approvals for its exact commands.
+
+All three published PyPI files match the checked workflow artifacts. A clean installation outside the checkout passed version, help and dependency checks, and its binary hash matches the one used for the native checks.
+
+The following installed clients each received a native notice, executed show
+before a separate request ACK, and produced one correlated reply. The controller
+read and ACKed the reply. Each passing case ended with two ACKed rows and empty
+inboxes. These checks used local canned provider responses, so they establish
+native transport and tool execution rather than model reasoning.
+
+| Client | Version | Permission mode | Native ACK notification cleanup |
+| --- | --- | --- | --- |
+| OpenCode | 1.18.32 | Other tools denied; only the bound htalk MCP tool allowed | `unsupported` |
+| Pi | 0.87.1 | Normal bash tool | `skipped/pull_only` |
+| OMP | 18.3.0 | Always-ask; three one-time tool approvals | `skipped/pull_only` |
+| OpenClaw | 2026.9.6, revision `eb377ac` | Only htalk enabled; recurring heartbeat disabled | `skipped/pull_only` |
+| Cline | 3.0.65, Core 0.0.86 | Automatic approval disabled; three exact one-time approvals | `skipped/pull_only` |
+| Kilo | 7.7.9 | Other tools denied; three exact one-time approvals | `unsupported` |
+| Goose | 1.52.0 | Approve mode; three manual `allow_once` approvals | `skipped/pull_only` |
+| Hermes | 0.21.5, revision `421f9592` | Native tool loop with the adapter's explicit mailbox command set | `skipped/pull_only` |
+| GitHub Copilot CLI | 1.0.88 | Isolated folder trust and one-time wait/tool approvals | `skipped/pull_only` |
+| Gemini CLI | 0.61.0 | Isolated folder trust and three `Allow once` tool approvals | `skipped/pull_only` |
+| Letta Code | 0.33.0 | Strict mode and shipped always-ask htalk tool; mailbox-only approval callback | `skipped/pull_only` |
+| OpenHands | CLI 1.16.0, SDK 1.21.0 | Three separately inspected native `Yes` confirmations | `skipped/pull_only` |
+
+OpenCode used a headless server session. Kilo used a server with an attached
+TUI. Goose used a separate managed ACP session. The other watcher and managed
+routes delivered notices through their native adapters while the core mailbox
+reported pull delivery. Their cleanup status does not claim core push or notice
+removal. The controller's ACK cleanup was `skipped/pull_only` in these cases.
+
+The recorded owned processes and listeners closed. Hermes and Gemini completed
+the exchange but did not exit normally within the fixture's ten-second bound;
+the fixture terminated their owned processes. Their aggregate fixture result
+remains false. Hermes also made an extra local provider request rejected by a
+guard; its cause remains unresolved. OpenClaw downloaded its remote model
+catalogue during startup, although inference used the local provider.
+
+Two earlier Cline fixtures stopped before mail or provider calls. Two earlier
+OpenHands fixtures failed on event parsing and confirmation timing; their
+requests remained unACKed and had no replies. Later checks used fresh mailboxes
+and new requests. These earlier attempts remain separate observations.
+
+Antigravity's ordinary CLI was present, but a compatible managed SDK interpreter
+was not found in the checked environments. Agent Zero's framework/runtime was
+also unavailable at the checked locations. Neither received a new native check;
+this does not establish that no other installation exists. Their older dated
+observations remain below.
+
+These checks do not establish native crash durability, recovery after physical
+network loss, exactly-once external work, or automatic failover. Mailbox schema
+remains 3. See the [0.11.0 upgrade requirements](releases/0.11.0.md) before
+restarting managed receivers.
+
 Checked on 2026-10-01 UTC with the htalk `0.10.0` publication wheel,
 commit `0498932f887865737a6df887773c76c14954dd51`, SHA-256
 `3bdd20ad5c0af3704b55948efbf097b3bd03832c187229cc16c331405a22038c`.
