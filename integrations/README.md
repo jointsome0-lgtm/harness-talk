@@ -123,6 +123,21 @@ CLI without a shell and returns its output. When narrowing Hermes toolsets,
 include `htalk`, for example `hermes --cli --toolsets terminal,htalk`. A tool
 timeout does not prove a write failed; inspect `sent` before retrying.
 
+The Hermes tool permits `inbox`, `show`, `ack`, `send`, `reply`, `sent`, `wait`,
+`peer list`, `peer check`, and help/version options. Setup, discovery, migration,
+watch, MCP server and receiver commands require the operator's CLI. The child
+has no access to Hermes stdin. Send/reply retain CLI body options, including
+`--message-file`, which reads a local text file using the Hermes host's filesystem
+and permissions.
+
+Hermes, OpenClaw and Agent Zero direct tools recommend generating and saving a
+new UUID before `send`, then passing `--id YOUR_NEW_UUID`. The option remains
+optional in these tools; htalk generates an ID when it is omitted. Inspect the
+saved receipt with `show`, or recover outgoing IDs with `sent`, before considering
+an explicit retry. Keep the original UUID, recipient and body unchanged, and
+never resend uncertain work under a new ID. These tools do not retry automatically.
+The MCP tool has its own stricter command, file-input and required-ID contract.
+
 For sessions using only a few tools, Hermes's `tools.tool_search.enabled: "off"`
 setting exposes their schemas directly. This avoids separate search/describe
 calls before htalk can be used. Local Hermes tools accept one call at a time;
@@ -368,9 +383,12 @@ normally, then use this launcher:
 ```sh
 htalk peer add hands-worker --harness openhands --delivery pull
 export HTALK_PEER=hands-worker HTALK_DB=/absolute/shared/mail.sqlite3
+export HTALK_OPENHANDS_STATE=/absolute/private/hands-worker-admission
 /absolute/path/to/openhands-venv/bin/python \
   "$HTALK_SOURCE/integrations/openhands_receiver.py"
 ```
+
+The admission-state directory is now required and belongs to one conversation and mailbox binding. After an uncertain stop, the launcher refuses to start native work until explicit inspection and recovery; see [OpenHands recovery](openhands.md). Earlier launches had no ledger, so their prior notice consumption cannot be reconstructed automatically. The new admission/recovery boundaries have synthetic contract coverage; native crash behavior remains unverified.
 
 The Python executable must belong to the environment containing OpenHands.
 The launcher accepts its ordinary CLI arguments and preserves model settings,
@@ -381,7 +399,7 @@ message controller. The controller renders the input. A check when consuming
 the notice also defers it during pauses and approval prompts, so an arrival
 cannot implicitly confirm an action. The receiver binds to the conversation selected at
 startup; changing conversation makes further delivery fail visibly. Restart
-the launcher to bind another conversation after inspecting saved mail.
+the launcher with a separate admission-state directory to bind another conversation after inspecting saved mail.
 
 A canned-provider check delivered one notice while idle and a second during a
 held model call. Each appeared once, both completed native MCP show/ACK/reply,
@@ -553,6 +571,8 @@ pipe also stops a watcher left behind by an abrupt harness exit.
 For separate persistent sessions, see the [managed Goose adapter](goose.md),
 [managed Letta adapter](letta.md) and [Antigravity SDK adapter](antigravity.md).
 They share the notice and recovery loop.
+
+The managed Python receivers require Linux 5.3 or newer with pidfds and readable `/proc` stat entries for their effective UID and ambiguous root-owned processes. A preflight rejects unsupported hosts before native launch. Shutdown tracks processes that stay in the managed session and group with the launcher's effective UID. Changed credentials, escaped groups and forks after all known ownership anchors exit are outside this guarantee; an uncertain cleanup requires inspection rather than a successful stop receipt.
 All three are included in the 0.8.0 source archive and do not attach to the terminals
 described below.
 

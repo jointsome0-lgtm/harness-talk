@@ -6,7 +6,12 @@ The executable is Rust. Python 3.11+ is used for package installation and the in
 cargo build --locked
 cargo test --locked
 python3 -B -m unittest discover -s tests -p 'test_*.py' -v
+node --experimental-vm-modules --test tests/test_js_watchers.mjs
 ```
+
+Python adapter tests cover owned stdin, mailbox command selection, and recovery boundaries with fake SDK protocols and disposable processes. CI runs these tool and recovery fixtures on both CI Python versions. They do not establish provider durability or native crash recovery.
+
+JavaScript watcher tests require Node 24 and use the actual adapters with modeled SDK calls and disposable local watcher processes. They need no npm dependencies and do not establish native client compatibility.
 
 The CLI suite uses `target/debug/htalk`, temporary databases, fake client executables, Unix sockets and a loopback HTTP server. It never falls back to an installed `htalk`. To test a specific executable, set `HTALK_TEST_COMMAND` to a JSON argument list starting with its absolute path.
 
@@ -21,14 +26,36 @@ separate temporary endpoint.
 
 The CLI suite covers registration, request/reply/ACK states, pagination, recovery, migration and native/pull exchanges. Rust tests cover storage races and adapter-specific identity, discovery and delivery failures. Keep a behavior in one layer when another test already exercises the same failure; retain separate tests for distinct races and transport boundaries.
 
-Two MCP cases exercise the same compiled executable through stdio: message
-exchange with pinned identity and saved-error reporting, and cancellation or
-client loss without duplicate writes or leftover children. They also check that
-terminal Ctrl-C preserves the server connection. Run these on a host that permits
+MCP tests exercise the same compiled executable through stdio. They cover
+message exchange with pinned identity and saved-error reporting, legacy tool
+arguments through an unbound connector, reconnecting after remote failure
+without replaying a lost write, and cancellation or client loss without duplicate
+writes or leftover children. They also check that terminal Ctrl-C preserves the
+server connection. Run these on a host that permits
 async signal/IPC handling; restricted sandboxes can prevent that handling.
 The receiver cancellation checks require the same host access; a sandbox-only
 shutdown timeout must be compared with an ordinary host run before changing
 the product's signal handling.
+
+Rust MCP connectors, watch receivers and bounded command capture use Linux
+pidfds and readable `/proc` process metadata to stop their private groups. This
+requires Linux 5.3 or newer. The direct child remains unreaped until cleanup
+finishes; signals target inspected process handles, so a saved numeric group ID
+cannot target a later group. Cleanup covers members that remain in the group
+with process metadata owned by the current effective UID. Escaped descendants,
+changed ownership and inaccessible metadata are outside the success guarantee;
+inspection failures produce errors. Two-second TERM grace and four-second cleanup
+budgets are checked between `/proc` scans; scanning and scheduler delays can
+extend elapsed cleanup time.
+
+Managed Python receivers require Linux kernel 5.3 or newer, Python 3.11+ with
+`os.pidfd_open` and `signal.pidfd_send_signal`, and a mounted `/proc` readable
+for entries owned by the launcher's effective UID and ambiguous root-owned
+processes. They check this support
+before native launch and refuse to launch on unsupported hosts. Group cleanup
+covers members that remain in the managed session and process group and retain
+that UID. Descendants that leave the group or change UID are outside this
+guarantee. Isolated process fixtures do not verify native adapter cleanup.
 
 Check what each assertion protects for the caller before preserving it. Old Python behavior and a passing test do not establish a requirement. Compare JSON fields and values without requiring key order or spacing. Isolate invalid inputs unless error precedence itself affects recovery. Delivery outcomes must follow whether submission could have begun, not the exception class that happened to escape an older adapter.
 

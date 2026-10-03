@@ -50,17 +50,33 @@ jobs:
           fi
           python -m twine check --strict dist/*
           sha256sum dist/*
+      - name: Test adapter hook lifecycle
+        run: python -B -m unittest discover -s tests -p test_hook_lifecycle.py -v
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Test JavaScript watcher lifecycle
+        run: node --experimental-vm-modules --test tests/test_js_watchers.mjs
+      - name: Test adapter tool and recovery contracts
+        run: |
+          python -B -m unittest discover -s tests -p test_agent_tools.py -v
+          python -B -m unittest discover -s tests -p test_adapter_recovery.py -v
+      - name: Test managed receiver process cleanup
+        run: python -B -m unittest discover -s tests -p test_managed_receiver.py -v
       - name: Test the installed wheel outside the checkout
         run: |
           wheel=(dist/*.whl)
           python -m pip install "${wheel[0]}"
           python -m pip check
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends openssh-server
+          export HTALK_TEST_SSHD=/usr/sbin/sshd
           export HTALK_TEST_COMMAND="$(python -c 'import json, shutil; print(json.dumps([shutil.which("htalk")]))')"
-          cp tests/compat_support.py tests/test_cli_compat.py tests/test_mcp.py tests/test_receive.py tests/test_catalog.py tests/test_catalog_channels.py "$RUNNER_TEMP/"
+          cp tests/compat_support.py tests/test_cli_compat.py tests/test_mcp.py tests/test_receive.py tests/test_catalog.py tests/test_catalog_channels.py tests/test_mail_recovery.py tests/test_rust_process_cleanup.py "$RUNNER_TEMP/"
           cd "$RUNNER_TEMP"
           htalk --version
           htalk --help
-          python -B -m unittest test_cli_compat test_mcp test_receive test_catalog test_catalog_channels -v
+          python -B -m unittest test_cli_compat test_mcp test_receive test_catalog test_catalog_channels test_mail_recovery test_rust_process_cleanup -v
       - name: Test source archive installation
         if: matrix.arch == 'x86_64'
         run: |

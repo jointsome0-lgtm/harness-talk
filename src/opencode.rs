@@ -21,7 +21,7 @@ use serde_json::{Map, Value, json};
 use std::{
     env, fs,
     io::{self, Read, Write},
-    net::{IpAddr, TcpStream, ToSocketAddrs},
+    net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -345,13 +345,13 @@ fn tls(stream: TcpStream, host: &str, port: u16) -> Result<Conn, ureq::Error> {
 }
 
 /// Buffered reads with `http.client`'s limits and exception classes.
-struct Reader {
-    conn: Conn,
+struct Reader<R = Conn> {
+    conn: R,
     buf: Vec<u8>,
     pos: usize,
     eof: bool,
 }
-impl Reader {
+impl<R: Read> Reader<R> {
     fn fill(&mut self) -> Result<bool, &'static str> {
         if self.eof {
             return Ok(false);
@@ -364,7 +364,11 @@ impl Reader {
         let n = loop {
             match self.conn.read(&mut chunk) {
                 Ok(n) => break n,
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => {
+                    if os::interrupted() {
+                        return Err("KeyboardInterrupt");
+                    }
+                }
                 Err(e) => return Err(io_class(&e)),
             }
         };
@@ -394,6 +398,17 @@ impl Reader {
             }
         }
     }
+    /// A framing line needs a real terminator; EOF is not an empty line.
+    fn framed_line(&mut self) -> Result<Vec<u8>, &'static str> {
+        let line = self.readline(MAX_LINE + 1)?;
+        if line.len() > MAX_LINE {
+            return Err("LineTooLong");
+        }
+        if !line.ends_with(b"\n") {
+            return Err("IncompleteRead");
+        }
+        Ok(line)
+    }
     /// Up to `n` bytes, fewer only at EOF.
     fn read(&mut self, n: usize) -> Result<Vec<u8>, &'static str> {
         while self.buf.len() - self.pos < n && self.fill()? {}
@@ -422,13 +437,16 @@ fn latin1(bytes: &[u8]) -> String {
     bytes.iter().map(|b| *b as char).collect()
 }
 
-fn read_status(r: &mut Reader) -> Result<(String, i128), &'static str> {
+fn read_status(r: &mut Reader<impl Read>) -> Result<(String, i128), &'static str> {
     let line = r.readline(MAX_LINE + 1)?;
     if line.len() > MAX_LINE {
         return Err("LineTooLong");
     }
     if line.is_empty() {
         return Err("RemoteDisconnected");
+    }
+    if !line.ends_with(b"\n") {
+        return Err("IncompleteRead");
     }
     let text = latin1(&line);
     let mut words = text.split(is_py_space).filter(|w| !w.is_empty());
@@ -449,18 +467,15 @@ fn read_status(r: &mut Reader) -> Result<(String, i128), &'static str> {
     Ok((version.to_owned(), status))
 }
 
-fn read_header_block(r: &mut Reader) -> Result<Vec<u8>, &'static str> {
+fn read_header_block(r: &mut Reader<impl Read>) -> Result<Vec<u8>, &'static str> {
     let (mut block, mut count) = (Vec::new(), 0);
     loop {
-        let line = r.readline(MAX_LINE + 1)?;
-        if line.len() > MAX_LINE {
-            return Err("LineTooLong");
-        }
+        let line = r.framed_line()?;
         count += 1;
         if count > MAX_HEADERS {
             return Err("HTTPException");
         }
-        if matches!(line.as_slice(), b"\r\n" | b"\n" | b"") {
+        if matches!(line.as_slice(), b"\r\n" | b"\n") {
             return Ok(block);
         }
         block.extend_from_slice(&line);
@@ -536,31 +551,25 @@ fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
         .map(|(_, v)| v.as_str())
 }
 
-fn read_chunked(r: &mut Reader, mut amt: usize) -> Result<Vec<u8>, &'static str> {
+fn read_chunked(r: &mut Reader<impl Read>, mut amt: usize) -> Result<Vec<u8>, &'static str> {
     let mut out = Vec::new();
     let mut left: Option<usize> = None;
     loop {
         let chunk = match left {
             Some(n) if n > 0 => n,
             _ => {
-                if left.is_some() {
-                    r.safe_read(2)?;
+                if left.is_some() && r.safe_read(2)? != b"\r\n" {
+                    return Err("invalid_response");
                 }
-                let line = r.readline(MAX_LINE + 1)?;
-                if line.len() > MAX_LINE {
-                    return Err("LineTooLong");
-                }
+                let line = r.framed_line()?;
                 let size = line.split(|b| *b == b';').next().unwrap_or_default();
                 let size = py_int(size, 16)
                     .filter(|n| *n >= 0)
                     .ok_or("IncompleteRead")?;
                 if size == 0 {
                     loop {
-                        let line = r.readline(MAX_LINE + 1)?;
-                        if line.len() > MAX_LINE {
-                            return Err("LineTooLong");
-                        }
-                        if matches!(line.as_slice(), b"\r\n" | b"\n" | b"") {
+                        let line = r.framed_line()?;
+                        if matches!(line.as_slice(), b"\r\n" | b"\n") {
                             return Ok(out);
                         }
                     }
@@ -579,7 +588,7 @@ fn read_chunked(r: &mut Reader, mut amt: usize) -> Result<Vec<u8>, &'static str>
 }
 
 /// Read a framed response, capped at MAX_RESPONSE + 1 to detect oversized bodies.
-fn read_response(r: &mut Reader) -> Result<(i128, Vec<u8>), &'static str> {
+fn read_response(r: &mut Reader<impl Read>) -> Result<(i128, Vec<u8>), &'static str> {
     let (version, status) = loop {
         let (version, status) = read_status(r)?;
         if status != 100 {
@@ -628,6 +637,17 @@ fn read_response(r: &mut Reader) -> Result<(i128, Vec<u8>), &'static str> {
         None => r.read(amt)?,
     };
     Ok((status, body))
+}
+
+/// Resolver configuration must not widen the registered loopback destination.
+fn connect_loopback<T>(
+    addrs: impl IntoIterator<Item = SocketAddr>,
+    mut connect: impl FnMut(SocketAddr) -> Option<T>,
+) -> Option<T> {
+    addrs
+        .into_iter()
+        .filter(|addr| addr.ip().is_loopback())
+        .find_map(&mut connect)
 }
 
 struct Server {
@@ -687,10 +707,10 @@ impl Server {
         let addrs = (self.host.as_str(), self.port)
             .to_socket_addrs()
             .map_err(|_| unreachable())?;
-        let stream = addrs
-            .into_iter()
-            .find_map(|addr| TcpStream::connect_timeout(&addr, TIMEOUT).ok())
-            .ok_or_else(unreachable)?;
+        let stream = connect_loopback(addrs, |addr| {
+            TcpStream::connect_timeout(&addr, TIMEOUT).ok()
+        })
+        .ok_or_else(unreachable)?;
         stream
             .set_read_timeout(Some(TIMEOUT))
             .and_then(|_| stream.set_write_timeout(Some(TIMEOUT)))
@@ -764,6 +784,10 @@ impl Server {
             pos: 0,
             eof: false,
         };
+        // Check after TCP/TLS setup too, immediately before the first request byte.
+        if os::interrupted() {
+            return Err(Req::Before(Failure::Class("KeyboardInterrupt")));
+        }
         reader
             .conn
             .write_all(message.as_bytes())
@@ -900,6 +924,9 @@ pub fn notify(peer: &Peer, body: &str, skip: Skip<'_>) -> Outcome {
         Ok((_, Some(reason))) => return Outcome::not_submitted(reason.as_str()),
         Ok((server, None)) => server,
     };
+    if os::interrupted() {
+        return Outcome::not_submitted("KeyboardInterrupt");
+    }
     let path = format!("/session/{}/prompt_async", quote(&peer.session_id, false));
     match server.request("POST", &path, Some(&peer.workspace), Some(body)) {
         Err(Req::Before(failure)) => Outcome::not_submitted(failure.to_string()),
@@ -1030,12 +1057,6 @@ fn server_sessions(url: &str, workspace: Option<&str>) -> (Vec<Value>, Value) {
     (found, source)
 }
 
-enum Cell {
-    Int(i64),
-    Text(String),
-    Other,
-}
-
 /// Unarchived root sessions from the local SQLite metadata, read-only. Liveness is unknown.
 fn saved_sessions(path: &Path) -> (Vec<Value>, Value) {
     let mut source = json!({"harness": "opencode", "source": "opencode_saved", "path": path_text(path), "status": "ok",
@@ -1057,29 +1078,29 @@ fn saved_sessions(path: &Path) -> (Vec<Value>, Value) {
             WHERE parent_id IS NULL AND time_archived IS NULL
             ORDER BY time_updated DESC LIMIT ?",
         )?;
-        let cell = |value: ValueRef<'_>| -> Result<Cell, Failure> {
-            Ok(match value {
-                ValueRef::Integer(v) => Cell::Int(v),
-                ValueRef::Text(t) => Cell::Text(
-                    std::str::from_utf8(t)
-                        .map_err(|_| Failure::Class("OperationalError"))?
-                        .to_owned(),
-                ),
-                _ => Cell::Other,
-            })
+        let text = |value: ValueRef<'_>| match value {
+            ValueRef::Text(t) => std::str::from_utf8(t).ok().map(str::to_owned),
+            _ => None,
         };
         let mut rows = statement.query([SAVED_LIMIT as i64 + 1])?;
         let mut out = Vec::new();
+        let mut limited = false;
         while let Some(row) = rows.next()? {
-            out.push((
-                cell(row.get_ref(0)?)?,
-                cell(row.get_ref(1)?)?,
-                cell(row.get_ref(2)?)?,
-            ));
+            // The extra row detects the limit; its cells are never interpreted.
+            if out.len() == SAVED_LIMIT {
+                limited = true;
+                break;
+            }
+            // Timestamps are optional integers. Do not decode unused TEXT values.
+            let updated = match row.get_ref(2)? {
+                ValueRef::Integer(v) => Some(v),
+                _ => None,
+            };
+            out.push((text(row.get_ref(0)?), text(row.get_ref(1)?), updated));
         }
-        Ok::<_, Failure>(out)
+        Ok::<_, Failure>((out, limited))
     })();
-    let mut rows = match rows {
+    let (rows, limited) = match rows {
         Ok(rows) => rows,
         Err(failure) => {
             source["status"] = json!("unavailable");
@@ -1091,30 +1112,24 @@ fn saved_sessions(path: &Path) -> (Vec<Value>, Value) {
             return (Vec::new(), source);
         }
     };
-    if rows.len() > SAVED_LIMIT {
-        rows.truncate(SAVED_LIMIT);
+    if limited {
         source["status"] = json!("partial");
         source["detail"] = json!("opencode_saved_session_limit_reached");
     }
     for (id, directory, updated) in rows {
         let row = match (&id, &directory) {
-            (Cell::Text(id), Cell::Text(directory)) if !directory.is_empty() => {
-                session_id(id).ok().map(|id| {
-                    let updated = match updated {
-                        Cell::Int(v) => json!(v.div_euclid(1000)),
-                        _ => Value::Null,
-                    };
-                    candidate(
-                        &id,
-                        directory,
-                        "unknown",
-                        "saved_metadata_only",
-                        "opencode_saved",
-                        None,
-                        updated,
-                    )
-                })
-            }
+            (Some(id), Some(directory)) if !directory.is_empty() => session_id(id).ok().map(|id| {
+                let updated = updated.map_or(Value::Null, |v| json!(v.div_euclid(1000)));
+                candidate(
+                    &id,
+                    directory,
+                    "unknown",
+                    "saved_metadata_only",
+                    "opencode_saved",
+                    None,
+                    updated,
+                )
+            }),
             _ => None,
         };
         match row {
@@ -1167,4 +1182,83 @@ pub fn discover_with(
             .filter(|item| !seen.contains(item["session_id"].as_str().unwrap_or_default())),
     );
     found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn response(bytes: &[u8]) -> Result<(i128, Vec<u8>), &'static str> {
+        read_response(&mut Reader {
+            conn: bytes,
+            buf: Vec::new(),
+            pos: 0,
+            eof: false,
+        })
+    }
+
+    #[test]
+    fn eof_cannot_terminate_headers_or_trailers() {
+        for bytes in [
+            b"HTTP/1.1 204 No Content\r\n".as_slice(),
+            b"HTTP/1.1 204 No Content\r\nX-Test: x\r\n",
+            b"HTTP/1.1 400 Bad\r\nContent-Length: 0\r\n",
+            b"HTTP/1.1 400 Bad\r\nContent-Length: 0\r",
+            b"HTTP/1.1 100 Continue\r\n",
+            b"HTTP/1.1 400 Bad\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n",
+            b"HTTP/1.1 400 Bad\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nTrailer: x\r\n",
+            b"HTTP/1.1 400 Bad\r\nTransfer-Encoding: chunked\r\n\r\n0",
+        ] {
+            assert_eq!(response(bytes), Err("IncompleteRead"), "{bytes:?}");
+        }
+    }
+
+    #[test]
+    fn chunk_data_requires_a_crlf_separator() {
+        for separator in ["xx", "\n\n", "\rX"] {
+            let bytes = format!(
+                "HTTP/1.1 400 Bad\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx{separator}0\r\n\r\n"
+            );
+            assert_eq!(response(bytes.as_bytes()), Err("invalid_response"));
+        }
+        assert_eq!(
+            response(b"HTTP/1.1 400 Bad\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r"),
+            Err("IncompleteRead")
+        );
+    }
+
+    #[test]
+    fn complete_empty_and_chunked_responses_keep_their_status() {
+        assert_eq!(
+            response(b"HTTP/1.1 204 No Content\r\n\r\n"),
+            Ok((204, vec![]))
+        );
+        assert_eq!(
+            response(b"HTTP/1.1 400 Bad\nContent-Length: 0\n\n"),
+            Ok((400, vec![]))
+        );
+        assert_eq!(
+            response(b"HTTP/1.1 400 Bad\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\nTrailer: x\r\n\r\n"),
+            Ok((400, b"x".to_vec()))
+        );
+    }
+
+    #[test]
+    fn resolver_results_are_filtered_before_any_connection_attempt() {
+        let external: SocketAddr = "192.0.2.1:4096".parse().unwrap();
+        let external6: SocketAddr = "[2001:db8::1]:4096".parse().unwrap();
+        let local: SocketAddr = "127.0.0.1:4096".parse().unwrap();
+        let local6: SocketAddr = "[::1]:4096".parse().unwrap();
+        let mut attempts = Vec::new();
+        let selected = connect_loopback([external, local6, external6, local], |addr| {
+            attempts.push(addr);
+            (addr == local).then_some(addr)
+        });
+        assert_eq!(attempts, [local6, local]);
+        assert_eq!(selected, Some(local));
+        assert_eq!(
+            connect_loopback::<()>([external, external6], |_| panic!("non-loopback connection")),
+            None
+        );
+    }
 }

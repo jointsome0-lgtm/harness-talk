@@ -54,9 +54,13 @@ pub fn claude_sessions(
             src.insert("detail".into(), json!(failure.class_name()));
         }
         Ok(rows) => {
-            let mut identities: HashMap<&str, usize> = HashMap::new();
+            let mut identities: HashMap<String, usize> = HashMap::new();
             for row in &rows {
-                if let Some(id) = row.get("sessionId").and_then(Value::as_str) {
+                if let Some(id) = row
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .and_then(|id| validate::uuid(id).ok())
+                {
                     *identities.entry(id).or_default() += 1;
                 }
             }
@@ -87,14 +91,14 @@ pub fn claude_sessions(
 
 fn verify_claude_row(
     row: &Value,
-    identities: &HashMap<&str, usize>,
+    identities: &HashMap<String, usize>,
     metadata: &dyn Fn(i64) -> Result<Value, Failure>,
 ) -> Option<Value> {
     let row = row.as_object()?;
     let (session_id, workspace) = address(Some(row.get("sessionId")?), Some(row.get("cwd")?))?;
     // Integers only: JSON floats and booleans are not PIDs.
     let pid = row.get("pid")?.as_i64().filter(|p| *p > 0)?;
-    if identities.get(row.get("sessionId")?.as_str()?).copied() != Some(1) {
+    if identities.get(&session_id).copied() != Some(1) {
         return None;
     }
     let saved = metadata(pid).ok()?;

@@ -1,11 +1,14 @@
 //! Bounded JSON RPC to a Codex app-server over its Unix WebSocket or a temporary stdio process.
 use super::{connect_unix, io_failure, owned_socket, python_dumps, socket_failure};
-use crate::error::Failure;
+use crate::{error::Failure, process_cleanup::OwnedGroup};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
-    os::{fd::AsRawFd, unix::net::UnixStream},
+    os::{
+        fd::AsRawFd,
+        unix::{net::UnixStream, process::CommandExt},
+    },
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio as Pipe},
     thread,
@@ -50,20 +53,23 @@ impl BoundSocket {
     }
 }
 
-/// An initialized RPC connection. Dropping it closes the WebSocket, or ends the stdio process
-/// by closing stdin, then terminating, then killing, each bounded by one second.
+/// An initialized RPC connection. Use `close` to check local transport cleanup.
+/// Drop attempts bounded cleanup but cannot report whether it completed.
 pub struct Rpc {
     connection: Connection,
     counter: i64,
+    closing: bool,
 }
 
 enum Connection {
-    Socket(Box<WebSocket<UnixStream>>),
+    Closed,
+    Socket(Box<WebSocket<DeadlineStream>>),
     Stdio(StdioProcess),
 }
 
 struct StdioProcess {
     child: Child,
+    group: OwnedGroup,
     stdin: Option<ChildStdin>,
     stdout: ChildStdout,
     buffer: Vec<u8>,
@@ -93,13 +99,7 @@ impl Rpc {
         if let Some(bound) = bound {
             bound.check()?;
         }
-        let remaining = remaining(deadline).ok_or(Failure::Class("TimeoutError"))?;
-        stream
-            .set_read_timeout(Some(remaining))
-            .map_err(io_failure)?;
-        stream
-            .set_write_timeout(Some(remaining))
-            .map_err(io_failure)?;
+        let stream = DeadlineStream { stream, deadline };
         let config = WebSocketConfig::default()
             .max_message_size(Some(FRAME_LIMIT))
             .max_frame_size(Some(FRAME_LIMIT));
@@ -110,13 +110,10 @@ impl Rpc {
                     HandshakeError::Failure(tungstenite::Error::Io(error)) => socket_failure(error),
                     HandshakeError::Failure(_) => websocket_failure(),
                 })?;
-        socket
-            .get_ref()
-            .set_write_timeout(Some(CALL_TIMEOUT))
-            .map_err(io_failure)?;
         let mut rpc = Self {
             connection: Connection::Socket(Box::new(socket)),
             counter: 0,
+            closing: false,
         };
         rpc.initialize()?;
         Ok(rpc)
@@ -130,36 +127,73 @@ impl Rpc {
             .stdin(Pipe::piped())
             .stdout(Pipe::piped())
             .stderr(Pipe::null())
+            .process_group(0)
             .spawn()
             .map_err(io_failure)?;
+        let mut group = match OwnedGroup::new(child.id()) {
+            Ok(group) => group,
+            Err(_) => {
+                // Ownership setup failed before any RPC write. Signal only the Child
+                // we spawned, and bound the direct-child reap attempt.
+                let _ = child.kill();
+                let deadline = Instant::now() + CLOSE_TIMEOUT;
+                while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                return Err(Failure::coded("codex_stdio_cleanup_ownership_unavailable"));
+            }
+        };
         let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(Failure::Class("OSError"));
+            if group.finish().is_ok() && group.exited().unwrap_or(false) {
+                let _ = child.wait();
+            } else {
+                let _ = group.kill_leader();
+            }
+            return Err(Failure::coded("codex_stdio_cleanup_unconfirmed"));
         };
         let mut rpc = Self {
             connection: Connection::Stdio(StdioProcess {
                 child,
+                group,
                 stdin: Some(stdin),
                 stdout,
                 buffer: Vec::new(),
             }),
             counter: 0,
+            closing: false,
         };
+        if let Connection::Stdio(process) = &rpc.connection {
+            set_nonblocking(process.stdin.as_ref().unwrap()).map_err(io_failure)?;
+        }
         rpc.initialize()?;
         Ok(rpc)
     }
 
     /// Send one request and return its result. Frames for other IDs are skipped. A rejection
-    /// keeps only an integer RPC code, never the server's message.
+    /// keeps only an integer RPC code, never the server's message. One ten-second
+    /// deadline covers request writing and response reading. A failed write may be partial;
+    /// callers must preserve submission uncertainty and must not replay it.
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
+        self.call_until(method, params, Instant::now() + CALL_TIMEOUT)
+    }
+
+    fn call_until(
+        &mut self,
+        method: &str,
+        params: Value,
+        deadline: Instant,
+    ) -> Result<Value, Failure> {
+        if self.closing {
+            return Err(Failure::coded("codex_rpc_closed"));
+        }
         self.counter += 1;
-        self.write(&json!({"id": self.counter, "method": method, "params": params}))?;
-        let deadline = Instant::now() + CALL_TIMEOUT;
+        self.write(
+            &json!({"id": self.counter, "method": method, "params": params}),
+            deadline,
+        )?;
         loop {
-            let remaining =
-                remaining(deadline).ok_or_else(|| Failure::coded("codex_rpc_timeout"))?;
-            let frame = self.recv(remaining)?;
+            remaining(deadline).ok_or_else(|| Failure::coded("codex_rpc_timeout"))?;
+            let frame = self.recv(deadline)?;
             let frame: Value =
                 serde_json::from_str(&frame).map_err(|_| Failure::Class("JSONDecodeError"))?;
             let frame = frame.as_object().ok_or(Failure::Class("AttributeError"))?;
@@ -187,41 +221,83 @@ impl Rpc {
         }
     }
 
+    /// Finish local transport cleanup. Every close attempt is terminal for RPC calls,
+    /// including failure. A failed stdio close retains its unreaped child and pinned
+    /// group for a safe retry; it never changes a prior request's confirmed receipt.
+    ///
+    /// Stdio cleanup gives EOF one second, then uses a four-second TERM/KILL observation
+    /// budget checked between process scans. Scans and scheduling can extend elapsed time.
+    /// Reaping follows observed direct-child exit.
+    /// Retries omit the EOF grace. Linux pidfds and readable process identities are
+    /// required; descendants that leave the private group are outside this contract.
+    /// Socket cleanup closes the local stream after at most one second of close I/O;
+    /// it does not confirm remote consumption of any request.
+    pub fn close(&mut self) -> Result<(), Failure> {
+        let first_attempt = !self.closing;
+        self.closing = true;
+        match &mut self.connection {
+            Connection::Closed => return Ok(()),
+            Connection::Socket(socket) => {
+                let deadline = Instant::now() + CLOSE_TIMEOUT;
+                socket.get_mut().deadline = deadline;
+                if socket.close(None).is_ok() {
+                    while remaining(deadline).is_some() && socket.read().is_ok() {}
+                }
+                socket
+                    .get_mut()
+                    .stream
+                    .shutdown(std::net::Shutdown::Both)
+                    .map_err(io_failure)?;
+            }
+            Connection::Stdio(process) => process.close(first_attempt)?,
+        }
+        self.connection = Connection::Closed;
+        Ok(())
+    }
+
     fn initialize(&mut self) -> Result<(), Failure> {
         self.call(
             "initialize",
             json!({"clientInfo": {"name": "harness-talk", "version": env!("CARGO_PKG_VERSION")},
             "capabilities": {"experimentalApi": true}}),
         )?;
-        self.write(&json!({"method": "initialized"}))
+        self.write(
+            &json!({"method": "initialized"}),
+            Instant::now() + CALL_TIMEOUT,
+        )
     }
 
-    fn write(&mut self, frame: &Value) -> Result<(), Failure> {
+    fn write(&mut self, frame: &Value, deadline: Instant) -> Result<(), Failure> {
         let text = python_dumps(frame);
         match &mut self.connection {
-            Connection::Socket(socket) => socket
-                .send(Message::text(text))
-                .map_err(|_| websocket_failure()),
-            Connection::Stdio(process) => {
-                let stdin = process.stdin.as_mut().ok_or(Failure::Class("ValueError"))?;
-                stdin
-                    .write_all(format!("{text}\n").as_bytes())
-                    .and_then(|_| stdin.flush())
-                    .map_err(io_failure)
+            Connection::Closed => Err(Failure::coded("codex_rpc_closed")),
+            Connection::Socket(socket) => {
+                socket.get_mut().deadline = deadline;
+                socket
+                    .send(Message::text(text))
+                    .map_err(|error| match error {
+                        tungstenite::Error::Io(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                            ) =>
+                        {
+                            Failure::Class("TimeoutError")
+                        }
+                        _ => websocket_failure(),
+                    })
             }
+            Connection::Stdio(process) => process.write(format!("{text}\n").as_bytes(), deadline),
         }
     }
 
-    fn recv(&mut self, timeout: Duration) -> Result<String, Failure> {
+    fn recv(&mut self, deadline: Instant) -> Result<String, Failure> {
         match &mut self.connection {
+            Connection::Closed => Err(Failure::coded("codex_rpc_closed")),
             Connection::Socket(socket) => {
-                let deadline = Instant::now() + timeout;
+                socket.get_mut().deadline = deadline;
                 loop {
-                    let remaining = remaining(deadline).ok_or(Failure::Class("TimeoutError"))?;
-                    socket
-                        .get_ref()
-                        .set_read_timeout(Some(remaining))
-                        .map_err(io_failure)?;
+                    remaining(deadline).ok_or(Failure::Class("TimeoutError"))?;
                     match socket.read() {
                         Ok(Message::Text(text)) => return Ok(text.as_str().to_owned()),
                         Ok(Message::Binary(bytes)) => {
@@ -242,38 +318,124 @@ impl Rpc {
                     }
                 }
             }
-            Connection::Stdio(process) => process.recv(timeout),
+            Connection::Stdio(process) => process.recv(deadline),
+        }
+    }
+}
+
+// Tungstenite can perform several reads/writes inside one handshake or frame operation.
+// Recompute the remaining time at the underlying I/O boundary, not just around socket.read().
+struct DeadlineStream {
+    stream: UnixStream,
+    deadline: Instant,
+}
+
+fn deadline_timeout() -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::TimedOut, "RPC deadline expired")
+}
+
+impl Read for DeadlineStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            self.stream
+                .set_read_timeout(Some(remaining(self.deadline).ok_or_else(deadline_timeout)?))?;
+            match self.stream.read(buf) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                result => return result,
+            }
+        }
+    }
+}
+
+impl Write for DeadlineStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        loop {
+            self.stream
+                .set_write_timeout(Some(remaining(self.deadline).ok_or_else(deadline_timeout)?))?;
+            match self.stream.write(buf) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                result => return result,
+            }
+        }
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        remaining(self.deadline).ok_or_else(deadline_timeout)?;
+        self.stream.flush()
+    }
+}
+
+fn set_nonblocking(stdin: &ChildStdin) -> std::io::Result<()> {
+    let fd = stdin.as_raw_fd();
+    // SAFETY: fcntl operates on the live stdin descriptor owned by this process handle.
+    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
+    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn stdio_failure(error: std::io::Error) -> Failure {
+    if error.kind() == std::io::ErrorKind::TimedOut {
+        Failure::coded("codex_rpc_timeout")
+    } else {
+        io_failure(error)
+    }
+}
+
+fn poll_until(fd: std::os::fd::RawFd, events: i16, deadline: Instant) -> std::io::Result<()> {
+    loop {
+        let wait = remaining(deadline).ok_or_else(deadline_timeout)?;
+        let mut poll = libc::pollfd {
+            fd,
+            events,
+            revents: 0,
+        };
+        let milliseconds = wait.as_nanos().div_ceil(1_000_000).min(i32::MAX as u128) as i32;
+        // SAFETY: polls one descriptor owned by the caller for the duration of this call.
+        match unsafe { libc::poll(&mut poll, 1, milliseconds) } {
+            0 => return Err(deadline_timeout()),
+            n if n < 0 => {
+                let error = std::io::Error::last_os_error();
+                if error.kind() != std::io::ErrorKind::Interrupted {
+                    return Err(error);
+                }
+            }
+            _ => {
+                remaining(deadline).ok_or_else(deadline_timeout)?;
+                return Ok(());
+            }
         }
     }
 }
 
 impl StdioProcess {
+    fn write(&mut self, mut bytes: &[u8], deadline: Instant) -> Result<(), Failure> {
+        let stdin = self.stdin.as_mut().ok_or(Failure::Class("ValueError"))?;
+        while !bytes.is_empty() {
+            remaining(deadline).ok_or_else(|| Failure::coded("codex_rpc_timeout"))?;
+            match stdin.write(bytes) {
+                Ok(0) => return Err(Failure::Class("OSError")),
+                Ok(count) => bytes = &bytes[count..],
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    poll_until(stdin.as_raw_fd(), libc::POLLOUT, deadline)
+                        .map_err(stdio_failure)?;
+                }
+                Err(error) => return Err(io_failure(error)),
+            }
+        }
+        Ok(())
+    }
+
     /// Bounded newline framing for the local app-server process.
-    fn recv(&mut self, timeout: Duration) -> Result<String, Failure> {
-        let deadline = Instant::now() + timeout;
+    fn recv(&mut self, deadline: Instant) -> Result<String, Failure> {
+        remaining(deadline).ok_or_else(|| Failure::coded("codex_rpc_timeout"))?;
         while !self.buffer.contains(&b'\n') {
             if self.buffer.len() >= FRAME_LIMIT {
                 return Err(Failure::coded("codex_rpc_frame_too_large"));
             }
-            let wait = deadline.saturating_duration_since(Instant::now());
-            let mut poll = libc::pollfd {
-                fd: self.stdout.as_raw_fd(),
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            let milliseconds = wait.as_nanos().div_ceil(1_000_000).min(i32::MAX as u128) as i32;
-            // SAFETY: polls one descriptor owned by this process handle.
-            match unsafe { libc::poll(&mut poll, 1, milliseconds) } {
-                0 => return Err(Failure::coded("codex_rpc_timeout")),
-                n if n < 0 => {
-                    let error = std::io::Error::last_os_error();
-                    if error.kind() == std::io::ErrorKind::Interrupted {
-                        continue;
-                    }
-                    return Err(io_failure(error));
-                }
-                _ => (),
-            }
+            poll_until(self.stdout.as_raw_fd(), libc::POLLIN, deadline).map_err(stdio_failure)?;
             let mut chunk = vec![0; 65536];
             let count = match self.stdout.read(&mut chunk) {
                 Ok(count) => count,
@@ -296,52 +458,36 @@ impl StdioProcess {
         String::from_utf8(line).map_err(|_| Failure::Class("UnicodeDecodeError"))
     }
 
-    fn exited_within(&mut self, limit: Duration) -> bool {
-        let deadline = Instant::now() + limit;
-        loop {
-            if !matches!(self.child.try_wait(), Ok(None)) {
-                return true;
+    fn close(&mut self, grace: bool) -> Result<(), Failure> {
+        drop(self.stdin.take());
+        let cleanup = (|| -> std::io::Result<()> {
+            if grace {
+                let deadline = Instant::now() + CLOSE_TIMEOUT;
+                while !self.group.exited()? && Instant::now() < deadline {
+                    thread::sleep(Duration::from_millis(10));
+                }
             }
-            if Instant::now() >= deadline {
-                return false;
+            // Always clean the group, even after prompt wrapper exit. Keep the wrapper
+            // unreaped until the group is stopped so its PID reserves the group number.
+            self.group.finish()?;
+            if !self.group.exited()? {
+                return Err(std::io::Error::other("Direct child exit not confirmed"));
             }
-            thread::sleep(Duration::from_millis(10));
-        }
+            self.child.wait()?;
+            Ok(())
+        })();
+        cleanup.map_err(|_| Failure::coded("codex_stdio_cleanup_unconfirmed"))
     }
 }
 
 impl Drop for Rpc {
     fn drop(&mut self) {
-        match &mut self.connection {
-            Connection::Socket(socket) => {
-                let deadline = Instant::now() + CLOSE_TIMEOUT;
-                let _ = socket.get_ref().set_write_timeout(Some(CLOSE_TIMEOUT));
-                if socket.close(None).is_err() {
-                    return;
-                }
-                while let Some(remaining) = remaining(deadline) {
-                    if socket.get_ref().set_read_timeout(Some(remaining)).is_err()
-                        || socket.read().is_err()
-                    {
-                        break;
-                    }
-                }
-            }
-            Connection::Stdio(process) => {
-                drop(process.stdin.take());
-                if process.exited_within(CLOSE_TIMEOUT) {
-                    return;
-                }
-                // SAFETY: signals only the child this handle spawned and has not yet reaped.
-                unsafe {
-                    libc::kill(process.child.id() as libc::pid_t, libc::SIGTERM);
-                }
-                if process.exited_within(CLOSE_TIMEOUT) {
-                    return;
-                }
-                let _ = process.child.kill();
-                process.exited_within(CLOSE_TIMEOUT);
-            }
+        if self.close().is_err()
+            && let Connection::Stdio(process) = &self.connection
+        {
+            // A stable leader handle is safe even after group cleanup fails. Do
+            // not reap its anchor or claim descendant completion on this path.
+            let _ = process.group.kill_leader();
         }
     }
 }
@@ -360,5 +506,287 @@ fn same_id(id: Option<&Value>, counter: i64) -> bool {
         }
         Some(Value::Bool(true)) => counter == 1,
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tungstenite::protocol::Role;
+
+    #[test]
+    fn expired_stream_deadline_does_not_consume_ready_bytes() {
+        let (client, mut peer) = UnixStream::pair().unwrap();
+        peer.write_all(b"ready").unwrap();
+        let mut stream = DeadlineStream {
+            stream: client,
+            deadline: Instant::now(),
+        };
+        assert_eq!(
+            stream.read(&mut [0; 5]).unwrap_err().kind(),
+            std::io::ErrorKind::TimedOut
+        );
+        stream.deadline = Instant::now() + Duration::from_secs(1);
+        let mut bytes = [0; 5];
+        stream.read_exact(&mut bytes).unwrap();
+        assert_eq!(&bytes, b"ready");
+    }
+
+    #[test]
+    fn partial_frame_reads_share_one_absolute_deadline() {
+        let (client, mut peer) = UnixStream::pair().unwrap();
+        peer.set_write_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        // A ten-byte text frame delivered in short chunks by this test's own peer.
+        peer.write_all(&[0x81, 10]).unwrap();
+        let writer = thread::spawn(move || {
+            for _ in 0..10 {
+                thread::sleep(Duration::from_millis(40));
+                if peer.write_all(b"a").is_err() {
+                    break;
+                }
+            }
+        });
+        let started = Instant::now();
+        let stream = DeadlineStream {
+            stream: client,
+            deadline: started + Duration::from_millis(150),
+        };
+        let mut socket = WebSocket::from_raw_socket(stream, Role::Client, None);
+        assert!(
+            matches!(socket.read(), Err(tungstenite::Error::Io(error)) if matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock))
+        );
+        assert!(started.elapsed() < Duration::from_millis(350));
+        drop(socket);
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn partial_handshake_reads_share_the_opening_deadline() {
+        let (client, mut peer) = UnixStream::pair().unwrap();
+        peer.set_write_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let writer = thread::spawn(move || {
+            // Only this test's disposable peer. The intentionally unfinished header
+            // exercises repeated reads inside the handshake implementation.
+            peer.write_all(b"HTTP/1.1 101 Switching Protocols\r\nX-Owned-Test: ")
+                .unwrap();
+            for _ in 0..10 {
+                thread::sleep(Duration::from_millis(40));
+                if peer.write_all(b"a").is_err() {
+                    break;
+                }
+            }
+        });
+        let started = Instant::now();
+        let stream = DeadlineStream {
+            stream: client,
+            deadline: started + Duration::from_millis(150),
+        };
+        let result = tungstenite::client::client_with_config("ws://localhost/", stream, None);
+        assert!(match &result {
+            Err(HandshakeError::Interrupted(_)) => true,
+            Err(HandshakeError::Failure(tungstenite::Error::Io(error))) => matches!(
+                error.kind(),
+                std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
+            ),
+            _ => false,
+        });
+        assert!(started.elapsed() >= Duration::from_millis(100));
+        assert!(started.elapsed() < Duration::from_millis(350));
+        drop(result);
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn websocket_drop_bounds_a_partial_frame_during_close() {
+        let (client, mut peer) = UnixStream::pair().unwrap();
+        peer.set_write_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        peer.write_all(&[0x81, 40]).unwrap();
+        let writer = thread::spawn(move || {
+            for _ in 0..40 {
+                thread::sleep(Duration::from_millis(40));
+                if peer.write_all(b"a").is_err() {
+                    break;
+                }
+            }
+        });
+        let stream = DeadlineStream {
+            stream: client,
+            deadline: Instant::now() + CALL_TIMEOUT,
+        };
+        let socket = WebSocket::from_raw_socket(stream, Role::Client, None);
+        let rpc = Rpc {
+            connection: Connection::Socket(Box::new(socket)),
+            counter: 0,
+            closing: false,
+        };
+        let started = Instant::now();
+        drop(rpc);
+        assert!(started.elapsed() < CLOSE_TIMEOUT + Duration::from_millis(400));
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn stdio_backpressure_is_bounded_and_child_is_reaped() {
+        // This owned process speaks initialization, then stops reading. Its lifetime
+        // also has an independent two-second limit if the deadline code regresses.
+        let mut child = Command::new("/usr/bin/python3")
+            .args([
+                "-c",
+                "import json,sys,time
+f=json.loads(sys.stdin.readline())
+print(json.dumps({'id':f['id'],'result':{}}),flush=True)
+sys.stdin.readline()
+time.sleep(2)",
+            ])
+            .stdin(Pipe::piped())
+            .stdout(Pipe::piped())
+            .stderr(Pipe::null())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let group = OwnedGroup::new(pid).unwrap();
+        let stdin = child.stdin.take().unwrap();
+        set_nonblocking(&stdin).unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut rpc = Rpc {
+            connection: Connection::Stdio(StdioProcess {
+                child,
+                group,
+                stdin: Some(stdin),
+                stdout,
+                buffer: Vec::new(),
+            }),
+            counter: 0,
+            closing: false,
+        };
+        rpc.initialize().unwrap();
+        let params = json!({"text": "x".repeat(1024 * 1024)});
+        let started = Instant::now();
+        assert_eq!(
+            rpc.call_until(
+                "owned/backpressure",
+                params,
+                started + Duration::from_millis(200)
+            )
+            .unwrap_err(),
+            Failure::coded("codex_rpc_timeout")
+        );
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert_eq!(
+            rpc.counter, 2,
+            "the uncertain request is attempted only once"
+        );
+        drop(rpc);
+        // SAFETY: observation of the just-reaped owned fixture PID, no signal is sent.
+        assert_eq!(unsafe { libc::kill(pid as libc::pid_t, 0) }, -1);
+        assert_eq!(
+            std::io::Error::last_os_error().raw_os_error(),
+            Some(libc::ESRCH)
+        );
+    }
+
+    #[test]
+    fn failed_stdio_close_is_terminal_and_retains_its_handle() {
+        let mut child = Command::new("/bin/true")
+            .stdin(Pipe::piped())
+            .stdout(Pipe::piped())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let group = OwnedGroup::new(child.id()).unwrap();
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take().unwrap();
+        // Deliberately invalidate only this fixture's anchor to exercise the failure
+        // contract. Production retains the unreaped child until group cleanup succeeds.
+        child.wait().unwrap();
+        let mut rpc = Rpc {
+            connection: Connection::Stdio(StdioProcess {
+                child,
+                group,
+                stdin,
+                stdout,
+                buffer: Vec::new(),
+            }),
+            counter: 0,
+            closing: false,
+        };
+        assert_eq!(
+            rpc.close().unwrap_err(),
+            Failure::coded("codex_stdio_cleanup_unconfirmed")
+        );
+        assert!(matches!(rpc.connection, Connection::Stdio(_)));
+        assert_eq!(
+            rpc.call("owned/after-failed-close", json!({})).unwrap_err(),
+            Failure::coded("codex_rpc_closed")
+        );
+        assert_eq!(rpc.counter, 0);
+        assert_eq!(
+            rpc.close().unwrap_err(),
+            Failure::coded("codex_stdio_cleanup_unconfirmed")
+        );
+    }
+
+    #[test]
+    fn socket_close_is_terminal_and_success_is_idempotent() {
+        let (client, peer) = UnixStream::pair().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        let server = thread::spawn(move || {
+            let mut socket = WebSocket::from_raw_socket(peer, Role::Server, None);
+            assert!(matches!(socket.read(), Ok(Message::Close(_))));
+            // Tungstenite can finish the close handshake while flushing the reply.
+            assert!(matches!(
+                socket.flush(),
+                Ok(()) | Err(tungstenite::Error::ConnectionClosed)
+            ));
+        });
+        let socket = WebSocket::from_raw_socket(
+            DeadlineStream {
+                stream: client,
+                deadline: Instant::now() + CALL_TIMEOUT,
+            },
+            Role::Client,
+            None,
+        );
+        let mut rpc = Rpc {
+            connection: Connection::Socket(Box::new(socket)),
+            counter: 0,
+            closing: false,
+        };
+        rpc.close().unwrap();
+        assert!(matches!(rpc.connection, Connection::Closed));
+        assert_eq!(
+            rpc.call("owned/after-close", json!({})).unwrap_err(),
+            Failure::coded("codex_rpc_closed")
+        );
+        assert_eq!(rpc.counter, 0);
+        rpc.close().unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn expired_stdio_deadline_rejects_an_already_buffered_response() {
+        let mut child = Command::new("/usr/bin/true")
+            .stdin(Pipe::piped())
+            .stdout(Pipe::piped())
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let group = OwnedGroup::new(child.id()).unwrap();
+        let mut process = StdioProcess {
+            group,
+            stdin: child.stdin.take(),
+            stdout: child.stdout.take().unwrap(),
+            child,
+            buffer: b"{}\n".to_vec(),
+        };
+        assert_eq!(
+            process.recv(Instant::now()).unwrap_err(),
+            Failure::coded("codex_rpc_timeout")
+        );
+        process.child.wait().unwrap();
     }
 }

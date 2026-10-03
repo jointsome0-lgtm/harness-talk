@@ -34,19 +34,9 @@ maintain a reverse SSH route when only the worker accepts SSH. They recover
 transport separately from model execution. See the [checked recovery and
 resume limits](docs/checks/2026-09-27-ssh-lifecycle.md).
 
-> Version 0.10.0 adds an opt-in [profile catalogue](docs/catalog.md) over
-> LAN/Wi-Fi, an already active Bluetooth PAN, and private Tailscale.
-> It keeps mailbox schema 3 and the receiver state format. Upgrades
-> from 0.6.1 through 0.9.6 need no mailbox migration. Stop receivers before updating,
-> then restart with their existing state directories. Add `--mcp-command` to
-> [check current mail before waking](integrations/remote.md#check-current-mail).
-> Existing commands keep their previous behavior without that option.
-> Receivers also refuse a changed Codex store before submitting a new notice.
-> After a daemon restart, inspect and explicitly [rebind the same session](integrations/remote.md#inspect-and-recover-after-a-daemon-restart).
-> An absent explicitly selected Codex socket now produces its path and recovery
-> guidance. The receiver stops before notification; it does not start Codex or retry work.
-> Older mailboxes back
-> up and migrate on first use; see [migration and recovery](docs/reference.md#database-and-peers).
+Version 0.11.0 fixes mailbox recovery, catalogue selection, native I/O and receiver cleanup. Mailbox schema remains 3. Existing schema-3 mailboxes need no migration; schema 1/2 still receive a verified backup and automatic migration on first use.
+
+Stop receivers before updating the CLI and their matching adapter files. Old Antigravity/Letta idle state now requires explicit inspection and named session retirement before further managed work. OpenHands requires a private `HTALK_OPENHANDS_STATE` directory. Keep saved state and receipts. Do not reset them to bypass recovery. Subprocess cleanup needs Linux 5.3+ and readable `/proc`; managed Python receivers also require working pidfd APIs in that interpreter. See the [0.11.0 changes, upgrade and rollback notes](docs/releases/0.11.0.md).
 
 ## Install and share a database
 

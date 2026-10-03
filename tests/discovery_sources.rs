@@ -105,6 +105,39 @@ fn claude_never_selects_one_of_duplicate_identities() {
 }
 
 #[test]
+fn claude_duplicate_count_uses_canonical_uuid_identity() {
+    let c = Claude::new();
+    c.metadata(
+        456,
+        json!({"sessionId": ID, "cwd": c.dir.text(), "messagingSocketPath": c.socket}),
+    );
+    for spelling in [
+        ID.to_ascii_uppercase(),
+        ID.replace('-', ""),
+        format!("{{{ID}}}"),
+        format!("urn:uuid:{ID}"),
+    ] {
+        let mut alias = c.row(456);
+        alias["sessionId"] = spelling.clone().into();
+        // Each spelling is accepted alone and emits the canonical identity.
+        assert_eq!(vec![ID], ids(&c.discover(vec![alias.clone()])));
+        let found = c.discover(vec![c.row(123), alias]);
+        assert!(found.sessions.is_empty(), "{spelling}");
+        assert_eq!(2, found.sources[0]["rejected"], "{spelling}");
+    }
+}
+
+#[test]
+fn claude_invalid_uuid_row_does_not_hide_a_verified_identity() {
+    let c = Claude::new();
+    let mut invalid = c.row(456);
+    invalid["sessionId"] = "invalid UUID".into();
+    let found = c.discover(vec![c.row(123), invalid]);
+    assert_eq!(vec![ID], ids(&found));
+    assert_eq!(1, found.sources[0]["rejected"]);
+}
+
+#[test]
 fn claude_rejects_changed_metadata_invalid_pids_and_non_sockets() {
     let c = Claude::new();
     c.metadata(

@@ -178,6 +178,11 @@ not an empty successful result. The status JSON format is
 [subject to change](https://tailscale.com/docs/reference/tailscale-cli#status);
 other version families require new validation before being accepted.
 
+The status parser accepts at most 64 records in the entire `Peer` map,
+including peers absent from the trust file. A larger map returns
+`catalog_tailscale_invalid_status`. This bound limits status parsing before
+htalk filters peers by trust.
+
 The local Tailscale executable and daemon socket must be absolute paths,
 owned by the current user or root. The executable must not be group/world
 writable. The socket's parent directory must also be owned by the user or root
@@ -195,10 +200,22 @@ is a fresh snapshot with no saved discovery cache.
 
 `connect` is an MCP stdio server for a harness, so its output is protocol data.
 Configure it using the same command and arguments as any local MCP server.
-It finds a unique current profile by exact display name or profile UUID.
-Duplicate names require the UUID from discovery; names never silently select
-the first match. The configured sender remains fixed, and the selected profile
-is the recipient. `peer list` shows that selected peer.
+It finds a unique current profile by exact display name or canonical profile UUID.
+A canonical UUID selects only that identity, even if a different profile has
+that UUID as its display name. A missing or retired identity does not fall back
+to a name. Other inputs match display names exactly. Use a profile's own UUID
+from discovery to select a UUID-shaped display name or resolve duplicate names.
+Duplicate matching identities or names return `catalog_ambiguous_profile`;
+neither selects the first match. The configured sender remains fixed, and the
+selected profile is the recipient. `peer list` shows that selected peer.
+
+Catalogue `show`, `inbox` and `sent` return full message IDs, reply correlation
+and saved state; `show` returns full bodies. These scoped reads omit the ordinary
+CLI's per-message `recovery` action commands. Use the same MCP tool with
+`["show", "MESSAGE_UUID"]` to read a message, then
+`["ack", "MESSAGE_UUID"]` after reading it. Answer an incoming request with
+`["reply", "REQUEST_UUID", "--message", "answer"]`. Follow
+`recovery.next_page` through the same tool, omitting its `htalk` prefix.
 
 Every tool call makes one SSH/MCP connection and verifies device, deployment,
 sender and profile binding before dispatch. Re-publication or retirement makes
@@ -215,10 +232,19 @@ trust. There is no separate persistent profile pin or approval step. Editing
 only `display_name` or `role` changes descriptions and does not rotate the
 binding. Profiles do not negotiate capability schemas or graceful fallback.
 
-After a lost write response, inspect the original UUID with `show` or `sent`.
-An exact retry with the same UUID, sender, recipient, body and reply parent
-returns the saved message; a changed tuple returns `message_id_conflict`.
-This prevents a duplicate mailbox request. It does not guarantee that an
+After a lost request response, inspect the caller-chosen UUID with `show` or
+`sent`. Retry `send --id UUID` only with the same UUID, sender, recipient and
+body. The stored tuple also includes the reply parent, which is null for a
+request. An exact retry returns the saved request; a changed tuple returns
+`message_id_conflict` and preserves the original.
+
+After a lost reply response, inspect the original request with `show` and read
+its correlated answer. `reply` has no `--id` option. Repeating it for the same
+request and body returns the saved answer without another notification. A
+different body returns `reply_conflict_existing_answer_preserved` and keeps
+that answer.
+
+These checks prevent duplicate mailbox messages. They do not guarantee that an
 agent's external work executes once. Record mailbox storage, notification
 submission, recipient ACK and correlated reply separately. SSH reachability
 and `runtime_status: unknown` do not establish any of those later outcomes.

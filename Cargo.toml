@@ -1,12 +1,13 @@
 [package]
 name = "harness-talk"
-version = "0.10.0"
+version = "0.11.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Exchange messages between local agent sessions"
 license = "MIT"
 repository = "https://github.com/jointsome0-lgtm/harness-talk"
 readme = "README.md"
+exclude = [".audit/**"]
 
 [[bin]]
 name = "htalk"

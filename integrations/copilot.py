@@ -61,8 +61,17 @@ def hook(kind):
             saved["closed"] = True
         elif kind == "notice" and not saved["closed"] and event.get("notification_type") in (
                 "shell_completed", "shell_detached_completed") and saved["pending"]:
-            output = {"additionalContext": saved.pop("pending") + "\nAfter handling the saved notice, " + arm_instruction()}
-            saved["pending"] = None
+            # An unrelated shell can finish while our waiter is still reaping
+            # watch. Preserve its notice until the waiter's own completion,
+            # which follows release of wait.lock, makes rearming safe.
+            with (root() / "wait.lock").open("a") as lock:
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    pass
+                else:
+                    output = {"additionalContext": saved["pending"] + "\nAfter handling the saved notice, " + arm_instruction()}
+                    saved["pending"] = None
     print(json.dumps(output))
 
 

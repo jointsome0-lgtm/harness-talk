@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import select
 import signal
 import shutil
 import sys
@@ -13,13 +14,16 @@ import uuid
 
 
 STATE_FILE = "state.json"
+SHUTDOWN_GRACE_SECONDS = 5
+SHUTDOWN_KILL_SECONDS = 1
 
 
 def emit(event, **fields):
     print(json.dumps({"event": event, **fields}), flush=True)
 
 
-def save(path, state):
+def save_state(path, state):
+    """Durably replace state without emitting a protocol event."""
     temporary = path.with_suffix(".tmp")
     with temporary.open("w") as stream:
         json.dump(state, stream)
@@ -31,21 +35,157 @@ def save(path, state):
         os.fsync(directory)
     finally:
         os.close(directory)
+
+
+def save(path, state):
+    save_state(path, state)
     emit("state", **state)
+
+
+def _process_identity(pid):
+    """Linux process identity, including the session created by our launcher."""
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_bytes().rsplit(b")", 1)[1].split()
+        return (int(fields[2]), int(fields[3]), int(fields[19]), fields[0].decode("ascii"), int(fields[1]))
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+
+
+def _group_members(pid):
+    # Managed groups retain our effective UID. Setuid descendants and processes
+    # that leave this session/group are outside this shutdown contract.
+    members = {}
+    for path in Path("/proc").iterdir():
+        if path.name.isdecimal():
+            try:
+                # Non-dumpable processes get root-owned proc entries without a
+                # credential change. Root ownership cannot prove an unrelated UID.
+                if path.stat().st_uid not in (os.geteuid(), 0):
+                    continue
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            identity = _process_identity(int(path.name))
+            if identity and identity[:2] == (pid, pid) and identity[3] not in ("Z", "X"):
+                members[int(path.name)] = identity
+    return members
+
+
+def _pidfd_exited(fd):
+    poller = select.poll()
+    poller.register(fd, select.POLLIN | select.POLLHUP)
+    events = poller.poll(0)
+    if not events:
+        return False
+    flags = events[0][1]
+    if flags & (select.POLLNVAL | select.POLLERR):
+        raise RuntimeError("Cannot read managed process handle readiness")
+    return bool(flags & (select.POLLIN | select.POLLHUP))
+
+
+async def _stop_group(process):
+    # Never send a delayed signal to a numeric PGID. Pin exact processes instead.
+    # New members may be enrolled only while a known, live member proves ownership.
+    handles = {}
+    terminated, killed = set(), set()
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + SHUTDOWN_GRACE_SECONDS
+    killing = False
+    try:
+        leader = _process_identity(process.pid)
+        expected = getattr(process, "_htalk_group_identity", None)
+        if leader and leader[:2] == (process.pid, process.pid) and leader[4] == os.getpid():
+            if expected is None and process.returncode is None:
+                expected = leader
+            if expected and leader[:3] == expected[:3]:
+                try:
+                    fd = os.pidfd_open(process.pid)
+                except ProcessLookupError:
+                    pass
+                else:
+                    handles[process.pid] = (leader, fd)
+                    current = _process_identity(process.pid)
+                    if not current or current[:3] != leader[:3]:
+                        del handles[process.pid]
+                        os.close(fd)
+        while True:
+            members = _group_members(process.pid)
+            if not members:
+                if not any(not _pidfd_exited(fd) for _, fd in handles.values()):
+                    break
+                if loop.time() >= deadline:
+                    raise RuntimeError("Pinned managed process remains alive outside visible group; inspect children")
+                await asyncio.sleep(0.02)
+                continue
+            anchors = {pid: record for pid, record in handles.items()
+                       if pid in members and record[0][:3] == members[pid][:3]
+                       and not _pidfd_exited(record[1])}
+            if not anchors:
+                # A snapshot can race an exit. Confirm before refusing ownership.
+                if not _group_members(process.pid):
+                    await asyncio.sleep(0)
+                    continue
+                raise RuntimeError("Cannot prove managed process-group ownership; inspect children")
+            pending = {}
+            try:
+                for pid, identity in members.items():
+                    if pid not in handles:
+                        try:
+                            fd = os.pidfd_open(pid)
+                        except ProcessLookupError:
+                            continue
+                        pending[pid] = (identity, fd)
+                        current = _process_identity(pid)
+                        if not current or current[:3] != identity[:3]:
+                            del pending[pid]
+                            os.close(fd)
+                if not any(not _pidfd_exited(fd)
+                           and (current := _process_identity(pid))
+                           and current[:3] == identity[:3]
+                           for pid, (identity, fd) in anchors.items()):
+                    continue
+                handles.update(pending)
+                pending = {}
+            finally:
+                for _, fd in pending.values():
+                    os.close(fd)
+            if loop.time() >= deadline:
+                if killing:
+                    raise TimeoutError("Managed process group did not stop after SIGKILL")
+                killing = True
+                deadline = loop.time() + SHUTDOWN_KILL_SECONDS
+            sent = killed if killing else terminated
+            for pid, (_, fd) in handles.items():
+                if pid in sent:
+                    continue
+                try:
+                    signal.pidfd_send_signal(fd, signal.SIGKILL if killing else signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
+                sent.add(pid)
+            await asyncio.sleep(0.02)
+        if any(not _pidfd_exited(fd) for _, fd in handles.values()):
+            raise RuntimeError("Pinned managed process did not exit; inspect children")
+        await asyncio.wait_for(process.wait(), SHUTDOWN_KILL_SECONDS)
+    finally:
+        for _, fd in handles.values():
+            os.close(fd)
 
 
 async def dispose(process):
     if process is None:
         return
-    try:
-        os.killpg(process.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        pass
-    try:
-        await asyncio.wait_for(process.wait(), 5)
-    except asyncio.TimeoutError:
-        os.killpg(process.pid, signal.SIGKILL)
-        await process.wait()
+    shutdown = asyncio.create_task(_stop_group(process))
+    cancelled = False
+    while True:
+        try:
+            await asyncio.shield(shutdown)
+            break
+        except asyncio.CancelledError:
+            if shutdown.cancelled():
+                raise
+            cancelled = True
+    if cancelled:
+        raise asyncio.CancelledError
     emit("child_stopped", pid=process.pid, exit_code=process.returncode)
 
 
@@ -100,8 +240,41 @@ def settled(message):
             else message.get("reply") is not None)
 
 
+def require_process_handles():
+    """Check the run prerequisite without creating or changing receiver state."""
+    missing = [name for owner, name in ((os, "pidfd_open"), (signal, "pidfd_send_signal"))
+               if not callable(getattr(owner, name, None))]
+    if missing:
+        raise RuntimeError("Managed receivers require Linux pidfd support in this Python build; "
+                           + ", ".join(name + " unavailable" for name in missing)
+                           + ". Use a supported interpreter; "
+                           "status and recover remain available.")
+    try:
+        fd = os.pidfd_open(os.getpid())
+        try:
+            signal.pidfd_send_signal(fd, 0)
+            _group_members(0)
+        finally:
+            os.close(fd)
+    except OSError as error:
+        raise RuntimeError("Managed receivers require usable Linux pidfd handles and /proc "
+                           "access; inspect this host before running") from error
+
+
+def legacy_idle(state, adapter):
+    return (getattr(adapter, "CLEAN_SHUTDOWN_REQUIRED", False)
+            and state["phase"] == "idle" and state.get("lifecycle_version") != 1)
+
+
 async def worker(args, state, adapter):
+    require_process_handles()
     state_file, binding = args.state / STATE_FILE, state["binding"]
+    clean_shutdown = getattr(adapter, "CLEAN_SHUTDOWN_REQUIRED", False)
+    # Older idle records predate the enforced active-runtime phase. Their
+    # native process lifetime cannot be reconstructed from the saved cursor.
+    if legacy_idle(state, adapter):
+        state["phase"] = "needs_inspection"
+        save(state_file, state)
 
     # Native resume can continue work. Stop uncertain dispatches before launch,
     # irrespective of whether the mailbox already has a reply.
@@ -112,17 +285,20 @@ async def worker(args, state, adapter):
 
     adapter.prepare(args, state)
     creating = state["phase"] == "new"
+    if clean_shutdown:
+        state["lifecycle_version"] = 1
     state["phase"] = "starting"
     save(state_file, state)
     watch = None
     session = adapter.Session(args, state)
     try:
         await session.start(creating)
-        state["phase"] = "idle"
+        state["phase"] = "active" if clean_shutdown else "idle"
         save(state_file, state)
         watch = await asyncio.create_subprocess_exec(
             binding["htalk"], "--db", binding["db"], "--as", binding["peer"], "watch",
             stdout=asyncio.subprocess.PIPE, stderr=sys.stderr, start_new_session=True)
+        watch._htalk_group_identity = _process_identity(watch.pid)
         emit("child_started", kind="watch", pid=watch.pid)
         turns = 0
         while True:
@@ -166,7 +342,8 @@ async def worker(args, state, adapter):
                 save(state_file, state)
                 emit("recovery_required", message_id=message_id, stop_reason=stop_reason)
                 return 3
-            state.update(phase="idle", pending=None, last_seq=event["seq"])
+            state.update(phase="active" if clean_shutdown else "idle",
+                         pending=None, last_seq=event["seq"])
             save(state_file, state)
             emit("turn_completed", message_id=message_id,
                  reply_id=shown["reply"]["id"] if shown.get("reply") else None)
@@ -174,13 +351,26 @@ async def worker(args, state, adapter):
             if args.max_turns and turns >= args.max_turns:
                 return 0
     finally:
-        await dispose(watch)
         try:
-            await session.close()
-        except Exception:
-            state["phase"] = "needs_inspection"
-            save(state_file, state)
+            await dispose(watch)
+        except BaseException as error:
+            if isinstance(error, Exception) or clean_shutdown:
+                state["phase"] = "needs_inspection"
+                save(state_file, state)
             raise
+        finally:
+            try:
+                await session.close()
+            except BaseException as error:
+                if isinstance(error, Exception) or clean_shutdown:
+                    state["phase"] = "needs_inspection"
+                    save(state_file, state)
+                raise
+        if clean_shutdown and state["phase"] == "active":
+            # Only successful native close and owned-process disposal release
+            # the active-runtime phase. Turn results alone do not do so.
+            state["phase"] = "idle"
+            save(state_file, state)
 
 
 def read_state(directory):
@@ -191,7 +381,7 @@ def read_state(directory):
 
 
 async def recover(args, state, adapter):
-    if state["phase"] in ("new", "idle"):
+    if state["phase"] in ("new", "idle") and not legacy_idle(state, adapter):
         raise RuntimeError("This session has no uncertain dispatch to recover")
     if args.discard_session != (state["session_id"] or "unknown"):
         raise RuntimeError("Saved session differs; inspect status again before discarding context")
@@ -263,6 +453,7 @@ def main(adapter):
             if not args.task.strip():
                 parser.error("The owner task file must contain a task")
             args.task_sha256 = hashlib.sha256(task_bytes).hexdigest()
+        require_process_handles()
         args.state.mkdir(parents=True, exist_ok=True)
     with (args.state / "lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)

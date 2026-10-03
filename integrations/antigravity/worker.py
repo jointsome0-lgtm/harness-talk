@@ -14,6 +14,17 @@ def emit(event, **fields):
     print(json.dumps({"event": event, **fields}), flush=True)
 
 
+def complete_response(agent, response, previous_step):
+    history = agent.conversation.history
+    last = history[-1] if history else None
+    return (agent.conversation.connection.is_idle
+        and response.stop_reason == types.StopReason.UNSPECIFIED
+        and last is not None and last.id != previous_step
+        and last.type == types.StepType.TEXT_RESPONSE
+        and last.status == types.StepStatus.DONE
+        and last.is_complete_response and not last.error)
+
+
 async def run():
     reader = asyncio.StreamReader(limit=16 * 1024 * 1024)
     protocol = asyncio.StreamReaderProtocol(reader)
@@ -37,16 +48,9 @@ async def run():
                 except asyncio.CancelledError:
                     await response.cancel()
                     raise
-                history = agent.conversation.history
-                last = history[-1] if history else None
-                complete = (agent.conversation.connection.is_idle
-                    and response.stop_reason == types.StopReason.UNSPECIFIED
-                    and last is not None and last.id != previous_step
-                    and last.type == types.StepType.TEXT_RESPONSE
-                    and last.status == types.StepStatus.DONE
-                    and last.is_complete_response and not last.error)
                 emit("result", message_id=request["message_id"],
-                     session_id=agent.conversation_id, complete=complete)
+                     session_id=agent.conversation_id,
+                     complete=complete_response(agent, response, previous_step))
     finally:
         transport.close()
 

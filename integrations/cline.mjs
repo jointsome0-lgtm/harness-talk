@@ -8,18 +8,24 @@ import { pathToFileURL } from "node:url";
 const { HTALK_PEER: peer, HTALK_DB: db, HTALK_SESSION: sessionId, HTALK_WORKSPACE: workspace,
   HTALK_CLINE_ROOT: clineRoot } = process.env;
 const emit = (event, values = {}) => process.stdout.write(JSON.stringify({ event, ...values }) + "\n");
-let client, watcher, lines, stopping = false, boundClient;
-async function stop() {
+let client, watcher, lines, stopping = false, boundClient, stopPromise;
+const detachedClients = new Set();
+function stop() {
+  if (stopPromise) return stopPromise;
   stopping = true;
   lines?.close();
-  if (watcher && watcher.exitCode === null && watcher.signalCode === null) {
-    watcher.kill();
-    const timer = setTimeout(() => watcher.kill("SIGKILL"), 2000);
-    timer.unref();
-    await new Promise(resolve => watcher.once("close", resolve));
-    clearTimeout(timer);
-  }
-  await client?.dispose();
+  stopPromise = (async () => {
+    if (watcher && watcher.exitCode === null && watcher.signalCode === null) {
+      const closed = new Promise(resolve => watcher.once("close", resolve));
+      watcher.kill();
+      const timer = setTimeout(() => watcher.kill("SIGKILL"), 2000);
+      timer.unref();
+      await closed;
+      clearTimeout(timer);
+    }
+    await client?.dispose();
+  })();
+  return stopPromise;
 }
 for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => void stop());
 
@@ -40,6 +46,9 @@ async function attached() {
   } else if (!terminals.some(c => c.clientId === boundClient)) {
     throw Error("terminal_detached");
   }
+  // A subscribed detach can arrive while these command replies are in flight.
+  if (detachedClients.has(boundClient)) throw Error("terminal_detached");
+  detachedClients.clear();
 }
 
 try {
@@ -59,17 +68,24 @@ try {
   client = new hub.NodeHubClient({ url: discovery.url, authToken: discovery.authToken,
     clientType: "htalk-receiver", workspaceRoot: workspace, cwd: workspace });
   await client.connect();
-  await attached();
   if (stopping) throw Error("stopped");
+  // The pinned SDK sends stream.subscribe synchronously, without an ACK or
+  // initial replay cursor. Install it before requesting the attachment state.
   client.subscribe(event => {
     if (stopping) return;
-    if (event.payload?.clientId === boundClient &&
-        (event.event === "hub.client.disconnected" ||
-         (event.event === "session.detached" && event.sessionId === sessionId))) {
+    if (event.event === "hub.client.disconnected" ||
+        (event.event === "session.detached" && event.sessionId === sessionId)) {
+      if (!boundClient) {
+        if (typeof event.payload?.clientId === "string") detachedClients.add(event.payload.clientId);
+        return;
+      }
+      if (event.payload?.clientId !== boundClient) return;
       emit("stopped", { reason: "terminal_detached" });
       void stop();
     }
   });
+  await attached();
+  if (stopping) throw Error("stopped");
   watcher = spawn(process.env.HTALK_BIN || "htalk", ["--db", db, "--as", peer, "watch"], {
     stdio: ["ignore", "pipe", "pipe"],
   });

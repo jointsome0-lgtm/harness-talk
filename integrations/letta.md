@@ -11,6 +11,12 @@ test mailbox until its acceptance checks are complete. Keep `letta.py`,
 Goose and Letta share the notice, approval and recovery loop; mailbox commands
 and their validation remain in the htalk MCP server.
 
+The controller Python build must expose `os.pidfd_open` and
+`signal.pidfd_send_signal`, with usable Linux pidfd handles and `/proc` access.
+Python version alone does not guarantee these APIs. An unsupported build refuses
+`run` before creating or changing receiver state; passive `status` and `recover`
+remain available.
+
 ## Prepare a dedicated profile
 
 Use a fresh private directory. Do not copy a personal Letta profile into it or
@@ -104,6 +110,29 @@ Letta reports a successful end of turn and the agent has ACKed the message.
 This records notice handling, not task completion. The agent must reply to
 the original request when its work is done.
 
+The receiver now saves an `active` lifecycle phase for the whole native
+process lifetime. A successful turn and mailbox ACK can advance notice
+handling, but cannot make the session resumable. Only verified clean native
+close and owned-process cleanup restore `idle`. Loss of the controller and
+native host, even between turns, therefore requires inspection. This is a
+conservative restart guard; it does not prove what an orphan native runtime
+would do or that a native memory sync is durable after power loss.
+
+This update changes restart compatibility for old state. Saved `idle` state
+from older receivers lacks the lifecycle-version marker. On a supported controller,
+the first updated run refuses native launch and preserves its session ID, binding
+and cursor as `needs_inspection`. An unsupported interpreter preserves it unchanged.
+Inspect native history and mail,
+then stop any remaining owned processes. `status` reports the preserved state.
+Use the existing explicit `recover` command with the saved `--discard-session` ID.
+Legacy idle can be retired directly after inspection, even on an unsupported
+interpreter; launching the native session first is unnecessary. When no notice is pending,
+omit `--message` and use `--disposition settled`. Recovery writes a retirement
+receipt before creating fresh-session state. Choosing `--discard-session`
+explicitly loses the old conversation context for future runs; native files
+remain for inspection. The upgrade itself resets no context. Recovery requires
+an explicit operator decision and leaves mailbox records unchanged.
+
 ## Inspect and recover
 
 ```sh
@@ -130,8 +159,10 @@ the saved conversation ID or `unknown` when no ID was saved.
 The next explicit `run` creates a new conversation for the same agent. Its
 previous conversation context is discarded; **agent memory and settings remain**.
 Review other unfinished tasks before doing this. Local Letta memory remains
-enabled; reflection is disabled. Clean shutdown waits for Letta's post-turn
-memory synchronization. A forced stop leaves the receiver requiring inspection.
+enabled; reflection is disabled. The pinned headless stream writes its result
+before awaiting post-turn memory synchronization. Clean EOF shutdown waits for that native cleanup;
+there is no separate synchronization-complete event in this adapter protocol.
+A forced stop leaves the receiver requiring inspection.
 
 Routine receiver JSON contains state and correlation metadata, without message
 bodies or model text. Manual approval prompts show the proposed arguments.

@@ -30,6 +30,79 @@ fn has_column(db: &Connection, table: &str, name: &str) -> Result<bool, Error> {
     )?)
 }
 
+// Validate the inputs this migration reads before making a retained backup.
+// These are compatible column names, not an exact historical CREATE statement.
+fn legacy_table(
+    db: &Connection,
+    table: &str,
+    columns: &[&str],
+    required: bool,
+) -> Result<(), Error> {
+    let exists: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name=? COLLATE NOCASE)",
+        [table],
+        |r| r.get(0),
+    )?;
+    if !exists && !required {
+        return Ok(());
+    }
+    let is_table: bool = db.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name=? COLLATE NOCASE AND type='table')",
+        [table],
+        |r| r.get(0),
+    )?;
+    if !is_table {
+        return Err(Error::code("invalid_database_schema"));
+    }
+    for column in columns {
+        let present: bool = db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_xinfo(?) WHERE name=? COLLATE NOCASE)",
+            [table, column],
+            |r| r.get(0),
+        )?;
+        if !present {
+            return Err(Error::code("invalid_database_schema"));
+        }
+    }
+    Ok(())
+}
+
+fn legacy_structure(db: &Connection) -> Result<(), Error> {
+    legacy_table(
+        db,
+        "peers",
+        &["name", "harness", "session_id", "workspace", "socket"],
+        true,
+    )?;
+    legacy_table(
+        db,
+        "messages",
+        &[
+            "seq",
+            "id",
+            "sender",
+            "recipient",
+            "in_reply_to",
+            "body",
+            "created_at",
+            "ack_at",
+            "submission",
+            "notification_started_at",
+            "notification_finished_at",
+            "notification_detail",
+        ],
+        true,
+    )?;
+    legacy_table(
+        db,
+        "waits",
+        &["token", "message_id", "actor", "until"],
+        false,
+    )?;
+    legacy_table(db, "retired_peers", &["name", "retired_at"], false)?;
+    Ok(())
+}
+
 fn check_version(version: i64) -> Result<(), Error> {
     match version {
         0..=2 | SCHEMA_VERSION => Ok(()),
@@ -188,6 +261,7 @@ fn change(db: &mut Connection, path: &Path) -> Result<(), Error> {
     } else {
         // Reject broken legacy data before repeated ordinary opens can create
         // a full backup on every attempt. These checks do not change the source.
+        legacy_structure(&tx)?;
         foreign_keys(&tx)?;
         integrity(&tx)?;
         backup(path, v).map_err(|error| match error {

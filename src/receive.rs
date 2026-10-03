@@ -412,7 +412,7 @@ fn operate(directory: &Path, mut state: State, _lock: File) -> Result<()> {
                 .args(&state.binding.command[1..]).stdin(Stdio::piped())
                 .stdout(Stdio::piped()).stderr(Stdio::null())
                 .process_group(0).kill_on_drop(true).spawn()?;
-            let pid = child.id().unwrap();
+            let mut group = crate::process_cleanup::OwnedGroup::new(child.id().unwrap())?;
             // A watch stream carries IDs only. Its free text is never injected.
             let (stopped, result) = {
             let consume = async {
@@ -483,12 +483,9 @@ fn operate(directory: &Path, mut state: State, _lock: File) -> Result<()> {
                 _ = interrupt.recv() => (true, Ok(())),
             }
             };
-            // Also reap the configured connector after stream loss or cancellation.
-            unsafe { libc::kill(-(pid as i32), libc::SIGTERM); }
-            if tokio::time::timeout(Duration::from_secs(2), child.wait()).await.is_err() {
-                unsafe { libc::kill(-(pid as i32), libc::SIGKILL); }
-                let _ = child.wait().await;
-            }
+            // Keep the wrapper unreaped until its inspected descendants stop.
+            group.finish_async().await?;
+            child.wait().await?;
             result?;
             if stopped { return Ok(()); }
             emit(json!({"event":"disconnected","retry_in_seconds":delay}))?;
