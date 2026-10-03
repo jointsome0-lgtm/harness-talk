@@ -34,9 +34,9 @@ maintain a reverse SSH route when only the worker accepts SSH. They recover
 transport separately from model execution. See the [checked recovery and
 resume limits](docs/checks/2026-09-27-ssh-lifecycle.md).
 
-Version 0.11.0 fixes mailbox recovery, catalogue selection, native I/O and receiver cleanup. Mailbox schema remains 3. Existing schema-3 mailboxes need no migration; schema 1/2 still receive a verified backup and automatic migration on first use.
+Version 0.11.1 fixes repeated legacy migration and extra backups when a send or reply encounters contention after migration BEGIN. Mailbox schema remains 3. Existing schema-3 mailboxes need no migration; schema 1/2 still receive a verified backup and automatic migration on first use. See the [0.11.1 patch, upgrade and rollback notes](docs/releases/0.11.1.md).
 
-Stop receivers before updating the CLI and their matching adapter files. Old Antigravity/Letta idle state now requires explicit inspection and named session retirement before further managed work. OpenHands requires a private `HTALK_OPENHANDS_STATE` directory. Keep saved state and receipts. Do not reset them to bypass recovery. Subprocess cleanup needs Linux 5.3+ and readable `/proc`; managed Python receivers also require working pidfd APIs in that interpreter. See the [0.11.0 changes, upgrade and rollback notes](docs/releases/0.11.0.md).
+Stop mailbox writers and receivers before updating the CLI and their matching adapter files. The 0.11.0 receiver requirements still apply: old Antigravity/Letta idle state requires explicit inspection and named session retirement before further managed work. OpenHands requires a private `HTALK_OPENHANDS_STATE` directory. Keep saved state and receipts. Do not reset them to bypass recovery. Subprocess cleanup needs Linux 5.3+ and readable `/proc`; managed Python receivers also require working pidfd APIs in that interpreter. See the [0.11.0 adapter, recovery and host requirements](docs/releases/0.11.0.md).
 
 ## Install and share a database
 
