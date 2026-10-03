@@ -1,5 +1,36 @@
 # Client adapters
 
+Checked on 2026-10-03 UTC with the htalk `0.11.1` x86-64 publication wheel,
+commit `3c86ebb62151fe77ef5019082269f3ea2020665f`, SHA-256
+`0283d9d04398fe884ee59834fa42bc90c4514ac24703df6a353f793d60b9427b`.
+The wheel and matching source archive came from
+[publication run 37141672055](https://github.com/jointsome0-lgtm/harness-talk/actions/runs/37141672055).
+The [0.11.1 native check](checks/2026-10-03-0.11.1-native.md) records exact
+artifact hashes, client versions, permissions, publication checks and limits.
+
+All 14 available installed clients completed the mandatory native exchange:
+Codex, Claude, Pi, OMP, OpenClaw, Cline, Kilo, Goose, Hermes, Copilot, Gemini,
+Letta, OpenHands and OpenCode. Actual Codex/GPT-6.1 Sol high and Claude/Opus 5.5
+high checked both initiating directions. The other 12 clients used fresh
+synthetic state, fake keys and canned loopback providers without paid inference;
+their checks establish native transport and tool execution, not model reasoning.
+Every passing case observed a native notice, showed the full request once before
+a separate ACK, produced a correlated reply, and ended with the controller's
+read and separate reply ACK, empty inboxes and recorded owned process closure.
+
+The mandatory exchange did not establish normal exit for every client. Hermes
+and Gemini retain false runner aggregates; Hermes also made an extra rejected
+loopback provider request. OMP ended after controller termination. OpenCode
+used a headless server without an attached TUI and ended after SIGTERM, exit
+`-15`; requested port 0 selected 4096 rather than proving an OS-assigned ephemeral
+port. Core closure covers recorded owned processes without a distinct listener
+readback. Cleanup remains literal: Codex `absent`, Claude/Kilo/OpenCode
+`unsupported`, other adapter exchanges `skipped/pull_only`; none proves notice
+removal. Four invalid earlier attempts remain separate, and old mail was not
+replayed. Antigravity SDK and Agent Zero remain unchecked. The seven frozen
+performance failures remain unresolved. See the [0.11.1 release notes](releases/0.11.1.md)
+for upgrade requirements. Earlier dated checks below remain historical evidence.
+
 Checked on 2026-10-03 UTC with the htalk `0.11.0` x86-64 publication wheel,
 commit `a8177d79cf53f810c4db45007df99b66a945a680`, SHA-256
 `b3f098ad5cc63b8552bfbd98996e51678e69faf7c743b73aae2a01379c2df3b3`.
