@@ -19,6 +19,16 @@ pub(super) fn peer_id(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || b"_-".contains(&c))
 }
 
+pub(super) fn ssh_address(address: &str) -> Result<Ipv4Addr, Error> {
+    let ip: Ipv4Addr = address
+        .parse()
+        .map_err(|_| code("catalog_invalid_ssh_address"))?;
+    if ip.is_unspecified() || ip.is_multicast() || ip.is_broadcast() {
+        return Err(code("catalog_invalid_ssh_address"));
+    }
+    Ok(ip)
+}
+
 #[derive(Clone)]
 pub(crate) struct TailClient {
     binary: PathBuf,
@@ -252,6 +262,9 @@ impl Pan {
 
 #[derive(Clone)]
 pub(crate) enum Route {
+    DirectSsh {
+        ip: Ipv4Addr,
+    },
     Interface {
         ip: Ipv4Addr,
         interface: String,
@@ -268,12 +281,13 @@ pub(crate) enum Route {
 impl Route {
     pub(super) fn ip(&self) -> Ipv4Addr {
         match self {
-            Self::Interface { ip, .. } | Self::Tailscale { ip, .. } => *ip,
+            Self::DirectSsh { ip } | Self::Interface { ip, .. } | Self::Tailscale { ip, .. } => *ip,
         }
     }
 
     pub(super) fn ssh_args(&self, port: u16) -> Vec<String> {
         match self {
+            Self::DirectSsh { .. } => Vec::new(),
             Self::Interface { interface, .. } => vec!["-B".into(), interface.clone()],
             Self::Tailscale { ip, client, .. } => vec!["-o".into(), client.proxy(*ip, port)],
         }
@@ -281,6 +295,9 @@ impl Route {
 
     pub(crate) fn check(&self) -> Result<(), Error> {
         match self {
+            // The address is captured from owner-controlled trust at discovery.
+            // An open client keeps it; no mutable discovery source can redirect it.
+            Self::DirectSsh { .. } => {}
             Self::Interface { ip, interface, pan } => {
                 let args = vec![
                     "/usr/sbin/ip".into(),
@@ -323,6 +340,26 @@ impl Route {
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn direct_ssh_requires_a_literal_unicast_ipv4_address() {
+        for address in ["127.0.0.1", "192.0.2.1", "169.254.1.2"] {
+            assert_eq!(ssh_address(address).unwrap().to_string(), address);
+        }
+        for address in [
+            "",
+            "example.com",
+            "::1",
+            "127.0.0.1:22",
+            " 127.0.0.1",
+            "127.0.0.01",
+            "0.0.0.0",
+            "224.0.0.1",
+            "255.255.255.255",
+            "-oProxyCommand=command",
+        ] {
+            assert!(ssh_address(address).is_err(), "{address}");
+        }
+    }
     fn status() -> Value {
         json!({"Version":"1.102.4","BackendState":"Running",
         "Self":{"ID":"nlocal","Online":true},"Peer":{"nodekey:x":{"ID":"npeer","Online":true,

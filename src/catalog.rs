@@ -254,6 +254,8 @@ struct TrustedDevice {
     known_hosts_file: PathBuf,
     #[serde(default)]
     tailscale_peer_id: Option<String>,
+    #[serde(default)]
+    ssh_address: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -604,6 +606,9 @@ fn trust(path: &Path) -> Result<Trust, Error> {
         {
             return Err(code("catalog_invalid_trust"));
         }
+        if let Some(address) = &d.ssh_address {
+            transport::ssh_address(address)?;
+        }
         if !seen.insert(&d.device_id)
             || d.ssh_port == 0
             || d.ssh_user.is_empty()
@@ -845,6 +850,12 @@ fn select_profile(
 
 fn discover(options: &ArgMatches) -> Result<(Value, Vec<Found>), Error> {
     let t = trust(Path::new(required(options, "trust")))?;
+    if required(options, "via") == "ssh" {
+        if options.get_one::<String>("interface").is_some() {
+            return Err(code("catalog_ssh_omit_interface"));
+        }
+        return discover_ssh(t);
+    }
     if required(options, "via") == "tailscale" {
         if options.get_one::<String>("interface").is_some() {
             return Err(code("catalog_tailscale_omit_interface"));
@@ -857,6 +868,63 @@ fn discover(options: &ArgMatches) -> Result<(Value, Vec<Found>), Error> {
         None
     };
     discover_mdns(options, t, pan)
+}
+
+fn discover_ssh(t: Trust) -> Result<(Value, Vec<Found>), Error> {
+    let end = Instant::now() + Duration::from_secs(15);
+    let mut devices = Vec::new();
+    let mut found = Vec::new();
+    for device in t.devices {
+        if stopped() {
+            return Err(Error::Interrupted);
+        }
+        let result = (|| {
+            let address = device
+                .ssh_address
+                .as_ref()
+                .ok_or_else(|| code("catalog_ssh_not_bound"))?;
+            let route = Route::DirectSsh {
+                ip: transport::ssh_address(address)?,
+            };
+            let budget = end
+                .saturating_duration_since(Instant::now())
+                .min(Duration::from_secs(5));
+            if budget < Duration::from_secs(1) {
+                return Err(code("catalog_discovery_budget_exhausted"));
+            }
+            let directory = fetch(&connector(&device, &route, "catalog"), budget)?;
+            accept(&device, &directory)?;
+            Ok(Found {
+                directory,
+                device: device.clone(),
+                route,
+            })
+        })();
+        match result {
+            Ok(item) => {
+                devices.push(json!({"device_id":device.device_id,"trust":"known","directory_state":"reachable",
+                    "via":"ssh","catalog":item.directory}));
+                found.push(item);
+            }
+            Err(Error::Interrupted) => return Err(Error::Interrupted),
+            Err(error) => devices.push(
+                json!({"device_id":device.device_id,"trust":"known","directory_state":"unavailable",
+                "via":"ssh","error":error.to_string()}),
+            ),
+        }
+    }
+    if stopped() {
+        return Err(Error::Interrupted);
+    }
+    let partial = devices
+        .iter()
+        .any(|d| d["directory_state"] == "unavailable");
+    Ok((
+        json!({"devices":devices,"sources":[{"source":"ssh","via":"ssh",
+        "status":if partial { "partial" } else { "ok" }}],
+        "scope":"Snapshot from explicitly pinned SSH IPv4 addresses. No multicast or Tailscale discovery. Reachability is not agent liveness."}),
+        found,
+    ))
 }
 
 fn discover_tailscale(options: &ArgMatches, t: Trust) -> Result<(Value, Vec<Found>), Error> {
@@ -1184,7 +1252,7 @@ fn browse_args(c: Cli) -> Cli {
         Arg::new("via")
             .long("via")
             .default_value("lan")
-            .value_parser(["lan", "bluetooth", "tailscale"])
+            .value_parser(["lan", "bluetooth", "tailscale", "ssh"])
             .help("Choose one channel; never fails over a mailbox call."),
     )
     .arg(
@@ -1208,7 +1276,7 @@ fn browse_args(c: Cli) -> Cli {
 }
 
 pub(crate) fn command() -> Cli {
-    Cli::new("catalog").about("Publish profiles and find known devices through LAN, active Bluetooth PAN or Tailscale.")
+    Cli::new("catalog").about("Publish profiles and find known devices through pinned SSH, LAN, active Bluetooth PAN or Tailscale.")
         .long_about("Only explicitly published profiles are exported. Device discovery is unauthenticated; profile reads and mailbox calls require pinned SSH identity and a fixed endpoint. Never launches sessions or retries messages.")
         .subcommand_required(true)
         .subcommand(Cli::new("publish").about("Publish an existing peer; replace a profile binding explicitly with --profile-id.")
@@ -1223,7 +1291,7 @@ pub(crate) fn command() -> Cli {
         .subcommand(Cli::new("advertise").about("Advertise this catalogue until stopped; no standalone daemon is installed.")
             .arg(config_arg()).arg(Arg::new("interface").long("interface").required(true))
             .arg(Arg::new("seconds").long("seconds").default_value("0").value_parser(clap::value_parser!(u64).range(0..=86400))))
-        .subcommand(browse_args(Cli::new("discover").about("Find advertisements; fetch profiles only from known, pinned devices.")))
+        .subcommand(browse_args(Cli::new("discover").about("Fetch profiles only from known, pinned devices through the selected channel.")))
         .subcommand(browse_args(Cli::new("connect").about("Find this published profile and expose its checked MCP route on stdio.")
             .arg(Arg::new("profile").required(true).help("Canonical UUID selects only that profile identity, with no name fallback. Other inputs match display names exactly. For UUID-shaped or duplicate names, use the profile's own UUID."))))
 }

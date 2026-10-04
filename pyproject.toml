@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "harness-talk"
 dynamic = ["version"]
-description = "Exchange messages between local agent sessions"
+description = "Exchange messages between agent sessions"
 requires-python = ">=3.11"
 readme = "README.md"
 license = "MIT"

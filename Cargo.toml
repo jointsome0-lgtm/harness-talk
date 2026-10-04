@@ -1,9 +1,9 @@
 [package]
 name = "harness-talk"
-version = "0.11.1"
+version = "0.12.0"
 edition = "2024"
 rust-version = "1.88"
-description = "Exchange messages between local agent sessions"
+description = "Exchange messages between agent sessions"
 license = "MIT"
 repository = "https://github.com/jointsome0-lgtm/harness-talk"
 readme = "README.md"

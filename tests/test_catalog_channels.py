@@ -1,4 +1,4 @@
-"""Tailscale source validation for the cross-channel profile catalogue."""
+"""Pinned SSH and Tailscale sources for the cross-channel profile catalogue."""
 import json
 import os
 from pathlib import Path
@@ -15,7 +15,82 @@ from compat_support import HtalkCase, wait_for
 from test_mcp import McpClient
 
 
-class TailscaleCatalog(HtalkCase):
+class SshCatalogFixture(HtalkCase):
+    """A private real SSH listener bound only to loopback, with a forced catalogue."""
+    def setUp(self):
+        super().setUp()
+        self.private_key = self.tmp / 'identity'
+        self.known_hosts = self.tmp / 'known_hosts'
+        self.private_key.write_text('fixture private key\n')
+        self.known_hosts.write_text('fixture pinned host key\n')
+        self.private_key.chmod(0o600)
+        self.known_hosts.chmod(0o600)
+
+    def ssh_fixture(self, wrapper=None):
+        sshd = os.environ.get('HTALK_TEST_SSHD') or shutil.which('sshd')
+        keygen = shutil.which('ssh-keygen')
+        if not sshd or not keygen:
+            self.skipTest('OpenSSH server and ssh-keygen are required for the host-key fixture')
+        for peer in ('alice', 'bob'):
+            self.htalk('peer', 'add', peer, '--harness', 'generic', '--delivery', 'pull')
+        config = self.tmp / 'catalog.json'
+        self.htalk('--as', 'alice', 'catalog', 'publish', '--config', config, 'bob',
+                   '--name', 'Reviewer', '--role', 'Review')
+        directory = self.htalk('catalog', 'export', '--config', config, db=False)
+        host = self.tmp / 'host-key'
+        wrong = self.tmp / 'wrong-key'
+        for path in (host, wrong, self.private_key):
+            path.unlink(missing_ok=True)
+            subprocess.run([keygen, '-q', '-t', 'ed25519', '-N', '', '-f', str(path)],
+                           check=True, capture_output=True)
+        with socket.socket() as reservation:
+            reservation.bind(('127.0.0.1', 0))
+            port = reservation.getsockname()[1]
+        endpoint = shlex.join([sys.executable, '-B', str(wrapper)] if wrapper else
+                              self.argv(['catalog', 'serve', '--config', str(config)], False))
+        authorized = self.tmp / 'authorized_keys'
+        authorized.write_text('restrict,command="' + endpoint + '" ' +
+                              Path(str(self.private_key) + '.pub').read_text())
+        authorized.chmod(0o600)
+        user = pwd.getpwuid(os.getuid()).pw_name
+        server_config = self.tmp / 'sshd_config'
+        server_config.write_text('\n'.join([
+            f'Port {port}', 'ListenAddress 127.0.0.1', f'HostKey {host}',
+            f'PidFile {self.tmp / "sshd.pid"}', f'AuthorizedKeysFile {authorized}',
+            # The owned temporary directory is under /tmp, outside the login
+            # user's home. This isolated loopback fixture uses only its own key.
+            'StrictModes no', 'PasswordAuthentication no', 'KbdInteractiveAuthentication no',
+            'PubkeyAuthentication yes', 'UsePAM no', 'PermitRootLogin prohibit-password',
+            f'AllowUsers {user}', 'AllowTcpForwarding no', 'X11Forwarding no',
+            'PermitTTY no', 'LogLevel ERROR',
+        ]) + '\n')
+        subprocess.run([sshd, '-t', '-f', str(server_config)], check=True, capture_output=True)
+        log = (self.tmp / 'sshd.log').open('w+')
+        self.addCleanup(log.close)
+        server = subprocess.Popen([sshd, '-D', '-e', '-f', str(server_config)], stderr=log)
+        self.processes.append(server)
+        def listening():
+            if server.poll() is not None:
+                log.seek(0)
+                self.fail('fixture sshd stopped: ' + log.read())
+            try:
+                with socket.create_connection(('127.0.0.1', port), timeout=0.2):
+                    return True
+            except OSError:
+                return False
+        wait_for(listening, message='fixture SSH listener')
+        device = {key: directory[key] for key in ('device_id', 'mailbox_id', 'generation', 'sender')}
+        device.update(ssh_port=port, ssh_user=user, identity_file=str(self.private_key),
+                      known_hosts_file=str(self.known_hosts))
+        trust = self.tmp / 'ssh-trust.json'
+        trust.write_text(json.dumps({'schema_version': 1, 'devices': [device]}))
+        trust.chmod(0o600)
+        alias = 'htalk-' + directory['device_id']
+        self.known_hosts.write_text(alias + ' ' + Path(str(host) + '.pub').read_text())
+        return config, trust, directory, wrong, log
+
+
+class TailscaleCatalog(SshCatalogFixture):
     def setUp(self):
         super().setUp()
         self.ts_binary = self.tmp / 'tailscale'
@@ -43,12 +118,6 @@ class TailscaleCatalog(HtalkCase):
         endpoint.close()
         self.ts_socket.chmod(0o666)
         self.addCleanup(lambda: self.ts_socket.unlink(missing_ok=True))
-        self.private_key = self.tmp / 'identity'
-        self.known_hosts = self.tmp / 'known_hosts'
-        self.private_key.write_text('fixture private key\n')
-        self.known_hosts.write_text('fixture pinned host key\n')
-        self.private_key.chmod(0o600)
-        self.known_hosts.chmod(0o600)
 
     def tailscale_trust(self, peers):
         devices = []
@@ -103,57 +172,8 @@ class TailscaleCatalog(HtalkCase):
         return [json.loads(line) for line in self.calls_file.read_text().splitlines()]
 
     def ssh_fixture(self):
-        sshd = os.environ.get('HTALK_TEST_SSHD') or shutil.which('sshd')
-        keygen = shutil.which('ssh-keygen')
-        if not sshd or not keygen:
-            self.skipTest('OpenSSH server and ssh-keygen are required for the host-key fixture')
-        for peer in ('alice', 'bob'):
-            self.htalk('peer', 'add', peer, '--harness', 'generic', '--delivery', 'pull')
-        config = self.tmp / 'catalog.json'
-        self.htalk('--as', 'alice', 'catalog', 'publish', '--config', config, 'bob',
-                   '--name', 'Reviewer', '--role', 'Review')
-        directory = self.htalk('catalog', 'export', '--config', config, db=False)
-        host = self.tmp / 'host-key'
-        wrong = self.tmp / 'wrong-key'
-        for path in (host, wrong, self.private_key):
-            path.unlink(missing_ok=True)
-            subprocess.run([keygen, '-q', '-t', 'ed25519', '-N', '', '-f', str(path)],
-                           check=True, capture_output=True)
-        with socket.socket() as reservation:
-            reservation.bind(('127.0.0.1', 0))
-            port = reservation.getsockname()[1]
-        endpoint = shlex.join(self.argv(['catalog', 'serve', '--config', str(config)], False))
-        authorized = self.tmp / 'authorized_keys'
-        authorized.write_text('restrict,command="' + endpoint + '" ' +
-                              Path(str(self.private_key) + '.pub').read_text())
-        authorized.chmod(0o600)
-        user = pwd.getpwuid(os.getuid()).pw_name
-        server_config = self.tmp / 'sshd_config'
-        server_config.write_text('\n'.join([
-            f'Port {port}', 'ListenAddress 127.0.0.1', f'HostKey {host}',
-            f'PidFile {self.tmp / "sshd.pid"}', f'AuthorizedKeysFile {authorized}',
-            # The owned temporary directory is under /tmp, outside the login
-            # user's home. This isolated loopback fixture uses only its own key.
-            'StrictModes no', 'PasswordAuthentication no', 'KbdInteractiveAuthentication no',
-            'PubkeyAuthentication yes', 'UsePAM no', 'PermitRootLogin prohibit-password',
-            f'AllowUsers {user}', 'AllowTcpForwarding no', 'X11Forwarding no',
-            'PermitTTY no', 'LogLevel ERROR',
-        ]) + '\n')
-        subprocess.run([sshd, '-t', '-f', str(server_config)], check=True, capture_output=True)
-        log = (self.tmp / 'sshd.log').open('w+')
-        self.addCleanup(log.close)
-        server = subprocess.Popen([sshd, '-D', '-e', '-f', str(server_config)], stderr=log)
-        self.processes.append(server)
-        def listening():
-            if server.poll() is not None:
-                log.seek(0)
-                self.fail('fixture sshd stopped: ' + log.read())
-            try:
-                with socket.create_connection(('127.0.0.1', port), timeout=0.2):
-                    return True
-            except OSError:
-                return False
-        wait_for(listening, message='fixture SSH listener')
+        config, trust, directory, wrong, log = super().ssh_fixture()
+        port = json.loads(trust.read_text())['devices'][0]['ssh_port']
         # This owned fake Tailscale CLI redirects only the fixture peer/port to
         # loopback. OpenSSH still performs a real host-key check and handshake.
         self.ts_binary.write_text('''#!%s -B
@@ -182,14 +202,9 @@ else:
         self.status({'nodekey:fixture': {
             'ID': 'nfixture', 'Online': True, 'TailscaleIPs': ['100.64.0.2'],
         }})
-        trust, devices = self.tailscale_trust(['nfixture'])
-        device = devices[0]
-        for key in ('device_id', 'mailbox_id', 'generation', 'sender'):
-            device[key] = directory[key]
-        device.update(ssh_port=port, ssh_user=user)
-        trust.write_text(json.dumps({'schema_version': 1, 'devices': devices}))
-        alias = 'htalk-' + directory['device_id']
-        self.known_hosts.write_text(alias + ' ' + Path(str(host) + '.pub').read_text())
+        value = json.loads(trust.read_text())
+        value['devices'][0]['tailscale_peer_id'] = 'nfixture'
+        trust.write_text(json.dumps(value))
         return config, trust, directory, wrong, log
 
     def connected(self, trust, selector):
@@ -444,6 +459,230 @@ else:
                 self.assertEqual('catalog_tailscale_invalid_socket', result.json.get('error'))
                 self.assertEqual([], self.ts_calls())
                 self.ts_namespace.chmod(0o700)
+
+
+class DirectSshCatalog(SshCatalogFixture):
+    def pin_address(self, trust, address='127.0.0.1'):
+        value = json.loads(trust.read_text())
+        value['devices'][0]['ssh_address'] = address
+        trust.write_text(json.dumps(value))
+
+    def discover(self, trust):
+        return self.htalk('catalog', 'discover', '--trust', trust, '--via', 'ssh', db=False)
+
+    def connect_args(self, trust, selector):
+        return ['catalog', 'connect', selector, '--trust', str(trust), '--via', 'ssh']
+
+    def connected(self, trust, selector='Reviewer'):
+        return McpClient(self, argv=self.argv(self.connect_args(trust, selector), False))
+
+    def connect_error(self, trust, selector, error):
+        # connect reserves stdout for MCP frames; startup errors use stderr.
+        result = self.run_raw(*self.connect_args(trust, selector), db=False)
+        self.assertEqual(2, result.code, result.stderr)
+        self.assertEqual('', result.stdout)
+        self.assertIn(error, result.stderr)
+
+    def result(self, client, *args):
+        result = client.call(*args)
+        self.assertFalse(result.get('isError', False), result)
+        return result['structuredContent']['result']
+
+    def test_missing_address_keeps_legacy_trust_valid_and_reports_partial(self):
+        _, trust, directory, _, _ = self.ssh_fixture()
+        before = self.db.read_bytes()
+        result = self.discover(trust)
+        self.assertEqual('partial', result['sources'][0]['status'])
+        self.assertEqual('catalog_ssh_not_bound', result['devices'][0]['error'])
+        self.pin_address(trust)
+        result = self.discover(trust)
+        self.assertEqual('ok', result['sources'][0]['status'])
+        self.assertEqual('ssh', result['sources'][0]['source'])
+        self.assertEqual(directory, result['devices'][0]['catalog'])
+        self.assertEqual(before, self.db.read_bytes())
+        # No fake or installed Tailscale daemon and no multicast interface are
+        # configured in this fixture. Only its pinned loopback SSH endpoint runs.
+
+    def test_malformed_addresses_are_rejected_before_any_endpoint_or_database(self):
+        device = {key: str(uuid.uuid4()) for key in ('device_id', 'mailbox_id', 'generation')}
+        device.update(sender='alice', ssh_user='fixture', identity_file=str(self.private_key),
+                      known_hosts_file=str(self.known_hosts))
+        trust = self.tmp / 'trust.json'
+        for address in ('', 'example.com', '::1', '127.0.0.1:22', ' 127.0.0.1',
+                        '127.0.0.01', '0.0.0.0', '224.0.0.1', '255.255.255.255',
+                        '-oProxyCommand=command'):
+            with self.subTest(address=address):
+                device['ssh_address'] = address
+                trust.write_text(json.dumps({'schema_version': 1, 'devices': [device]}))
+                trust.chmod(0o600)
+                self.error('catalog', 'discover', '--trust', trust, '--via', 'ssh', db=False,
+                           error='catalog_invalid_ssh_address')
+                self.assertFalse(self.db.exists())
+
+    def test_partial_snapshot_contains_only_configured_devices(self):
+        _, trust, directory, _, _ = self.ssh_fixture()
+        self.pin_address(trust)
+        value = json.loads(trust.read_text())
+        unreachable = {**value['devices'][0], 'device_id': str(uuid.uuid4()),
+                       'ssh_address': '127.0.0.2'}
+        unbound = {**value['devices'][0], 'device_id': str(uuid.uuid4())}
+        del unbound['ssh_address']
+        value['devices'] += [unreachable, unbound]
+        trust.write_text(json.dumps(value))
+        result = self.discover(trust)
+        by_id = {item['device_id']: item for item in result['devices']}
+        self.assertEqual({d['device_id'] for d in value['devices']}, set(by_id))
+        self.assertEqual('reachable', by_id[directory['device_id']]['directory_state'])
+        self.assertEqual('catalog_unreachable', by_id[unreachable['device_id']]['error'])
+        self.assertEqual('catalog_ssh_not_bound', by_id[unbound['device_id']]['error'])
+        self.assertEqual('partial', result['sources'][0]['status'])
+        self.error('catalog', 'discover', '--trust', trust, '--via', 'ssh', '--interface', 'lo',
+                   db=False, error='catalog_ssh_omit_interface')
+        self.assertEqual(0, self.sql('SELECT count(*) FROM messages')[0][0])
+
+    def test_name_uuid_shadow_and_ambiguity_keep_existing_selection_rules(self):
+        config, trust, directory, _, _ = self.ssh_fixture()
+        self.pin_address(trust)
+        profile_id = directory['profiles'][0]['profile_id']
+        self.htalk('peer', 'add', 'carol', '--harness', 'generic', '--delivery', 'pull')
+        shadow = self.htalk('--as', 'alice', 'catalog', 'publish', '--config', config,
+                            'carol', '--name', profile_id, '--role', 'Review')
+        for selector, peer in (('Reviewer', 'bob'), (profile_id, 'bob'),
+                               (shadow['profile_id'], 'carol')):
+            with self.subTest(selector=selector):
+                client = self.connected(trust, selector)
+                self.assertEqual([peer], [p['name'] for p in self.result(client, 'peer', 'list')['peers']])
+                client.close()
+        self.htalk('--as', 'alice', 'catalog', 'publish', '--config', config,
+                   'carol', '--profile-id', shadow['profile_id'], '--name', 'Reviewer', '--role', 'Review')
+        self.connect_error(trust, 'Reviewer', 'catalog_ambiguous_profile')
+        missing = str(uuid.uuid4())
+        self.htalk('--as', 'alice', 'catalog', 'publish', '--config', config,
+                   'carol', '--profile-id', shadow['profile_id'], '--name', missing, '--role', 'Review')
+        self.connect_error(trust, missing, 'catalog_profile_unavailable')
+        self.assertEqual(0, self.sql('SELECT count(*) FROM messages')[0][0])
+
+    def test_wrong_host_key_and_deployment_block_discovery_before_write(self):
+        _, trust, directory, wrong, _ = self.ssh_fixture()
+        self.pin_address(trust)
+        alias = 'htalk-' + directory['device_id']
+        correct_key = self.known_hosts.read_text()
+        before = self.db.read_bytes()
+        self.known_hosts.write_text(alias + ' ' + Path(str(wrong) + '.pub').read_text())
+        rejected = self.discover(trust)
+        self.assertEqual('catalog_unreachable', rejected['devices'][0]['error'])
+        self.connect_error(trust, 'Reviewer', 'catalog_profile_unavailable')
+        self.known_hosts.write_text(correct_key)
+        value = json.loads(trust.read_text())
+        for key in ('mailbox_id', 'generation', 'sender'):
+            with self.subTest(binding=key):
+                bad = json.loads(json.dumps(value))
+                bad['devices'][0][key] = 'other' if key == 'sender' else str(uuid.uuid4())
+                trust.write_text(json.dumps(bad))
+                rejected = self.discover(trust)
+                self.assertEqual('catalog_endpoint_binding_mismatch', rejected['devices'][0]['error'])
+                self.connect_error(trust, 'Reviewer', 'catalog_profile_unavailable')
+        self.assertEqual(before, self.db.read_bytes())
+
+    def test_republication_and_retirement_block_open_client_before_write(self):
+        config, trust, directory, _, _ = self.ssh_fixture()
+        self.pin_address(trust)
+        profile_id = directory['profiles'][0]['profile_id']
+        client = self.connected(trust, profile_id)
+        self.result(client, 'inbox')
+        self.htalk('--as', 'alice', 'catalog', 'publish', '--config', config, 'bob',
+                   '--profile-id', profile_id, '--name', 'Reviewer', '--role', 'Review')
+        blocked = client.call('send', 'bob', '--id', str(uuid.uuid4()), '--message', 'stale')
+        self.assertTrue(blocked['isError'])
+        self.assertIn('before sending', json.dumps(blocked))
+        client.close()
+        fresh = self.connected(trust, profile_id)
+        self.htalk('peer', 'retire', 'bob')
+        blocked = fresh.call('send', 'bob', '--id', str(uuid.uuid4()), '--message', 'retired')
+        self.assertTrue(blocked['isError'])
+        self.assertIn('before sending', json.dumps(blocked))
+        fresh.close()
+        self.assertEqual(0, self.sql('SELECT count(*) FROM messages')[0][0])
+
+    def test_open_client_keeps_address_until_explicit_rediscovery(self):
+        _, trust, _, _, _ = self.ssh_fixture()
+        self.pin_address(trust)
+        client = self.connected(trust)
+        self.pin_address(trust, '127.0.0.2')
+        self.assertEqual('unavailable', self.discover(trust)['devices'][0]['directory_state'])
+        self.connect_error(trust, 'Reviewer', 'catalog_profile_unavailable')
+        self.result(client, 'inbox')  # Still the originally captured 127.0.0.1.
+        self.pin_address(trust)
+        fresh = self.connected(trust)
+        self.result(fresh, 'inbox')
+        fresh.close()
+        client.close()
+        self.assertEqual(0, self.sql('SELECT count(*) FROM messages')[0][0])
+
+    def test_lost_ssh_write_response_keeps_one_attempt_and_original_ids(self):
+        mode = self.tmp / 'link-mode'
+        mode.write_text('drop')
+        attempts = self.tmp / 'attempts'
+        wrapper = self.tmp / 'drop-response.py'
+        command = self.argv(['catalog', 'serve', '--config', str(self.tmp / 'catalog.json')], False)
+        wrapper.write_text('''import json,os,subprocess,sys
+from pathlib import Path
+command = %r
+if os.environ.get('SSH_ORIGINAL_COMMAND') != 'mcp' or Path(%r).read_text() == 'online':
+    os.execv(command[0],command)
+child = subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,text=True)
+try:
+    for line in sys.stdin:
+        frame=json.loads(line)
+        child.stdin.write(line);child.stdin.flush()
+        if 'id' not in frame:
+            continue
+        response=child.stdout.readline()
+        if frame['method']=='tools/call':
+            with open(%r,'a') as out:
+                out.write(json.dumps(frame['params'])+'\\n')
+            assert not json.loads(response)['result'].get('isError',False)
+            break
+        sys.stdout.write(response);sys.stdout.flush()
+finally:
+    child.stdin.close();child.wait(timeout=10)
+''' % (command, str(mode), str(attempts)))
+        _, trust, _, _, _ = self.ssh_fixture(wrapper=wrapper)
+        self.pin_address(trust)
+        client = self.connected(trust)
+        request_id = str(uuid.uuid4())
+        lost = client.call('send', 'bob', '--id', request_id, '--message', 'one request')
+        self.assertTrue(lost['isError'])
+        self.assertIn('outcome is unknown', json.dumps(lost))
+        self.assertEqual(1, len(attempts.read_text().splitlines()))
+        self.assertEqual(1, self.sql('SELECT count(*) FROM messages')[0][0])
+        mode.write_text('online')
+        original = self.result(client, 'show', request_id)
+        retry = self.result(client, 'send', 'bob', '--id', request_id, '--message', 'one request')
+        self.assertFalse(retry['created'])
+        self.assertEqual((request_id, original['created_at']), (retry['id'], retry['created_at']))
+        conflict = client.call('send', 'bob', '--id', request_id, '--message', 'changed')
+        self.assertTrue(conflict['isError'])
+        self.assertIn('message_id_conflict', json.dumps(conflict))
+        parent = self.htalk('--as', 'bob', 'send', 'alice', '--id', str(uuid.uuid4()),
+                            '--message', 'incoming request')
+        mode.write_text('drop')
+        lost = client.call('reply', parent['id'], '--message', 'one answer')
+        self.assertTrue(lost['isError'])
+        self.assertIn('outcome is unknown', json.dumps(lost))
+        self.assertEqual(2, len(attempts.read_text().splitlines()))
+        self.assertEqual(3, self.sql('SELECT count(*) FROM messages')[0][0])
+        mode.write_text('online')
+        answer = self.result(client, 'show', parent['id'])['reply']
+        retry = self.result(client, 'reply', parent['id'], '--message', 'one answer')
+        self.assertEqual((answer['id'], answer['created_at']), (retry['id'], retry['created_at']))
+        conflict = client.call('reply', parent['id'], '--message', 'changed answer')
+        self.assertTrue(conflict['isError'])
+        self.assertIn('reply_conflict_existing_answer_preserved', json.dumps(conflict))
+        self.assertEqual('one answer', self.result(client, 'show', parent['id'])['reply']['body'])
+        self.assertEqual(3, self.sql('SELECT count(*) FROM messages')[0][0])
+        self.assertEqual(2, len(attempts.read_text().splitlines()))
+        client.close()
 
 
 if __name__ == '__main__':

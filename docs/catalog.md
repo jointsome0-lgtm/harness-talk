@@ -1,16 +1,16 @@
-# Find profiles through LAN, Bluetooth or Tailscale
+# Find profiles through pinned SSH, LAN, Bluetooth or Tailscale
 
 The catalogue is an opt-in directory of registered htalk peers. A device owner
-publishes named profiles; a known client finds that device through mDNS on LAN
-or an active Bluetooth PAN, or through its selected Tailscale daemon. It reads
-the directory over pinned SSH. Choose a unique display name to expose the
+publishes named profiles; a known client finds that device through a configured
+SSH IPv4 address, mDNS on LAN or an active Bluetooth PAN, or its selected
+Tailscale daemon. It reads the directory over pinned SSH. Choose a unique display name to expose the
 profile's MCP connection. Existing sessions keep their usual receivers.
 
 This version supports Linux and IPv4 with one explicitly selected channel per
 command. LAN mDNS works on a shared Wi-Fi segment; Bluetooth uses an already
 connected NetworkManager PAN. Tailscale supports the 1.102.x status format and
 also works in userspace networking mode. It does not pair Bluetooth devices,
-activate PAN, start agents, synchronize mailboxes or automatically switch a call
+activate PAN, configure an internet endpoint, start agents, synchronize mailboxes or automatically switch a call
 between transports.
 
 ## Publish existing peers
@@ -192,8 +192,51 @@ Tailscale's permissive socket mode is accepted inside that controlled
 directory. Paths and node IDs
 stay in private client configuration and are not exported in the directory.
 
-`discover` returns JSON with `devices` and source status. Unknown devices are
-shown as `not_checked`; their directories are never fetched. Rejected adverts,
+### Use a pinned SSH address without multicast or Tailscale
+
+For a device with an already reachable SSH endpoint, add an optional
+`"ssh_address": "192.0.2.40"` to that device's private trust entry. It is a
+literal IPv4 address; hostnames, IPv6, ports in the address, unspecified,
+multicast and broadcast addresses are rejected. Keep the existing pinned
+`ssh_port`, user, key, known-hosts file and deployment labels. The SSH host-key
+alias remains `htalk-DEVICE_ID`, independently of the address.
+
+```sh
+htalk catalog discover --trust /absolute/private/htalk/trust.json --via ssh
+htalk catalog connect 'Reviewer' --trust /absolute/private/htalk/trust.json --via ssh
+```
+
+This source fetches only the configured devices, using their `ssh_address` and
+the same restricted `catalog serve` endpoint. It starts no mDNS source or
+Tailscale command. Omit `--interface`. A device without an address or an
+unreachable or mismatched endpoint is reported as unavailable, making source
+coverage partial. Discovery uses a 15-second total budget with at most five
+seconds per endpoint. Reachability remains separate from agent liveness.
+
+Each new connection discovers and selects the current profile under the
+existing device trust. An open MCP client retains its original address, port,
+key-file paths and selected profile binding. Editing the trust file does not
+redirect that client: close it and explicitly discover/connect again to use a
+new address. Changed server profile bindings still block calls before dispatch.
+There is no automatic failover or retry after a lost response.
+
+The trust schema number remains 1. Clients without this field reject a trust
+file containing `ssh_address` because unknown fields are refused. Upgrade
+every client that reads the file before adding the field. Existing trust files
+without it remain valid on the updated client and retain their earlier routes.
+No mailbox schema change is needed.
+
+Generic `mcp --connect -- ssh ...` and `mcp --connect --expect-catalog PATH --
+ssh ...` already provide configurable SSH calls and expected-binding checks.
+This catalogue source adds fetching the current directory and selecting its
+profile from a pinned address. It adds no SSH transport, DNS resolution, NAT
+traversal, public relay or bearer activation. The endpoint must already be
+reachable. Loopback SSH fixtures do not establish WAN or cellular exchange;
+real-agent reading, ACK, replies and route-isolated recovery need their own
+observations.
+
+`discover` returns JSON with `devices` and source status. In multicast discovery,
+unknown devices are shown as `not_checked`; their directories are never fetched. Rejected adverts,
 truncated results and unreachable known devices make coverage partial. An
 unavailable source does not establish that agents are absent. Each invocation
 is a fresh snapshot with no saved discovery cache.
