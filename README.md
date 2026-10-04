@@ -34,6 +34,8 @@ maintain a reverse SSH route when only the worker accepts SSH. They recover
 transport separately from model execution. See the [checked recovery and
 resume limits](docs/checks/2026-09-27-ssh-lifecycle.md).
 
+Version 0.12.0 adds catalogue discovery and profile selection through an explicitly pinned SSH IPv4 address. It needs no mDNS or Tailscale daemon. Upgrade clients before adding the optional trust-file field; see the [0.12.0 upgrade and recovery notes](docs/releases/0.12.0.md).
+
 Version 0.11.1 fixes repeated legacy migration and extra backups when a send or reply encounters contention after migration BEGIN. Mailbox schema remains 3. Existing schema-3 mailboxes need no migration; schema 1/2 still receive a verified backup and automatic migration on first use. See the [0.11.1 patch, upgrade and rollback notes](docs/releases/0.11.1.md).
 
 Stop mailbox writers and receivers before updating the CLI and their matching adapter files. The 0.11.0 receiver requirements still apply: old Antigravity/Letta idle state requires explicit inspection and named session retirement before further managed work. OpenHands requires a private `HTALK_OPENHANDS_STATE` directory. Keep saved state and receipts. Do not reset them to bypass recovery. Subprocess cleanup needs Linux 5.3+ and readable `/proc`; managed Python receivers also require working pidfd APIs in that interpreter. See the [0.11.0 adapter, recovery and host requirements](docs/releases/0.11.0.md).
@@ -97,8 +99,8 @@ htalk --as helper inbox
 
 `--harness` is a label such as `generic`, `hermes` or `openclaw`; a label does not install an integration. Pull peers need no native session or workspace and reject address flags. Messages to them are saved with `notification_detail: pull_only` and exit 0, without a notification attempt. The agent must run `inbox` to get its work. It can send and reply to native peers normally. `peer check` reports the delivery mode and does not establish that a pull agent is running.
 
-To find owner-published profiles through LAN/Wi-Fi, an active Bluetooth PAN or
-private Tailscale, use the opt-in [profile catalogue](docs/catalog.md). Known devices are authenticated through pinned
+To find owner-published profiles through a pinned SSH IPv4 address, LAN/Wi-Fi,
+an active Bluetooth PAN or private Tailscale, use the opt-in [profile catalogue](docs/catalog.md). Known devices are authenticated through pinned
 SSH; choose a profile by name and use its checked MCP connection. Reachable
 profiles keep `runtime_status: unknown` until separate runtime evidence exists.
 
