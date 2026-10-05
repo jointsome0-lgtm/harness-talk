@@ -1,5 +1,29 @@
 # Client adapters
 
+Checked on 2026-10-04–05 UTC with the htalk `0.12.0` x86-64 publication wheel,
+commit `242278b516ea7fe98e287e6e74c71ddcc52e9945`, SHA-256
+`925bc7278058312cb2cbe744a0a55e134737d104fba9fb64d82e7d8d0a7a7290`.
+The [0.12.0 native check](checks/2026-10-05-0.12.0-native.md) records the exact
+publish-run artifacts, all 14 client versions, permissions, public file checks
+and preserved failures. Codex/GPT-6.1 Sol high and Claude/Opus 5.5 high completed
+both initiating directions. The other twelve clients used deterministic local
+providers and fake keys. Every accepted case observed its native notice, showed
+and validated the full request before a separate ACK, produced a correlated
+reply, and ended with controller read/ACK and empty inboxes.
+
+Mandatory exchange acceptance does not make every runner aggregate pass. Cline
+retains a FAILED aggregate, absent canonical result and original listener
+closure failure. Hermes and Gemini retain false aggregates and unobserved normal
+exit. Later owned cleanup remains separate. Copilot, Letta and OpenHands
+observed native exit 0; several other exits followed intentional shutdown.
+ACK cleanup is literally `absent`, `unsupported` or `skipped/pull_only`, without
+notice-removal proof. The PyPI files match the checked artifacts, the fresh
+installation passed version/help/dependency checks, and the lightweight tag and
+GitHub release were verified. The native check does not establish WAN/cellular
+exchange or resolve the seven frozen performance failures. See the
+[0.12.0 release notes](releases/0.12.0.md) for upgrades. Earlier checks below
+remain historical evidence.
+
 Checked on 2026-10-03 UTC with the htalk `0.11.1` x86-64 publication wheel,
 commit `3c86ebb62151fe77ef5019082269f3ea2020665f`, SHA-256
 `0283d9d04398fe884ee59834fa42bc90c4514ac24703df6a353f793d60b9427b`.
