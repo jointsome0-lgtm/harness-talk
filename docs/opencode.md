@@ -1,5 +1,23 @@
 # OpenCode sessions
 
+Checked on 2026-10-04 UTC with the htalk `0.12.0` x86-64 publication wheel,
+commit `242278b516ea7fe98e287e6e74c71ddcc52e9945`, SHA-256
+`925bc7278058312cb2cbe744a0a55e134737d104fba9fb64d82e7d8d0a7a7290`.
+OpenCode 1.18.32 ran a fresh native headless server session with fake keys and
+four canned loopback requests. Only the bound htalk MCP tool was allowed.
+Its native notice led to one full validated show, a separate request ACK and
+one correlated reply. The controller read and separately ACKed the answer;
+both final inboxes were empty. Recorded owned groups and native/provider
+listeners closed after SIGTERM. The server exit `-15` does not establish normal
+spontaneous exit. Native ACK cleanup was `unsupported`, controller cleanup was
+`skipped/pull_only`; neither proves notice removal. Individual native pidfd
+exit-readiness results were not serialized, although pidfds bound cleanup
+signals. TUI attachment, model comprehension, external transport and all-host
+egress/process absence remain unproved. The same checked files are published
+on PyPI. See the [0.12.0 native check](checks/2026-10-05-0.12.0-native.md) for all
+14 clients, publication verification and limits. Earlier checks below remain
+historical evidence.
+
 Checked on 2026-10-03 UTC with the htalk `0.11.1` x86-64 publication wheel,
 commit `3c86ebb62151fe77ef5019082269f3ea2020665f`, SHA-256
 `0283d9d04398fe884ee59834fa42bc90c4514ac24703df6a353f793d60b9427b`.
