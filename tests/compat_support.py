@@ -295,12 +295,23 @@ class HtalkCase(unittest.TestCase):
             self.assertEqual(error, result["error"])
         return result
 
-    def spawn(self, *words, db=True, env=None, argv=None):
+    def spawn(self, *words, db=True, env=None, argv=None, group=False):
+        """Start htalk. With group=True it leads its own process group, so leftovers can be asked for."""
         process = subprocess.Popen(argv or self.argv(words, db), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True, encoding="utf-8", env=self.environment(env), cwd=self.tmp,
+                                   start_new_session=group,
                                    preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
         self.processes.append(process)
+        if group:
+            self.addCleanup(self.stop_group, process.pid)
         return process
+
+    @staticmethod
+    def stop_group(leader):
+        try:
+            os.killpg(leader, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
     def finish(self, process, code=0):
         stdout, stderr = process.communicate(timeout=TIMEOUT)
@@ -319,7 +330,13 @@ class HtalkCase(unittest.TestCase):
         for process in self.processes:
             if process.poll() is None:
                 process.kill()
-                process.communicate()
+                process.wait()
+            for stream in (process.stdin, process.stdout, process.stderr):
+                try:
+                    if stream:
+                        stream.close()
+                except (OSError, ValueError):
+                    pass
         # A gated fake may outlive an interrupted htalk. Kill only processes still running this test's fakes.
         for entry in self.calls():
             try:

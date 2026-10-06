@@ -5,7 +5,7 @@ Fake claude/codex executables, a fake Claude messaging socket and a loopback
 OpenCode server stand in for clients. No test imports the implementation.
 """
 from contextlib import closing
-import fcntl
+import errno
 import json
 import os
 from pathlib import Path
@@ -22,7 +22,7 @@ import unittest
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from compat_support import MESSAGE_KEYS, PEER_KEYS, ROW_KEYS, HtalkCase, process_start, wait_for  # noqa: E402
+from compat_support import MESSAGE_KEYS, PEER_KEYS, ROW_KEYS, TIMEOUT, HtalkCase, process_start, wait_for  # noqa: E402
 
 LEGACY_V1 = """
 CREATE TABLE peers (name TEXT PRIMARY KEY, harness TEXT NOT NULL, session_id TEXT NOT NULL,
@@ -35,6 +35,13 @@ CREATE TABLE messages (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT
 PRAGMA user_version=1;
 """
 PEER_COLUMNS = ["name", "harness", "session_id", "workspace", "socket", "url", "delivery"]
+# Exit 3 when SQLite refuses a read at once because the database is busy.
+READ_AT_ONCE = """import sqlite3, sys
+try:
+    sqlite3.connect(sys.argv[1], timeout=0).execute("SELECT id FROM messages").fetchall()
+except sqlite3.OperationalError as exc:
+    sys.exit(3 if exc.sqlite_errorcode == sqlite3.SQLITE_BUSY else 1)
+"""
 
 
 def words_of(command):
@@ -1362,12 +1369,18 @@ class Discovery(HtalkCase):
         self.assertFalse(self.db.parent.exists())
 
 
-class WriteAdmission(HtalkCase):
+class ContendedWrites(HtalkCase):
+    """What a sender relies on while another process holds the mailbox. Each test waits on the message
+    file its send reads, on what the database refuses, on the fake client or on the send's exit."""
+
     def setUp(self):
         super().setUp()
         self.add_peer("alice")
         self.codex_recipient("bob")
-        self.turn = Path(str(self.db) + "-htalk-turn")
+        # A FIFO opens for writing only while a reader holds it. That shows from outside when a send has
+        # opened its message file and when it has read it to the end.
+        self.pipe = self.tmp / "pipe"
+        os.mkfifo(self.pipe)
 
     def hold(self, statement):
         db = sqlite3.connect(self.db, isolation_level=None)
@@ -1375,116 +1388,100 @@ class WriteAdmission(HtalkCase):
         db.execute(statement)
         return db
 
-    def admission_locks(self, identity):
-        """Read kernel lock owners and waiters for one admission directory."""
-        try:
-            lines = Path("/proc/locks").read_text().splitlines()
-        except OSError as exc:
-            self.fail("admission readiness requires readable /proc/locks: %s" % exc)
-        matches = []
-        for line in lines:
-            fields = line.split()
-            blocked = len(fields) > 1 and fields[1] == "->"
-            fields = fields[2:] if blocked else fields[1:]
-            try:
-                kind, scope, mode, pid, key, start, end = fields
-                major, minor, inode = key.split(":")
-                key = (int(major, 16), int(minor, 16), int(inode))
-                owner = int(pid)
-            except ValueError:
-                self.fail("unsupported /proc/locks entry: %r" % line)
-            if key == identity:
-                matches.append((blocked, kind, scope, mode, owner, start, end))
-        return matches
+    def running(self, process, otherwise):
+        if process.poll() is not None:
+            self.fail("%s: %r" % (otherwise, process.communicate()))
 
-    def test_contended_send_keeps_the_first_message_file_contents(self):
+    def reader(self, process):
+        """The write end of the pipe while the send holds its read end, else None."""
+        self.running(process, "send exited while it should be waiting")
+        try:
+            return os.fdopen(os.open(self.pipe, os.O_WRONLY | os.O_NONBLOCK), "wb")
+        except OSError as exc:
+            if exc.errno != errno.ENXIO:
+                raise
+
+    def give_body(self, process, data, before=lambda: None):
+        """Hand the send its body and return once it has read the body to the end."""
+        with wait_for(lambda: self.reader(process), message="send to open its message file") as out:
+            before()
+            out.write(data)
+
+        def done():
+            still = self.reader(process)
+            if still is None:
+                return True
+            still.close()
+            return False
+
+        wait_for(done, message="send to read its message file to the end")
+
+    def keeps_waiting(self, process):
+        """A send that cannot write yet neither fails nor returns."""
+        try:
+            process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            pass
+        self.running(process, "send did not wait")
+
+    def committing(self, process):
+        """Whether SQLite turns a new reader away, which it does while a writer waits to commit.
+        Another process asks, without waiting: a connection of this one would share the lock held here."""
+        self.running(process, "send did not wait for the reader")
+        asked = subprocess.run([sys.executable, "-c", READ_AT_ONCE, str(self.db)], capture_output=True, text=True,
+                               timeout=TIMEOUT)
+        self.assertIn(asked.returncode, (0, 3), asked.stderr)
+        return asked.returncode == 3
+
+    def test_contended_send_saves_the_body_it_read_once(self):
         body = self.tmp / "body.txt"
-        body.write_bytes(b"First\r\nSecond\rThird")
+        body.symlink_to(self.pipe)
+        changed = self.tmp / "changed.txt"
+        changed.write_text("Changed while waiting")
         writer = self.hold("BEGIN IMMEDIATE")
         proc = self.spawn("--as", "alice", "send", "bob", "--message-file", body, "--no-notify")
-        wait_for(self.turn.exists, message="send waiting after reading its body")
-        body.write_text("Changed while waiting")
+        # The send holds the file it opened. Before it has read a byte, its path names other contents.
+        self.give_body(proc, b"First\r\nSecond\rThird", before=lambda: changed.replace(body))
+        self.keeps_waiting(proc)
         writer.rollback()
         sent = self.finish(proc)
         self.assertEqual("First\nSecond\nThird", sent["body"])
         self.assertEqual([(sent["id"], sent["body"])], self.sql("SELECT id,body FROM messages"))
 
-    def test_commit_wait_does_not_restart_the_write(self):
+    def test_send_blocked_at_commit_by_a_reader_finishes_once(self):
         reader = self.hold("BEGIN")
         reader.execute("SELECT * FROM peers").fetchall()
         proc = self.spawn("--as", "alice", "send", "bob", "--message", "Held commit", "--no-notify")
-        wait_for(Path(str(self.db) + "-journal").exists, message="write reached its journal")
-        time.sleep(.1)
-        self.assertIsNone(proc.poll())
-        self.assertFalse(self.turn.exists())
+        # The reader lets the send write and keeps it from committing.
+        wait_for(lambda: self.committing(proc), message="send to wait for its commit")
         reader.rollback()
         sent = self.finish(proc)
         self.assertEqual([(sent["id"],)], self.sql("SELECT id FROM messages"))
 
-    def test_interrupt_while_waiting_for_admission_saves_nothing(self):
-        self.turn.mkdir(mode=0o700)
-        holder = os.open(self.turn, os.O_RDONLY | os.O_DIRECTORY)
-        self.addCleanup(os.close, holder)
-        fcntl.flock(holder, fcntl.LOCK_EX)
-        directory = os.fstat(holder)
-        identity = (os.major(directory.st_dev), os.minor(directory.st_dev), directory.st_ino)
-        held = (False, "FLOCK", "ADVISORY", "WRITE", os.getpid(), "0", "EOF")
-        self.assertEqual([held], self.admission_locks(identity),
-                         "cannot observe the held admission FLOCK; /proc/locks observation unsupported")
+    def test_interrupt_while_another_writer_holds_the_mailbox_saves_nothing(self):
         writer = self.hold("BEGIN IMMEDIATE")
-        proc = self.spawn("--as", "alice", "send", "bob", "--message", "Interrupted", "--no-notify")
-        waiting = (True, "FLOCK", "ADVISORY", "WRITE", proc.pid, "0", "EOF")
-
-        def blocked_on_admission():
-            if proc.poll() is not None:
-                stdout, stderr = proc.communicate(timeout=5)
-                self.fail("send exited before its admission FLOCK waiter was observed: exit %s\nstdout=%s\nstderr=%s"
-                          % (proc.returncode, stdout, stderr))
-            locks = self.admission_locks(identity)
-            self.assertIn(held, locks, "the admission holder disappeared before interruption")
-            return waiting in locks
-
-        # Observe readiness before the CLI's five-second admission timeout.
-        wait_for(blocked_on_admission, timeout=3, message="this child's blocked admission FLOCK on %r" % (identity,))
-        writer.rollback()
+        proc = self.spawn("--as", "alice", "send", "bob", "--message-file", self.pipe, "--no-notify", group=True)
+        self.give_body(proc, b"Interrupted")
+        self.keeps_waiting(proc)
         proc.send_signal(signal.SIGINT)
-        self.assertEqual("interrupted", self.finish(proc, code=130)["state"])
-        self.assertEqual([], self.sql("SELECT id FROM messages"))
-        self.assertFalse(Path("/proc/%d" % proc.pid).exists(), "the interrupted child still has process resources")
-        self.assertTrue(proc.stdout.closed)
-        self.assertTrue(proc.stderr.closed)
-        self.assertEqual([held], self.admission_locks(identity), "the child's admission lock waiter survived exit")
-        fcntl.flock(holder, fcntl.LOCK_UN)
-        self.assertEqual([], self.admission_locks(identity))
-        probe = os.open(self.turn, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            self.assertEqual(directory.st_ino, os.fstat(probe).st_ino)
-            self.assertEqual(directory.st_dev, os.fstat(probe).st_dev)
-            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            self.assertEqual([held], self.admission_locks(identity))
-        finally:
-            os.close(probe)
-        self.assertEqual([], self.admission_locks(identity))
-
-    def test_admission_is_released_before_the_notification_attempt(self):
-        ident = str(uuid.uuid4())
-        words = ["--as", "alice", "send", "bob", "--id", ident, "--message", "One notice"]
-        self.configure(codex_queue={"mode": "block"})
-        writer = self.hold("BEGIN IMMEDIATE")
-        proc = self.spawn(*words)
-        wait_for(self.turn.exists, message="send entered admission")
+        interrupted = self.finish(proc, code=130)
+        self.assertEqual(("interrupted", None), (interrupted["state"], interrupted["message_id"]))
+        with self.assertRaises(ProcessLookupError, msg="the interrupted send left a process behind"):
+            os.killpg(proc.pid, 0)
         writer.rollback()
+        self.assertEqual([], self.sql("SELECT id FROM messages"))
+
+    def test_repeated_send_returns_during_the_first_notification(self):
+        words = ["--as", "alice", "send", "bob", "--id", str(uuid.uuid4()), "--message", "One notice"]
+        self.configure(codex_queue={"mode": "block"})
+        proc = self.spawn(*words)
         self.started("codex_queue")
-        holder = os.open(self.turn, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        finally:
-            os.close(holder)
-        (self.state / "codex_queue.release").touch()
-        self.assertEqual("submission_unknown", self.finish(proc, code=2)["submission"])
         repeated = self.htalk(*words)
+        self.assertIsNone(proc.poll(), "the repeated send waited for the first notification")
         self.assertFalse(repeated["created"])
-        self.assertEqual("submission_unknown", repeated["submission"])
+        self.release("codex_queue")
+        first = self.finish(proc, code=2)
+        self.assertEqual((True, repeated["id"], "submission_unknown"), (first["created"], first["id"], first["submission"]))
         self.assertEqual(1, len(self.calls("codex", ["queue"])))
 
 
