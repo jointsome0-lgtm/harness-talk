@@ -302,7 +302,16 @@ class HtalkCase(unittest.TestCase):
                                    start_new_session=group,
                                    preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
         self.processes.append(process)
+        if group:
+            self.addCleanup(self.stop_group, process.pid)
         return process
+
+    @staticmethod
+    def stop_group(leader):
+        try:
+            os.killpg(leader, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
     def finish(self, process, code=0):
         stdout, stderr = process.communicate(timeout=TIMEOUT)
@@ -321,7 +330,7 @@ class HtalkCase(unittest.TestCase):
         for process in self.processes:
             if process.poll() is None:
                 process.kill()
-                process.communicate()
+            process.communicate()
         # A gated fake may outlive an interrupted htalk. Kill only processes still running this test's fakes.
         for entry in self.calls():
             try:

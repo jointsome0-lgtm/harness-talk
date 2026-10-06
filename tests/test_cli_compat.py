@@ -1364,12 +1364,16 @@ class Discovery(HtalkCase):
 
 class ContendedWrites(HtalkCase):
     """What a sender relies on while another process holds the mailbox. Each test waits on the message
-    file its send opened, on what the database refuses, on the fake client or on the send's exit."""
+    file its send reads, on what the database refuses, on the fake client or on the send's exit."""
 
     def setUp(self):
         super().setUp()
         self.add_peer("alice")
         self.codex_recipient("bob")
+        # A FIFO opens for writing only while a reader holds it. That shows from outside when a send has
+        # opened its message file and when it has read it to the end.
+        self.pipe = self.tmp / "pipe"
+        os.mkfifo(self.pipe)
 
     def hold(self, statement):
         db = sqlite3.connect(self.db, isolation_level=None)
@@ -1377,54 +1381,63 @@ class ContendedWrites(HtalkCase):
         db.execute(statement)
         return db
 
-    def body_pipe(self):
-        """A message file whose reader is known: it opens for writing only once a send has opened it."""
-        path = self.tmp / "body.txt"
-        os.mkfifo(path)
-        return path
-
     def running(self, process, otherwise):
         if process.poll() is not None:
             self.fail("%s: %r" % (otherwise, process.communicate()))
 
-    def opened_by(self, process, pipe):
-        def writer():
-            self.running(process, "send exited before it read its message file")
-            try:
-                return os.fdopen(os.open(pipe, os.O_WRONLY | os.O_NONBLOCK), "wb")
-            except OSError as exc:
-                if exc.errno != errno.ENXIO:
-                    raise
-        return wait_for(writer, message="send to open its message file")
+    def reader(self, process):
+        """The write end of the pipe while the send holds its read end, else None."""
+        self.running(process, "send exited while it should be waiting")
+        try:
+            return os.fdopen(os.open(self.pipe, os.O_WRONLY | os.O_NONBLOCK), "wb")
+        except OSError as exc:
+            if exc.errno != errno.ENXIO:
+                raise
+
+    def give_body(self, process, data, before=lambda: None):
+        """Hand the send its body and return once it has read the body to the end."""
+        with wait_for(lambda: self.reader(process), message="send to open its message file") as out:
+            before()
+            out.write(data)
+
+        def done():
+            still = self.reader(process)
+            if still is None:
+                return True
+            still.close()
+            return False
+
+        wait_for(done, message="send to read its message file to the end")
 
     def keeps_waiting(self, process):
-        """A send that has its body and cannot write yet neither fails nor returns."""
+        """A send that cannot write yet neither fails nor returns."""
         try:
             process.wait(timeout=0.5)
         except subprocess.TimeoutExpired:
             pass
-        self.running(process, "send did not wait for the other writer")
+        self.running(process, "send did not wait")
 
     def writing(self):
         """Whether some connection holds the mailbox's write lock, asked of SQLite without waiting."""
         with closing(sqlite3.connect(self.db, timeout=0, isolation_level=None)) as probe:
             try:
                 probe.execute("BEGIN IMMEDIATE")
-            except sqlite3.OperationalError:
+            except sqlite3.OperationalError as exc:
+                if exc.sqlite_errorcode != sqlite3.SQLITE_BUSY:
+                    raise
                 return True
             probe.execute("ROLLBACK")
         return False
 
     def test_contended_send_saves_the_body_it_read_once(self):
-        body = self.body_pipe()
+        body = self.tmp / "body.txt"
+        body.symlink_to(self.pipe)
+        changed = self.tmp / "changed.txt"
+        changed.write_text("Changed while waiting")
         writer = self.hold("BEGIN IMMEDIATE")
         proc = self.spawn("--as", "alice", "send", "bob", "--message-file", body, "--no-notify")
-        with self.opened_by(proc, body) as out:
-            # The send holds the file it opened. From here on its path names other contents.
-            changed = self.tmp / "changed.txt"
-            changed.write_text("Changed while waiting")
-            changed.replace(body)
-            out.write(b"First\r\nSecond\rThird")
+        # The send holds the file it opened. Before it has read a byte, its path names other contents.
+        self.give_body(proc, b"First\r\nSecond\rThird", before=lambda: changed.replace(body))
         self.keeps_waiting(proc)
         writer.rollback()
         sent = self.finish(proc)
@@ -1442,16 +1455,15 @@ class ContendedWrites(HtalkCase):
 
         # The reader lets the send begin its write and keeps it from committing.
         wait_for(begun, message="send to begin its write")
+        self.keeps_waiting(proc)
         reader.rollback()
         sent = self.finish(proc)
         self.assertEqual([(sent["id"],)], self.sql("SELECT id FROM messages"))
 
     def test_interrupt_while_another_writer_holds_the_mailbox_saves_nothing(self):
-        body = self.body_pipe()
         writer = self.hold("BEGIN IMMEDIATE")
-        proc = self.spawn("--as", "alice", "send", "bob", "--message-file", body, "--no-notify", group=True)
-        with self.opened_by(proc, body) as out:
-            out.write(b"Interrupted")
+        proc = self.spawn("--as", "alice", "send", "bob", "--message-file", self.pipe, "--no-notify", group=True)
+        self.give_body(proc, b"Interrupted")
         self.keeps_waiting(proc)
         proc.send_signal(signal.SIGINT)
         interrupted = self.finish(proc, code=130)

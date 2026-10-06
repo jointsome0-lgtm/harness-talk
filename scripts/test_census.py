@@ -7,11 +7,12 @@ A test reaches inside when it is a Rust test built on the crate (it imports
 `harness_talk::`, is compiled into `src/` through `#[path]` or sits in `src/`),
 when it reads `/proc/locks` or a SQLite journal file, or when it asserts a
 Python exception class name. The last two are read off the test's string
-literals: one that names `/proc/locks`, one that is a `-journal`, `-wal` or
-`-shm` suffix, one that is a class name, bare or after a prefix such as
-`opencode_`. A helper in the same file counts for the tests that call it.
+literals: one that names `/proc/locks`, one that ends in `-journal`, `-wal` or
+`-shm`, one that is a class name, bare or after a prefix such as `opencode_`.
+A helper in the same file, matched by name, counts for the tests that call it.
 Class names are asked of this Python's standard library, so none is written
-down here.
+down here. A literal is a hint, not proof of a read or an assertion: the lists
+are for a person to go through.
 
 The census reads files as text. It needs no build and nothing but the standard
 library, and prints the same numbers from any clean checkout of one commit.
@@ -26,9 +27,9 @@ REPO = Path(__file__).resolve().parents[1]
 # The retired Python implementation raised from these modules.
 RAISING = ("builtins", "json", "tomllib", "subprocess", "sqlite3", "http.client", "urllib.error", "socket", "ssl")
 CRATE, PATHED, SRC, LOCKS, CLASS = "crate", "pathed", "src", "locks", "class"
-MECHANISM = re.compile(r".*/proc/locks.*|-(?:journal|wal|shm)", re.S)
-RUST_TOKEN = re.compile(r"""//[^\n]*|/\*.*?\*/|(?<!\w)b?r(#*)"(.*?)"\1|b?"((?:[^"\\]|\\.)*)"|'(?:[^'\\\n]|\\.)'""",
-                        re.S)
+MECHANISM = re.compile(r".*/proc/locks.*|.*-(?:journal|wal|shm)", re.S)
+RUST_TOKEN = re.compile(r"""//[^\n]*|/\*|(?<!\w)b?r(#*)"(.*?)"\1|b?"((?:[^"\\]|\\.)*)"|'(?:[^'\\\n]|\\.)'""", re.S)
+RUST_COMMENT = re.compile(r"/\*|\*/")
 RUST_TEST = re.compile(r"#\[(?:\w+::)*test\]")
 RUST_TEST_ONLY = re.compile(r"#\[cfg\((?:test|all\([^\]]*\btest\b[^\]]*\))\)\]")
 RUST_FN = re.compile(r"\bfn\s+(\w+)")
@@ -72,12 +73,19 @@ def python_functions(text):
 def rust_skeleton(text):
     """The text with comments and literal contents blanked, and the literals by position."""
     literals, parts, last = [], [], 0
-    for match in RUST_TOKEN.finditer(text):
-        parts.append(text[last:match.start()])
-        parts.append(re.sub(r"[^\n]", " ", match.group()))
+    while match := RUST_TOKEN.search(text, last):
+        end, depth = match.end(), match.group() == "/*"
+        while depth:
+            # Block comments nest.
+            edge = RUST_COMMENT.search(text, end)
+            if edge is None:
+                end = len(text)
+                break
+            end, depth = edge.end(), depth + (1 if edge.group() == "/*" else -1)
+        parts += [text[last:match.start()], re.sub(r"[^\n]", " ", text[match.start():end])]
         if match.group(2) is not None or match.group(3) is not None:
             literals.append((match.start(), match.group(2) if match.group(2) is not None else match.group(3)))
-        last = match.end()
+        last = end
     return "".join(parts) + text[last:], literals
 
 

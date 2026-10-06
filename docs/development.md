@@ -87,17 +87,17 @@ Distribution checks run the installed wheel from outside the checkout with an ex
 A test meets htalk where its callers do, at one of these seams:
 
 - a command in and JSON out, through the executable selected by `HTALK_TEST_COMMAND` or through MCP stdio;
-- a fake client that observes the adapter's calls: the fake `claude`, `codex` and `opencode` executables, the fake Claude socket and the loopback OpenCode server;
+- a fake client that observes the adapter's calls: the fake `claude` and `codex` executables, the fake Claude socket and the loopback OpenCode server;
 - a real mailbox file given to the command;
 - the receiver contracts under `integrations/`.
 
-Tests move outward to these seams. A new test never imports `harness_talk::`, never asserts an exception class name, never reads `/proc/locks` or a journal file, and never asserts a sleep length. It waits on something a caller could see too: the fake client's record of a call, what the database returns or refuses, a file the command has opened, or the command's exit.
+Tests move outward to these seams. A new test never imports `harness_talk::`, never asserts an exception class name, never reads `/proc/locks` or a journal file, and never asserts a sleep length. It waits on something a caller could see too: the fake client's record of a call, what the database returns or refuses, a file the command reads, or the command's exit.
 
 When a module is restructured, its tests move to a seam first and pass on the old code. Then the code changes. Then the inner tests go. A ported test asserts on what a command returns. A test that only checked internal calls or wire framing is deleted, not ported.
 
 The sdist includes `tests/**` and the workflows name test files. A change that adds, moves or deletes a test file updates `.github/workflows/tests.yml`, and `publish.yml` where it names the same file, in the same pull request.
 
-`scripts/test_census.py` counts the tests by kind and lists the ones that still reach inside: Rust tests built on the crate (they import `harness_talk::`, are compiled into `src/` through `#[path]` or sit in `src/`), tests that read `/proc/locks` or a journal file, and tests that assert a Python exception class name. The last two are read off a test's string literals, and a helper in the same file counts for the tests that call it. The script reads files as text and uses only the standard library, so it needs no build:
+`scripts/test_census.py` counts the tests by kind and lists the ones that still reach inside: Rust tests built on the crate (they import `harness_talk::`, are compiled into `src/` through `#[path]` or sit in `src/`), tests that read `/proc/locks` or a journal file, and tests that assert a Python exception class name. The last two are read off a test's string literals, so they are hints for a person to go through, and a helper in the same file counts for the tests that call it. The script reads files as text and uses only the standard library, so it needs no build:
 
 ```sh
 python3 scripts/test_census.py
