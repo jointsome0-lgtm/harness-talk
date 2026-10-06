@@ -31,8 +31,6 @@ input schema:
   "type": "object"
 }
 
-result of a call that ran: {content[{text, type}], isError, structuredContent{exit_code, result{actor_source, messages[], next_action, omitted, total}}}
-
 refusals, returned as an error text before any command runs:
 ["watch"]
   Use mailbox commands or peer list/check. Identity, database, registration, files and receivers are configured outside this tool. For a recovery command, omit htalk --db PATH --as NAME and pass only the command and its arguments.
@@ -44,3 +42,33 @@ refusals, returned as an error text before any command runs:
   Use mailbox commands or peer list/check. Identity, database, registration, files and receivers are configured outside this tool. For a recovery command, omit htalk --db PATH --as NAME and pass only the command and its arguments.
 ["send", "bob", "--message", "No retry identity"]
   send requires --id YOUR_NEW_UUID. Keep it and reuse the same ID/body after cancellation or disconnect; inspect sent/show before repeating work.
+
+answers:
+a command that ran, ["inbox"]
+  keys: content[{text, type}], isError, structuredContent{exit_code, result{actor_source, messages[], next_action, omitted, total}}
+  isError = false
+  text: structuredContent as JSON
+a command that failed, ["show", "not-a-uuid"]
+  keys: content[{text, type}], isError, structuredContent{exit_code, result{actor_source, error, next_action, recovery{inbox, peers, sent}, state}}
+  isError = true
+  text: structuredContent as JSON
+a command line the parser refuses, ["inbox", "--bogus"]
+  keys: content[{text, type}], isError
+  isError = true
+  text: error: unexpected argument '--bogus' found
+
+  Usage: htalk inbox [OPTIONS]
+
+  For more information, try '--help'.
+a help page, ["inbox", "--help"]
+  keys: content[{text, type}], isError
+  isError = false
+  text: what htalk inbox --help prints
+remote, the connector ends before the command is sent, ["inbox"]
+  keys: content[{text, type}], isError
+  isError = true
+  text: Remote mailbox connection failed before sending the command. Check the configured endpoint; no mailbox command was sent.
+remote, the connector cannot start, ["inbox"]
+  keys: content[{text, type}], isError
+  isError = true
+  text: Could not start the configured mailbox connector; no command was sent.

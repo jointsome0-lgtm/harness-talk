@@ -178,12 +178,31 @@ class AgentView(HtalkCase):
             self.assertTrue(result["isError"], args)
             refusals.append((args, result["content"][0]["text"]))
         view["refusals"] = refusals
-        view["result"] = key_tree(local.call("inbox"))
+        answers = [(title, args, local.call(*args)) for title, args in (
+            ("a command that ran", ["inbox"]), ("a command that failed", ["show", "not-a-uuid"]),
+            ("a command line the parser refuses", ["inbox", "--bogus"]), ("a help page", ["inbox", "--help"]))]
         local.close()
         remote = McpClient(self, connector=self.argv(["--as", "alice", "mcp"], True))
         view["remote_instructions"] = remote.info["result"]["instructions"]
         remote.close()
+        for title, connector in (("remote, the connector ends before the command is sent", ["false"]),
+                                 ("remote, the connector cannot start", [str(self.tmp / "no-connector")])):
+            remote = McpClient(self, connector=connector)
+            answers.append((title, ["inbox"], remote.call("inbox")))
+            remote.close()
+        view["answers"] = [(title, args, self.answer(args, result)) for title, args, result in answers]
         return view
+
+    def answer(self, args, result):
+        """One tool result: its keys, and its text unless that repeats something already pinned."""
+        text = result["content"][0]["text"]
+        if "structuredContent" in result:
+            self.assertEqual(result["structuredContent"], json.loads(text), args)
+            text = "structuredContent as JSON"
+        elif text == self.run_raw(*args, db=False).stdout:
+            text = "what htalk %s prints" % " ".join(args)
+        return ["keys: " + key_tree(result)[1:-1], "isError = " + json.dumps(result["isError"]),
+                *("text: " + text).splitlines()]
 
     def empty_trust(self):
         """A private list of known devices that names none."""
@@ -239,10 +258,12 @@ class AgentView(HtalkCase):
                 "instructions, htalk mcp --connect -- COMMAND:", view["remote_instructions"], "",
                 "tool: " + view["tool"], "", "description:", view["description"], "",
                 "input schema:", json.dumps(view["schema"], indent=2, sort_keys=True), "",
-                "result of a call that ran: " + view["result"], "",
                 "refusals, returned as an error text before any command runs:"]
         for args, message in view["refusals"]:
             text += [json.dumps(args), "  " + message]
+        text += ["", "answers:"]
+        for title, args, lines in view["answers"]:
+            text += ["%s, %s" % (title, json.dumps(args)), *("  " + line for line in lines)]
         self.check("mcp.txt", self.plain("\n".join(text)))
 
     def test_notification(self):
