@@ -95,9 +95,9 @@ Tests move outward to these seams. A new test never imports `harness_talk::`, ne
 
 When a module is restructured, its tests move to a seam first and pass on the old code. Then the code changes. Then the inner tests go. A ported test asserts on what a command returns. A test that only checked internal calls or wire framing is deleted, not ported.
 
-The sdist includes `tests/**` and the workflows name test files. A change that adds, moves or deletes a test file updates `.github/workflows/tests.yml` with it.
+The sdist includes `tests/**` and the workflows name test files. A change that adds, moves or deletes a test file updates `.github/workflows/tests.yml`, and `publish.yml` where it names the same file, in the same pull request.
 
-`scripts/test_census.py` counts the tests by kind and lists the ones that still reach inside: Rust tests built on the crate (they import `harness_talk::`, are compiled into `src/` through `#[path]` or sit in `src/`), tests that read `/proc/locks` or a journal file, and tests that assert a Python exception class name. A helper in the same file counts for the tests that call it. The script reads files as text and uses only the standard library, so it needs no build:
+`scripts/test_census.py` counts the tests by kind and lists the ones that still reach inside: Rust tests built on the crate (they import `harness_talk::`, are compiled into `src/` through `#[path]` or sit in `src/`), tests that read `/proc/locks` or a journal file, and tests that assert a Python exception class name. The last two are read off a test's string literals, and a helper in the same file counts for the tests that call it. The script reads files as text and uses only the standard library, so it needs no build:
 
 ```sh
 python3 scripts/test_census.py

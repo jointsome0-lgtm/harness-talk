@@ -6,9 +6,12 @@
 A test reaches inside when it is a Rust test built on the crate (it imports
 `harness_talk::`, is compiled into `src/` through `#[path]` or sits in `src/`),
 when it reads `/proc/locks` or a SQLite journal file, or when it asserts a
-Python exception class name. A helper in the same file counts for the tests
-that call it. Class names are asked of this Python's standard library, so none
-is written down here.
+Python exception class name. The last two are read off the test's string
+literals: one that names `/proc/locks`, one that is a `-journal`, `-wal` or
+`-shm` suffix, one that is a class name, bare or after a prefix such as
+`opencode_`. A helper in the same file counts for the tests that call it.
+Class names are asked of this Python's standard library, so none is written
+down here.
 
 The census reads files as text. It needs no build and nothing but the standard
 library, and prints the same numbers from any clean checkout of one commit.
@@ -23,8 +26,9 @@ REPO = Path(__file__).resolve().parents[1]
 # The retired Python implementation raised from these modules.
 RAISING = ("builtins", "json", "tomllib", "subprocess", "sqlite3", "http.client", "urllib.error", "socket", "ssl")
 CRATE, PATHED, SRC, LOCKS, CLASS = "crate", "pathed", "src", "locks", "class"
-MECHANISM = re.compile(r"/proc/locks|[\"']-(?:journal|wal|shm)[\"']")
-RUST_TOKEN = re.compile(r"""//[^\n]*|/\*.*?\*/|b?r(#*)"(.*?)"\1|b?"((?:[^"\\]|\\.)*)"|'(?:[^'\\\n]|\\.)'""", re.S)
+MECHANISM = re.compile(r".*/proc/locks.*|-(?:journal|wal|shm)", re.S)
+RUST_TOKEN = re.compile(r"""//[^\n]*|/\*.*?\*/|(?<!\w)b?r(#*)"(.*?)"\1|b?"((?:[^"\\]|\\.)*)"|'(?:[^'\\\n]|\\.)'""",
+                        re.S)
 RUST_TEST = re.compile(r"#\[(?:\w+::)*test\]")
 RUST_TEST_ONLY = re.compile(r"#\[cfg\((?:test|all\([^\]]*\btest\b[^\]]*\))\)\]")
 RUST_FN = re.compile(r"\bfn\s+(\w+)")
@@ -49,20 +53,19 @@ NAMED = re.compile(r"(?:[a-z0-9]+_)*(%s)" % "|".join(sorted(NAMES)))
 
 
 class Function:
-    def __init__(self, name, text, literals, test, helper=True):
-        self.name, self.text, self.test, self.helper = name, text, test, helper
+    def __init__(self, name, literals, calls, test, helper=True):
+        self.name, self.calls, self.test, self.helper = name, set(calls), test, helper
         self.classes = {match.group(1) for match in map(NAMED.fullmatch, literals) if match}
-        self.locks = bool(MECHANISM.search(text))
-        self.calls = set(CALLED.findall(text))
+        self.locks = any(map(MECHANISM.fullmatch, literals))
 
 
 def python_functions(text):
-    lines = text.splitlines()
     for node in ast.walk(ast.parse(text)):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            literals = [inner.value for inner in ast.walk(node)
-                        if isinstance(inner, ast.Constant) and isinstance(inner.value, str)]
-            yield Function(node.name, "\n".join(lines[node.lineno - 1:node.end_lineno]), literals,
+            inner = list(ast.walk(node))
+            literals = [found.value for found in inner if isinstance(found, ast.Constant) and isinstance(found.value, str)]
+            called = [found.func for found in inner if isinstance(found, ast.Call)]
+            yield Function(node.name, literals, [getattr(func, "attr", getattr(func, "id", None)) for func in called],
                            node.name.startswith("test_"))
 
 
@@ -80,15 +83,21 @@ def rust_skeleton(text):
 
 def rust_body(skeleton, start):
     """The braces of the item that starts here, or None for a declaration."""
-    opening = re.compile(r"[{;]").search(skeleton, start)
-    if opening is None or opening.group() == ";":
+    depth = 0
+    for opening in range(start, len(skeleton)):
+        depth += {"(": 1, "[": 1, ")": -1, "]": -1}.get(skeleton[opening], 0)
+        if depth == 0 and skeleton[opening] in "{;":
+            break
+    else:
         return None
-    depth, end = 0, opening.start()
+    if skeleton[opening] == ";":
+        return None
+    depth, end = 0, opening
     while True:
         depth += {"{": 1, "}": -1}.get(skeleton[end], 0)
         end += 1
         if depth == 0 or end == len(skeleton):
-            return opening.start(), end
+            return opening, end
 
 
 def rust_functions(text, production):
@@ -103,7 +112,7 @@ def rust_functions(text, production):
             continue
         before = max(skeleton.rfind(mark, 0, match.start()) for mark in "{};") + 1
         inside = [value for position, value in literals if span[0] < position < span[1]]
-        yield Function(match.group(1), text[span[0]:span[1]], inside,
+        yield Function(match.group(1), inside, CALLED.findall(skeleton, *span),
                        bool(RUST_TEST.search(skeleton, before, match.start())),
                        not production or any(start < match.start() < end for start, end in test_only))
 
@@ -111,8 +120,8 @@ def rust_functions(text, production):
 def node_functions(text):
     starts = [match.start() for match in NODE_TEST.finditer(text)] + [len(text)]
     for start, end in zip(starts, starts[1:]):
-        body = text[start:end]
-        yield Function(QUOTED.search(body).group(2), body, [found[1] for found in QUOTED.findall(body)], True)
+        literals = [found[1] for found in QUOTED.findall(text, start, end)]
+        yield Function(literals[0] if literals else "?", literals, CALLED.findall(text, start, end), True)
 
 
 def reasons(functions):
@@ -135,13 +144,13 @@ def reasons(functions):
 
 def census(repo=REPO):
     pathed = {(source.parent / target).resolve() for source in (repo / "src").rglob("*.rs")
-              for target in RUST_PATH.findall(source.read_text())}
+              for target in RUST_PATH.findall(source.read_text(encoding="utf-8"))}
     kinds = {"Python": 0, "Rust in tests/": 0, "Rust in src/": 0, "Node": 0}
     lines, importing, tests = 0, 0, []
     for path in sorted([*(repo / "tests").rglob("*"), *(repo / "src").rglob("*.rs")]):
         if path.suffix not in (".py", ".rs", ".mjs") or not path.is_file():
             continue
-        text, inner = path.read_text(), path.is_relative_to(repo / "src")
+        text, inner = path.read_text(encoding="utf-8"), path.is_relative_to(repo / "src")
         if not inner:
             lines += text.count("\n")
         if path.suffix == ".py":
