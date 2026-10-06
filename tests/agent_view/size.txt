@@ -1,0 +1,43 @@
+# How much text an agent loads. Characters as printed; tokens are UTF-8 bytes / 3.3.
+# The notification is measured as notification.txt writes it, with names for its three values.
+
+                                       characters   tokens
+commands                                       28
+  of which groups with subcommands              3
+help, all pages                             21846     6623
+help, htalk --help alone                     2553      774
+MCP tool description                          875      265
+MCP input schema                              244       74
+MCP server instructions                       188       57
+notification text                             549      166
+
+help page by page:
+htalk --help                                 2553      774
+htalk catalog --help                          873      265
+htalk catalog publish --help                  579      175
+htalk catalog unpublish --help                234       71
+htalk catalog export --help                   266       81
+htalk catalog serve --help                    263       80
+htalk catalog advertise --help                390      118
+htalk catalog discover --help                 868      263
+htalk catalog connect --help                 1076      326
+htalk mcp --help                             1030      312
+htalk receive --help                         1443      437
+htalk receive status --help                   182       55
+htalk receive rebind --help                   404      122
+htalk peer --help                             760      230
+htalk peer add --help                        1633      495
+htalk peer list --help                        466      141
+htalk peer discover --help                    985      298
+htalk peer check --help                       414      125
+htalk peer retire --help                      530      161
+htalk peer restore --help                     287       87
+htalk migrate --help                          458      139
+htalk send --help                            1319      400
+htalk reply --help                            808      245
+htalk wait --help                             785      238
+htalk show --help                             445      135
+htalk ack --help                              665      202
+htalk inbox --help                            670      204
+htalk watch --help                            573      174
+htalk sent --help                             887      269
