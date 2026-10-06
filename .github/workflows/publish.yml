@@ -77,6 +77,10 @@ jobs:
           htalk --version
           htalk --help
           python -B -m unittest test_cli_compat test_mcp test_receive test_catalog test_catalog_channels test_mail_recovery test_rust_process_cleanup -v
+      - name: Test the agent view of the installed wheel
+        run: |
+          export HTALK_TEST_COMMAND="$(python -c 'import json, shutil; print(json.dumps([shutil.which("htalk")]))')"
+          python -B -m unittest discover -s tests -p test_agent_view.py -v
       - name: Test source archive installation
         if: matrix.arch == 'x86_64'
         run: |

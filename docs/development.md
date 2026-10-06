@@ -24,6 +24,14 @@ identity mismatches. It neither advertises on the LAN nor contacts real agents.
 Native mDNS and SSH checks require explicitly selected owned devices and a
 separate temporary endpoint.
 
+The agent view is everything an agent reads from htalk. `tests/agent_view/` describes it in plain text: the rendered `--help` of every command (`help.txt`), what htalk supplies over MCP stdio (`mcp.txt`), the notification text (`notification.txt`), the keys and fixed values of command results (`results.txt`), the fixed error and detail codes with the `next_action` and `recovery` each failure returns (`errors.txt`), the texts in the source that no captured entry shows (`texts.txt`), and how much of that text an agent loads (`size.txt`). `tests/test_agent_view.py` captures each part again through the executable and MCP stdio and fails on any difference. It reads `src/` only as text, for the fixed codes and the unshown texts that no command prints, so it runs in a checkout. It writes down no exception class name; a detail that is one appears as `<an exception class name>`. After an intended change to the agent view, regenerate the files and review their diff with the rest of the change:
+
+```sh
+python3 -B tests/test_agent_view.py --update
+```
+
+`python3 -B tests/test_agent_view.py --size` prints the size report.
+
 The CLI suite covers registration, request/reply/ACK states, pagination, recovery, migration and native/pull exchanges. Rust tests cover storage races and adapter-specific identity, discovery and delivery failures. Keep a behavior in one layer when another test already exercises the same failure; retain separate tests for distinct races and transport boundaries.
 
 MCP tests exercise the same compiled executable through stdio. They cover
@@ -59,7 +67,7 @@ guarantee. Isolated process fixtures do not verify native adapter cleanup.
 
 Check what each assertion protects for the caller before preserving it. Old Python behavior and a passing test do not establish a requirement. Compare JSON fields and values without requiring key order or spacing. Isolate invalid inputs unless error precedence itself affects recovery. Delivery outcomes must follow whether submission could have begun, not the exception class that happened to escape an older adapter.
 
-CI runs the full Rust and installed CLI suites once, on Python 3.14. Both Python 3.11 and 3.14 build and install the package, then run `htalk --version`, `htalk --help` and `pip check` outside the checkout. A separate job checks the minimum supported Rust version.
+CI runs the full Rust and installed CLI suites, with the agent view, once, on Python 3.14. Both Python 3.11 and 3.14 build and install the package, then run `htalk --version`, `htalk --help` and `pip check` outside the checkout. A separate job checks the minimum supported Rust version.
 
 For a local binary wheel:
 

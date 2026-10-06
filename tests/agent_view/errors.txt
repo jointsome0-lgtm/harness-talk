@@ -1,0 +1,584 @@
+# Fixed codes, read from the source text, and what a failed command returns.
+#
+# The lists hold every string literal inside a call that raises an error code
+# (Error::code) or that carries a detail (Failure::coded, a notification outcome, a
+# cleanup detail). Values the source spells another way, such as a skipped notice's
+# reason, appear in the entries below and in results.txt, not in the lists.
+#
+# A code appears as error in a command's error result, or as a detail:
+# notification_detail, notification_cleanup.detail, a discovery source's detail.
+# A failed check returns its detail code as error. Where no fixed code applies, a
+# detail is an exception class name; docs/reference.md documents that, and no name
+# is listed here.
+
+## error codes
+actor_conflicts_with_CLAUDE_CODE_SESSION_ID
+actor_conflicts_with_CODEX_THREAD_ID
+badly formed hexadecimal UUID string
+catalog_ambiguous_profile
+catalog_binding_fixed_omit_db_and_as
+catalog_config_must_be_private_owned_file
+catalog_config_requires_directory
+catalog_config_too_large
+catalog_conversation_unavailable
+catalog_directory_not_owned
+catalog_discovery_budget_exhausted
+catalog_duplicate_profile
+catalog_endpoint_binding_mismatch
+catalog_interface_not_found
+catalog_interface_unavailable
+catalog_invalid_advertisement
+catalog_invalid_binding
+catalog_invalid_config
+catalog_invalid_lock
+catalog_invalid_profile
+catalog_invalid_ssh_address
+catalog_invalid_ssh_file
+catalog_invalid_text
+catalog_invalid_trust
+catalog_ipv4_unavailable
+catalog_mailbox_not_owned_file
+catalog_mailbox_replaced
+catalog_mcp_failed
+catalog_mdns_announcement_unconfirmed
+catalog_mdns_shutdown_unconfirmed
+catalog_mdns_unavailable
+catalog_mdns_unregister_unconfirmed
+catalog_pan_binding_changed
+catalog_pan_unavailable
+catalog_profile_not_published
+catalog_profile_unavailable
+catalog_publish_requires_db_and_as
+catalog_remote_command_refused
+catalog_requires_canonical_uuid
+catalog_requires_schema3
+catalog_route_interface_changed
+catalog_sender_binding_changed
+catalog_ssh_not_bound
+catalog_ssh_omit_interface
+catalog_tailscale_binding_changed
+catalog_tailscale_invalid_binary
+catalog_tailscale_invalid_socket
+catalog_tailscale_invalid_status
+catalog_tailscale_not_bound
+catalog_tailscale_omit_interface
+catalog_tailscale_peer_unavailable
+catalog_tailscale_unavailable
+catalog_tailscale_unsupported_version
+catalog_too_many_profiles
+catalog_unknown_profile
+catalog_unreachable
+catalog_writer_active
+claude_socket_is_discovered_from_live_identity
+codex_socket_requires_codex_discovery
+command_required
+database_backup_failed
+database_foreign_key_violation
+database_integrity_check_failed
+database_not_found
+invalid_arguments
+invalid_database_schema
+invalid_harness_id
+invalid_json
+invalid_notification_result
+invalid_opencode_session_id
+invalid_opencode_url
+invalid_peer_name
+limit_must_be_between_1_and_500
+message_id_conflict
+message_must_be_1_to_32000_bytes
+message_not_addressed_to_peer
+notification_message_not_found
+only_recipient_can_ack
+opencode_url_must_be_loopback
+opencode_url_requires_opencode_discovery
+opencode_uses_a_server_url_not_a_socket
+peer_already_has_a_different_address
+peer_command_required
+peer_required_use_as_or_HTALK_PEER
+peer_retired
+pull_peer_has_no_native_address
+reply_address_mismatch
+reply_conflict_existing_answer_preserved
+reply_requires_a_request
+sender_and_recipient_must_differ
+seq_cursor_must_be_a_positive_integer
+session_already_has_a_peer_name
+unknown_message
+unknown_peer
+unknown_request
+unsupported_database_version
+unsupported_delivery
+unsupported_harness
+unsupported_unversioned_database
+url_is_only_for_opencode
+wait_requires_own_request
+wait_seconds_must_be_between_0_and_45
+workspace_must_be_a_directory
+
+## detail codes
+adapter_unavailable
+claude_socket_bytes_written
+client_has_no_notification_removal
+codex_cli_invalid_queue_id
+codex_cli_unconfirmed_receipt
+codex_discovery_limit
+codex_discovery_time_limit
+codex_queue_delete_receipt_invalid
+codex_queue_receipt_mismatch
+codex_rpc_closed
+codex_rpc_frame_too_large
+codex_rpc_rejected
+codex_rpc_timeout
+codex_server_socket_changed
+codex_stdio_cleanup_ownership_unavailable
+codex_stdio_cleanup_unconfirmed
+codex_store_changed
+codex_store_name_unsupported
+codex_store_path_not_utf8
+codex_websocket_failure
+invalid_claude_agents_response
+invalid_discovery_cursor
+invalid_loaded_threads_response
+invalid_native_address
+invalid_opencode_url
+message_not_acknowledged_by_recipient
+no_confirmed_queue_receipt
+notification_state_unavailable
+notification_submission_has_no_completion_receipt
+opencode_invalid_response
+opencode_prompt_async_accepted
+opencode_response_too_large
+opencode_unauthorized
+opencode_unreachable
+opencode_url_must_be_loopback
+pull_only
+recipient_identity_changed
+recipient_is_not_an_unarchived_codex_cli_session
+recipient_not_in_codex_state
+recipient_not_in_opencode_server
+recipient_not_loaded
+recipient_session_archived
+recipient_socket_unavailable
+recipient_unavailable
+
+## codes built at run time, {} is the variable part
+codex_cli_queued:{}
+codex_queued:{}
+codex_rpc_rejected:{}
+opencode_http_{}
+opencode_saved_{}
+opencode_{}
+
+## error codes with guidance of their own
+# The source names each of them outside the call that raises it.
+# Every other error code gets one of the two default texts below:
+# 'error, no peer selected' or 'error, peer selected'.
+actor_conflicts_with_CLAUDE_CODE_SESSION_ID
+actor_conflicts_with_CODEX_THREAD_ID
+database_backup_failed
+database_foreign_key_violation
+database_integrity_check_failed
+database_not_found
+message_id_conflict
+peer_already_has_a_different_address
+peer_required_use_as_or_HTALK_PEER
+peer_retired
+reply_conflict_existing_answer_preserved
+session_already_has_a_peer_name
+unsupported_harness
+unsupported_unversioned_database
+
+# What each failure returns.
+
+# Before a mailbox exists
+
+## database_not_found
+$ htalk --db DATABASE peer list
+exit 2
+keys: error, next_action, resolved_path, state
+error = "database_not_found"
+next_action = "No database file exists at resolved_path. Check --db and HTALK_DB; every participant must use the same file. Only peer add creates a database: see htalk peer add --help."
+resolved_path = "DATABASE"
+state = "error"
+
+## unsupported_harness
+$ htalk --db DATABASE peer add alice --harness aider --session SESSION_ID --workspace WORKSPACE
+exit 2
+keys: error, next_action, recovery{peers}, state
+error = "unsupported_harness"
+next_action = "Native notification adapters are codex, claude and opencode. For another harness, register with --delivery pull and poll inbox."
+recovery.peers = "htalk --db DATABASE peer list"
+state = "error"
+
+## error, no peer selected
+$ htalk --db DATABASE peer add alice --harness claude --session not-a-uuid --workspace WORKSPACE
+exit 2
+keys: error, next_action, recovery{peers}, state
+error = "badly formed hexadecimal UUID string"
+next_action = "Check the error and inspect registered addresses with recovery.peers."
+recovery.peers = "htalk --db DATABASE peer list"
+state = "error"
+
+## codex_socket_requires_codex_discovery
+$ htalk --db DATABASE peer discover --harness claude --codex-socket /nowhere/codex.sock
+exit 2
+keys: error, next_action, recovery{peers}, state
+error = "codex_socket_requires_codex_discovery"
+next_action = "Check the error and inspect registered addresses with recovery.peers."
+recovery.peers = "htalk --db DATABASE peer list"
+state = "error"
+
+# Registration
+
+## peer_already_has_a_different_address
+$ htalk --db DATABASE peer add alice --harness claude --session OTHER_SESSION --workspace WORKSPACE
+exit 2
+keys: error, next_action, recovery{peers}, registered_peer, registered_session_id, state
+error = "peer_already_has_a_different_address"
+next_action = "Peer alice is already bound to claude session SESSION_ID. Inspect recovery.peers. Keep that address for the existing session; a separate session needs a different peer name."
+recovery.peers = "htalk --db DATABASE peer list"
+registered_peer = "alice"
+registered_session_id = "SESSION_ID"
+state = "error"
+
+## session_already_has_a_peer_name
+$ htalk --db DATABASE peer add carol --harness claude --session SESSION_ID --workspace WORKSPACE
+exit 2
+keys: error, next_action, recovery{peers}, registered_peer, registered_session_id, state
+error = "session_already_has_a_peer_name"
+next_action = "Session SESSION_ID already uses peer alice. Use that name from its registered session. Inspect recovery.peers for the existing immutable addresses."
+recovery.peers = "htalk --db DATABASE peer list"
+registered_peer = "alice"
+registered_session_id = "SESSION_ID"
+state = "error"
+
+## a failed check returns its detail code
+$ htalk --db DATABASE peer check alice
+exit 2
+keys: error, next_action, recovery{peers}, retired_at, state
+error = "recipient_unavailable"
+next_action = "Check the error and inspect registered addresses with recovery.peers."
+recovery.peers = "htalk --db DATABASE peer list"
+state = "error"
+
+# Choosing the peer
+
+## peer_required_use_as_or_HTALK_PEER
+$ htalk --db DATABASE inbox
+exit 2
+keys: error, native_session{harness, reason, status}, next_action, recovery{peers}, state
+error = "peer_required_use_as_or_HTALK_PEER"
+native_session.harness = "claude"
+native_session.reason = "claude_session_variables_absent"
+native_session.status = "unrecognized"
+next_action = "Use --as NAME or set HTALK_PEER to your registered peer name. Only a recognized Claude Code session can omit both; native_session.reason names the check that failed. Inspect registered addresses with recovery.peers."
+recovery.peers = "htalk --db DATABASE peer list"
+state = "error"
+
+## peer_required_use_as_or_HTALK_PEER, in a recognized Claude Code session
+$ htalk --db DATABASE inbox
+exit 2
+keys: error, native_session{harness, session_id, status, workspace}, next_action, recovery{peers}, state
+error = "peer_required_use_as_or_HTALK_PEER"
+native_session.harness = "claude"
+native_session.status = "recognized"
+next_action = "This Claude Code session has no peer in this database. Register it with htalk peer add NAME --harness claude, using native_session.session_id and native_session.workspace, or use --as NAME. Inspect registered addresses with recovery.peers."
+recovery.peers = "htalk --db DATABASE peer list"
+state = "error"
+
+## actor_conflicts_with_CLAUDE_CODE_SESSION_ID
+$ htalk --db DATABASE --as alice inbox
+exit 2
+keys: actor_source, current_session_id, error, next_action, recovery{inbox_in_registered_session, peers}, registered_peer, registered_session_id, state
+actor_source = "option"
+current_session_id = "CURRENT_SESSION"
+error = "actor_conflicts_with_CLAUDE_CODE_SESSION_ID"
+next_action = "Peer alice belongs to Claude session SESSION_ID, not current session CURRENT_SESSION. Check --as and HTALK_PEER. Use recovery.peers to find the peer registered to this session, which is selected when both are omitted, or return to the registered session before running recovery.inbox_in_registered_session. The binding cannot be reassigned."
+recovery.inbox_in_registered_session = "htalk --db DATABASE --as alice inbox"
+recovery.peers = "htalk --db DATABASE peer list"
+registered_peer = "alice"
+registered_session_id = "SESSION_ID"
+state = "error"
+
+## actor_conflicts_with_CODEX_THREAD_ID
+$ htalk --db DATABASE --as bob inbox
+exit 2
+keys: actor_source, current_session_id, error, next_action, recovery{inbox_in_registered_session, peers}, registered_peer, registered_session_id, state
+actor_source = "option"
+current_session_id = "CURRENT_SESSION"
+error = "actor_conflicts_with_CODEX_THREAD_ID"
+next_action = "Peer bob belongs to Codex session OTHER_SESSION, not current session CURRENT_SESSION. Use recovery.peers to find the peer registered to this session, or return to the registered session before running recovery.inbox_in_registered_session. The binding cannot be reassigned."
+recovery.inbox_in_registered_session = "htalk --db DATABASE --as bob inbox"
+recovery.peers = "htalk --db DATABASE peer list"
+registered_peer = "bob"
+registered_session_id = "OTHER_SESSION"
+state = "error"
+
+## unknown_peer, the name given with --as
+$ htalk --db DATABASE --as zed inbox
+exit 2
+keys: actor_source, error, next_action, recovery{peers}, state
+actor_source = "option"
+error = "unknown_peer"
+next_action = "Check the error and inspect registered addresses with recovery.peers."
+recovery.peers = "htalk --db DATABASE peer list"
+state = "error"
+
+# Messages
+
+## error, peer selected
+$ htalk --db DATABASE --as alice send zed --message 'Invented question'
+exit 2
+keys: actor_source, error, next_action, recovery{inbox, peers, sent}, state
+actor_source = "option"
+error = "unknown_peer"
+next_action = "Inspect saved messages with recovery.sent or recovery.inbox. Check registered addresses with recovery.peers. Never repeat an uncertain notification."
+recovery.inbox = "htalk --db DATABASE --as alice inbox"
+recovery.peers = "htalk --db DATABASE peer list"
+recovery.sent = "htalk --db DATABASE --as alice sent"
+state = "error"
+
+## message_id_conflict
+$ htalk --db DATABASE --as alice send bob --id REQUEST_ID --message 'A different question' --no-notify
+exit 2
+keys: actor_source, error, message_id, next_action, recovery{peers, sent, show}, state
+actor_source = "option"
+error = "message_id_conflict"
+message_id = "REQUEST_ID"
+next_action = "The existing message was preserved. Inspect recovery.show or recover outgoing IDs with recovery.sent. Do not resend."
+recovery.peers = "htalk --db DATABASE peer list"
+recovery.sent = "htalk --db DATABASE --as alice sent"
+recovery.show = "htalk --db DATABASE --as alice show REQUEST_ID"
+state = "error"
+
+## message_id_conflict, the ID belongs to a conversation this peer cannot read
+$ htalk --db DATABASE --as alice send bob --id HIDDEN_ID --message 'Invented question' --no-notify
+exit 2
+keys: actor_source, error, message_id, next_action, recovery{peers, sent}, state
+actor_source = "option"
+error = "message_id_conflict"
+message_id = "HIDDEN_ID"
+next_action = "This ID is already in use and is not readable by this peer. Recover your own outgoing IDs with recovery.sent. Do not resend."
+recovery.peers = "htalk --db DATABASE peer list"
+recovery.sent = "htalk --db DATABASE --as alice sent"
+state = "error"
+
+## reply_conflict_existing_answer_preserved
+$ htalk --db DATABASE --as bob reply REQUEST_ID --message 'A different answer' --no-notify
+exit 2
+keys: actor_source, error, message_id, next_action, recovery{peers, sent, show}, state
+actor_source = "option"
+error = "reply_conflict_existing_answer_preserved"
+message_id = "REQUEST_ID"
+next_action = "The existing message was preserved. Inspect recovery.show or recover outgoing IDs with recovery.sent. Do not resend."
+recovery.peers = "htalk --db DATABASE peer list"
+recovery.sent = "htalk --db DATABASE --as bob sent"
+recovery.show = "htalk --db DATABASE --as bob show REQUEST_ID"
+state = "error"
+
+## unknown_message
+$ htalk --db DATABASE --as alice show UNKNOWN_ID
+exit 2
+keys: actor_source, error, next_action, recovery{inbox, peers, sent}, state
+actor_source = "option"
+error = "unknown_message"
+next_action = "Inspect saved messages with recovery.sent or recovery.inbox. Check registered addresses with recovery.peers. Never repeat an uncertain notification."
+recovery.inbox = "htalk --db DATABASE --as alice inbox"
+recovery.peers = "htalk --db DATABASE peer list"
+recovery.sent = "htalk --db DATABASE --as alice sent"
+state = "error"
+
+## peer_retired
+$ htalk --db DATABASE --as alice send bob --message 'After retirement'
+exit 2
+keys: actor_source, error, next_action, recovery{peers}, retired_peers[], state
+actor_source = "option"
+error = "peer_retired"
+next_action = "Nothing was saved: new requests to or from a retired peer are refused. Choose an active peer with recovery.peers. Replies to saved requests still work. Restoring a peer is a registry decision, not a way to deliver this message."
+recovery.peers = "htalk --db DATABASE peer list"
+retired_peers[0] = "bob"
+state = "error"
+
+# A retired registration
+
+## a failed check of a retired peer
+$ htalk --db DATABASE peer check dora
+exit 2
+keys: error, next_action, recovery{peers}, retired_at, state
+error = "recipient_unavailable"
+next_action = "Check the error and inspect registered addresses with recovery.peers."
+recovery.peers = "htalk --db DATABASE peer list"
+state = "error"
+
+## peer_already_has_a_different_address, the registered peer is retired
+$ htalk --db DATABASE peer add bob --harness codex --session SESSION_ID --workspace WORKSPACE
+exit 2
+keys: error, next_action, recovery{peers}, registered_peer, registered_session_id, retired_at, state
+error = "peer_already_has_a_different_address"
+next_action = "Peer bob is already bound to codex session OTHER_SESSION. Inspect recovery.peers. Keep that address for the existing session; a separate session needs a different peer name. Peer bob is retired, so recovery.peers includes retired peers."
+recovery.peers = "htalk --db DATABASE peer list --all"
+registered_peer = "bob"
+registered_session_id = "OTHER_SESSION"
+state = "error"
+
+## session_already_has_a_peer_name, the registered peer is retired
+$ htalk --db DATABASE peer add carol --harness codex --session OTHER_SESSION --workspace WORKSPACE
+exit 2
+keys: error, next_action, recovery{peers}, registered_peer, registered_session_id, retired_at, state
+error = "session_already_has_a_peer_name"
+next_action = "Session OTHER_SESSION already uses peer bob. Use that name from its registered session. Inspect recovery.peers for the existing immutable addresses. Peer bob is retired, so recovery.peers includes retired peers. To give this session new requests again, run htalk peer restore bob."
+recovery.peers = "htalk --db DATABASE peer list --all"
+registered_peer = "bob"
+registered_session_id = "OTHER_SESSION"
+state = "error"
+
+# Mailbox preparation
+
+## unsupported_unversioned_database
+$ htalk --db DATABASE migrate
+exit 2
+keys: error, next_action, resolved_path, state
+error = "unsupported_unversioned_database"
+next_action = "No supported htalk schema version was found. The database was not changed. Verify that this is the intended mailbox and recover it with a matching client or a valid backup; do not assign a schema version manually."
+resolved_path = "DATABASE"
+state = "error"
+
+## unsupported_unversioned_database, from an ordinary command
+$ htalk --db DATABASE peer list
+exit 2
+keys: error, next_action, recovery{peers}, state
+error = "unsupported_unversioned_database"
+next_action = "Check the error and inspect registered addresses with recovery.peers."
+recovery.peers = "htalk --db DATABASE peer list"
+state = "error"
+
+## migrate, any other failure
+$ htalk --db DATABASE migrate
+exit 2
+keys: error, next_action, resolved_path, state
+error = "unsupported_database_version"
+next_action = "Migration did not report success. Inspect the error, schema version and database integrity on a copy before retrying. Do not change user_version manually."
+resolved_path = "DATABASE"
+state = "error"
+
+## database_backup_failed
+$ htalk --db DATABASE peer list
+exit 2
+keys: backup_directory, error, next_action, resolved_path, state
+backup_directory = "DATABASE.backups"
+error = "database_backup_failed"
+next_action = "The backup could not be saved and verified; the mailbox was not migrated. Check free space, write access to backup_directory and SQLite integrity before retrying the same command. Existing backups are retained."
+resolved_path = "DATABASE"
+state = "error"
+
+## database_foreign_key_violation
+$ htalk --db DATABASE peer list
+exit 2
+keys: backup_directory, error, next_action, resolved_path, state
+backup_directory = "DATABASE.backups"
+error = "database_foreign_key_violation"
+next_action = "Migration rolled back because the database contains broken references. Inspect PRAGMA foreign_key_check on a copy and repair the source or restore a valid backup before retrying. Do not change user_version manually."
+resolved_path = "DATABASE"
+state = "error"
+
+## database_integrity_check_failed
+$ htalk --db DATABASE peer list
+exit 2
+keys: backup_directory, error, next_action, resolved_path, state
+backup_directory = "DATABASE.backups"
+error = "database_integrity_check_failed"
+next_action = "The mailbox was not migrated because SQLite's integrity check failed. Preserve the mailbox and any existing backups and inspect them before retrying. Do not change user_version manually."
+resolved_path = "DATABASE"
+state = "error"
+
+# Catalogue. Its errors are a code, or the operating system's text for a file error.
+
+## catalog_publish_requires_db_and_as
+$ htalk catalog publish --config CATALOG eve --name Reviewer --role 'Check requested work'
+exit 2
+keys: error, state
+error = "catalog_publish_requires_db_and_as"
+state = "error"
+
+## a file error
+$ htalk catalog export --config CATALOG
+exit 2
+keys: error, state
+error = "No such file or directory (os error 2)"
+state = "error"
+
+## catalog_unknown_profile
+$ htalk catalog unpublish --config CATALOG UNKNOWN_ID
+exit 2
+keys: error, state
+error = "catalog_unknown_profile"
+state = "error"
+
+## catalog_interface_not_found
+$ htalk catalog discover --trust TRUST --interface htalk-missing0 --seconds 1
+exit 2
+keys: error, state
+error = "catalog_interface_not_found"
+state = "error"
+
+# Answers on stderr. Nothing is printed on stdout.
+
+## a command line the parser refuses
+$ htalk send
+exit 2
+stderr:
+  error: the following required arguments were not provided:
+    <--message <message>|--message-file <PATH>>
+    <recipient>
+
+  Usage: htalk send <--message <message>|--message-file <PATH>> <recipient>
+
+  For more information, try '--help'.
+
+## an unknown command
+$ htalk inboxx
+exit 2
+stderr:
+  error: unrecognized subcommand 'inboxx'
+
+    tip: a similar subcommand exists: 'inbox'
+
+  Usage: htalk [OPTIONS] <COMMAND>
+
+  For more information, try '--help'.
+
+## no command
+$ htalk
+exit 2
+stderr:
+  error: 'htalk' requires a subcommand but one was not provided
+    [subcommands: catalog, mcp, receive, peer, migrate, send, reply, wait, show, ack, inbox, watch, sent]
+
+  Usage: htalk [OPTIONS] <COMMAND>
+
+  For more information, try '--help'.
+
+## mcp without a peer
+$ htalk --db DATABASE mcp
+exit 2
+stderr:
+  htalk mcp requires --as NAME or HTALK_PEER: invalid_peer_name
+
+## mcp --connect with a local mailbox
+$ htalk --db DATABASE mcp --connect -- true
+exit 2
+stderr:
+  mcp --connect uses the remote endpoint's fixed database and peer; omit --db and --as
+
+## receive with a local mailbox
+$ htalk --db DATABASE receive --peer alice --session SESSION_ID --workspace WORKSPACE --state RECEIVER_STATE -- true
+exit 2
+stderr:
+  receive uses the remote watch binding; omit --db and --as
+
+## catalog connect, no such profile
+$ htalk catalog connect --trust TRUST --via ssh Reviewer
+exit 2
+stderr:
+  htalk catalog: catalog_profile_unavailable
