@@ -1,14 +1,15 @@
 # Fixed codes, read from the source text, and what a failed command returns.
 #
-# The lists hold every string literal the source passes to Error::code, to
-# Failure::coded, to a notification outcome or to a cleanup detail. Values that the
-# source spells another way, such as a skipped notice's reason, appear in the entries
-# below and in results.txt, not in the lists.
+# The lists hold every string literal inside a call that raises an error code
+# (Error::code) or that carries a detail (Failure::coded, a notification outcome, a
+# cleanup detail). Values the source spells another way, such as a skipped notice's
+# reason, appear in the entries below and in results.txt, not in the lists.
 #
 # A code appears as error in a command's error result, or as a detail:
 # notification_detail, notification_cleanup.detail, a discovery source's detail.
 # A failed check returns its detail code as error. Where no fixed code applies, a
-# detail is a documented exception class name.
+# detail is an exception class name; docs/reference.md documents that, and no name
+# is listed here.
 
 ## error codes
 actor_conflicts_with_CLAUDE_CODE_SESSION_ID
@@ -56,6 +57,7 @@ catalog_sender_binding_changed
 catalog_ssh_not_bound
 catalog_ssh_omit_interface
 catalog_tailscale_binding_changed
+catalog_tailscale_invalid_binary
 catalog_tailscale_invalid_socket
 catalog_tailscale_invalid_status
 catalog_tailscale_not_bound
@@ -77,6 +79,7 @@ database_not_found
 invalid_arguments
 invalid_database_schema
 invalid_harness_id
+invalid_json
 invalid_notification_result
 invalid_opencode_session_id
 invalid_opencode_url
@@ -125,6 +128,7 @@ codex_queue_delete_receipt_invalid
 codex_queue_receipt_mismatch
 codex_rpc_closed
 codex_rpc_frame_too_large
+codex_rpc_rejected
 codex_rpc_timeout
 codex_server_socket_changed
 codex_stdio_cleanup_ownership_unavailable
@@ -166,46 +170,26 @@ opencode_http_{}
 opencode_saved_{}
 opencode_{}
 
-## exception class names
-AttributeError
-BadStatusLine
-BlockingIOError
-BrokenPipeError
-CalledProcessError
-ChildProcessError
-ConnectionAbortedError
-ConnectionRefusedError
-ConnectionResetError
-DatabaseError
-FileExistsError
-FileNotFoundError
-HTTPException
-IncompleteRead
-InterruptedError
-InvalidURL
-IsADirectoryError
-JSONDecodeError
-KeyError
-KeyboardInterrupt
-LineTooLong
-NotADirectoryError
-OSError
-OperationalError
-PermissionError
-ProcessLookupError
-RemoteDisconnected
-SSLError
-TOMLDecodeError
-TimeoutError
-TimeoutExpired
-TypeError
-UnicodeDecodeError
-UnicodeEncodeError
-UnknownProtocol
-ValueError
+## error codes with guidance of their own
+# The source names each of them outside the call that raises it.
+# Every other error code gets one of the two default texts below:
+# 'error, no peer selected' or 'error, peer selected'.
+actor_conflicts_with_CLAUDE_CODE_SESSION_ID
+actor_conflicts_with_CODEX_THREAD_ID
+database_backup_failed
+database_foreign_key_violation
+database_integrity_check_failed
+database_not_found
+message_id_conflict
+peer_already_has_a_different_address
+peer_required_use_as_or_HTALK_PEER
+peer_retired
+reply_conflict_existing_answer_preserved
+session_already_has_a_peer_name
+unsupported_harness
+unsupported_unversioned_database
 
-# What each failure returns. A code without its own entry gets one of the two
-# default texts: 'error, no peer selected' or 'error, peer selected'.
+# What each failure returns.
 
 # Before a mailbox exists
 
@@ -418,11 +402,11 @@ state = "error"
 
 # A retired registration
 
-## a failed check of a retired peer; its detail is a class name
-$ htalk --db DATABASE peer check bob
+## a failed check of a retired peer
+$ htalk --db DATABASE peer check dora
 exit 2
 keys: error, next_action, recovery{peers}, retired_at, state
-error = "OperationalError"
+error = "recipient_unavailable"
 next_action = "Check the error and inspect registered addresses with recovery.peers."
 recovery.peers = "htalk --db DATABASE peer list"
 state = "error"

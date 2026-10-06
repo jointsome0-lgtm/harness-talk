@@ -2,8 +2,9 @@
 
 The files under tests/agent_view/ describe that view in plain text. Each test
 captures one part again, through the executable or MCP stdio, and compares it
-with its file. Nothing here imports the implementation; the list of fixed codes
-is read from the source text, because no command prints it.
+with its file. Nothing here imports the implementation. Two lists are read from
+the source text, because no command prints them: the fixed codes, and the texts
+that no captured entry shows.
 
 After an intended change, regenerate the files and review their diff:
 
@@ -18,11 +19,13 @@ import json
 import os
 from pathlib import Path
 import re
+import select
 import shlex
 import signal
 import sqlite3
 import sys
 import textwrap
+import time
 import unittest
 import uuid
 
@@ -37,16 +40,21 @@ UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 # Row and address fields echo the fixture or the clock. Their keys are listed; their values are not.
 ECHOED = {"id", "seq", "sender", "recipient", "in_reply_to", "body", "created_at", "ack_at", "notification_started_at",
           "notification_finished_at", "wait_returned_at", "name", "session_id", "workspace", "socket", "url", "retired_at"}
-# What htalk declares in the tool's input schema; the rest comes from the MCP library.
-SCHEMA_KEYS = {"type", "properties", "required", "additionalProperties", "items", "description", "enum", "default"}
+# A detail may be a Python exception class name. Phase 2 removes those, so no name is written down here.
+CLASS_NAME = re.compile(r"[A-Z][A-Za-z]+")
 
-LITERAL = r'"((?:[^"\\]|\\.)*)"'
-ERROR_CODE = re.compile(r"\b(?:Error::code|(?<![:.\w])code)\(\s*" + LITERAL)
-DETAIL_CODE = re.compile(r"(?:\b(?:Failure::coded|Failure::Coded|Outcome::(?:submitted|not_submitted|unknown))"
-                         r"|(?<![:.\w])coded|\.detail)\(\s*" + LITERAL)
-RUNTIME_CODE = re.compile(r'format!\(\s*"([a-z]+_[a-z_]*:?\{[^"]*)"')
-CLASS_NAME = re.compile(r'"([A-Z][A-Za-z]*(?:Error|Exception|Interrupt|Expired)|BadStatusLine|IncompleteRead|InvalidURL'
-                        r'|LineTooLong|RemoteDisconnected|UnknownProtocol)"')
+# Rust source, read far enough to tell string literals from comments and character literals.
+TOKEN = re.compile(r"""//[^\n]*|/\*.*?\*/|#\[cfg\(test\)\]|(?<!\w)b?r(#*)"(.*?)"\1|b?"((?:[^"\\]|\\.)*)"|'(?:[^'\\\n]|\\.)'""",
+                   re.S)
+ESCAPE = re.compile(r"\\(?:\n\s*|(.))", re.S)
+UNESCAPED = {"n": "\n", "t": "\t", "r": "\r", "0": "\0"}
+# Error::code(...), Self::code(...) and a module's own code(...); then the calls that carry a detail.
+RAISED = re.compile(r"(?<![.\w])(?:\w+::)*code\(")
+DETAILED = re.compile(r"(?<![.\w])(?:\w+::)*coded\(|\bOutcome::\w+\(|\.detail\(")
+RUNTIME_CODE = re.compile(r"[a-z]+_[a-z_]*:?\{[^}]*\}")
+# A source file that writes next_action, recovery or an MCP tool result holds texts an agent reads.
+ANSWERS = re.compile(r'"next_action"|"recovery"|CallToolResult')
+SQL = re.compile(r"\b(?:SELECT|INSERT|UPDATE|DELETE|CREATE|PRAGMA|WHERE|VALUES|FROM)\b")
 
 
 def key_tree(value):
@@ -72,6 +80,38 @@ def leaves(value, path=""):
 def tokens(text):
     """The parent issue's measure: UTF-8 bytes / 3.3."""
     return round(len(text.encode()) / 3.3)
+
+
+def lex(source):
+    """Rust source as (skeleton, literals): the code with every comment, character and string blanked,
+    and its string literals by offset. An in-file test module ends the file and is left out."""
+    literals, skeleton, last = {}, [], 0
+    for token in TOKEN.finditer(source):
+        if token.group() == "#[cfg(test)]":
+            source = source[:token.start()]
+            break
+        raw, text = token.group(2), token.group(3)
+        if text is not None:
+            raw = ESCAPE.sub(lambda escape: UNESCAPED.get(escape.group(1), escape.group(1) or ""), text)
+        if raw is not None:
+            literals[token.start()] = raw
+        skeleton += [source[last:token.start()], " " * len(token.group())]
+        last = token.end()
+    return "".join(skeleton) + source[last:], literals
+
+
+def arguments(skeleton, call):
+    """The span of the argument list of every call the pattern finds."""
+    for found in call.finditer(skeleton):
+        depth, end = 1, found.end()
+        while depth and end < len(skeleton):
+            depth += {"(": 1, ")": -1}.get(skeleton[end], 0)
+            end += 1
+        yield found.end(), end
+
+
+def squeezed(text):
+    return re.sub(r"\s+", " ", text).strip()
 
 
 class AgentView(HtalkCase):
@@ -114,7 +154,10 @@ class AgentView(HtalkCase):
         self.entry(title, words, db, code)
         self.lines.append("keys: " + key_tree(result)[1:-1])
         for path, value in leaves(result):
-            if re.split(r"[.\[]", path)[0] in ("recovery", "next_action") or path.rpartition(".")[2] not in ECHOED:
+            key = path.rpartition(".")[2]
+            if key in ("error", "detail", "notification_detail") and isinstance(value, str) and CLASS_NAME.fullmatch(value):
+                value = "<an exception class name>"
+            if re.split(r"[.\[]", path)[0] in ("recovery", "next_action") or key not in ECHOED:
                 self.lines.append("%s = %s" % (path, json.dumps(value, ensure_ascii=False)))
 
     def step(self, title, *words, code=0, env=None, db=True):
@@ -128,6 +171,16 @@ class AgentView(HtalkCase):
         self.assertEqual((2, ""), (result.code, result.stdout), words)
         self.entry(title, words, db, 2)
         self.lines += ["stderr:", *("  " + line for line in result.stderr.splitlines())]
+
+    def printed(self, process, count):
+        """The first lines a process prints, or a failure instead of a hang when they do not arrive."""
+        data, deadline = b"", time.monotonic() + 15
+        while data.count(b"\n") < count:
+            ready, _, _ = select.select([process.stdout], [], [], max(0, deadline - time.monotonic()))
+            chunk = os.read(process.stdout.fileno(), 65536) if ready else b""
+            self.assertTrue(chunk, "expected %d lines, got %r" % (count, data))
+            data += chunk
+        return data.decode().splitlines()[:count]
 
     def interrupt(self, title, words, ready):
         """Ctrl-C once the command reached the named point."""
@@ -158,10 +211,10 @@ class AgentView(HtalkCase):
     def mcp_view(self):
         """What htalk supplies over MCP stdio: instructions, the one tool, and its scope refusals."""
         def declared(schema):
+            """The schema as htalk wrote it: every keyword but the dialect the MCP library stamps on it."""
             if isinstance(schema, dict):
-                return {key: declared(value) if key != "properties" else {name: declared(item) for name, item in value.items()}
-                        for key, value in schema.items() if key in SCHEMA_KEYS}
-            return schema
+                return {key: declared(value) for key, value in schema.items() if key != "$schema"}
+            return [declared(item) for item in schema] if isinstance(schema, list) else schema
 
         for peer in ("alice", "bob"):
             self.htalk("peer", "add", peer, "--harness", "generic", "--delivery", "pull")
@@ -221,7 +274,7 @@ class AgentView(HtalkCase):
             self.htalk("peer", "add", peer, "--harness", "generic", "--delivery", "pull")
         send("bob")
         watcher = self.spawn("--as", "bob", "watch")
-        events = [json.loads(watcher.stdout.readline()) for _ in range(2)]
+        events = [json.loads(line) for line in self.printed(watcher, 2)]
         watcher.send_signal(signal.SIGINT)
         watcher.communicate(timeout=15)
         self.assertEqual(130, watcher.returncode)
@@ -285,26 +338,46 @@ class AgentView(HtalkCase):
         self.check("results.txt", self.plain("\n".join(self.lines)))
 
     def test_errors(self):
-        self.lines = ["# Fixed codes, read from the source text, and what a failed command returns.",
-                      "#",
-                      "# The lists hold every string literal the source passes to Error::code, to",
-                      "# Failure::coded, to a notification outcome or to a cleanup detail. Values that the",
-                      "# source spells another way, such as a skipped notice's reason, appear in the entries",
-                      "# below and in results.txt, not in the lists.",
-                      "#",
-                      "# A code appears as error in a command's error result, or as a detail:",
-                      "# notification_detail, notification_cleanup.detail, a discovery source's detail.",
-                      "# A failed check returns its detail code as error. Where no fixed code applies, a",
-                      "# detail is a documented exception class name."]
-        scanned = self.scan_codes()
-        for title, key in (("error codes", "error"), ("detail codes", "detail"),
-                           ("codes built at run time, {} is the variable part", "runtime"),
-                           ("exception class names", "class")):
-            self.lines += ["", "## " + title, *scanned[key]]
-        self.lines += ["", "# What each failure returns. A code without its own entry gets one of the two",
-                       "# default texts: 'error, no peer selected' or 'error, peer selected'."]
+        self.failed = set()
         self.error_scenarios()
-        self.check("errors.txt", self.plain("\n".join(self.lines)))
+        entries, scanned = self.lines, self.scan_codes()
+        text = ["# Fixed codes, read from the source text, and what a failed command returns.",
+                "#",
+                "# The lists hold every string literal inside a call that raises an error code",
+                "# (Error::code) or that carries a detail (Failure::coded, a notification outcome, a",
+                "# cleanup detail). Values the source spells another way, such as a skipped notice's",
+                "# reason, appear in the entries below and in results.txt, not in the lists.",
+                "#",
+                "# A code appears as error in a command's error result, or as a detail:",
+                "# notification_detail, notification_cleanup.detail, a discovery source's detail.",
+                "# A failed check returns its detail code as error. Where no fixed code applies, a",
+                "# detail is an exception class name; docs/reference.md documents that, and no name",
+                "# is listed here."]
+        for title, key in (("error codes", "error"), ("detail codes", "detail"),
+                           ("codes built at run time, {} is the variable part", "runtime")):
+            text += ["", "## " + title, *scanned[key]]
+        text += ["", "## error codes with guidance of their own", "# The source names each of them outside the call that raises it.",
+                 "# Every other error code gets one of the two default texts below:",
+                 "# 'error, no peer selected' or 'error, peer selected'.",
+                 *(code if code in self.failed else code + "    (no entry below)" for code in scanned["own"])]
+        text += ["", "# What each failure returns."]
+        self.check("errors.txt", self.plain("\n".join(text + entries)))
+
+    def test_texts(self):
+        """Compares against the other files, so --update writes this one last: unittest runs tests by name."""
+        shown = squeezed(" ".join((SNAPSHOT / name).read_text(encoding="utf-8")
+                                  for name in ("errors.txt", "help.txt", "mcp.txt", "notification.txt", "results.txt")))
+        texts = set()
+        for source, (_, literals) in self.rust_source().items():
+            for text in literals.values() if ANSWERS.search(source) else ():
+                parts = [part for part in map(squeezed, re.split(r"\{[^}]*\}", text)) if len(part) >= 8]
+                if len(text.split()) >= 3 and not SQL.search(text) and not all(part in shown for part in parts):
+                    texts.add(squeezed(text))
+        text = ["# Texts the source can put into an answer that no entry in the other files shows.",
+                "# They are read from the source files that write next_action, recovery or an MCP tool",
+                "# result, and stand here as the source spells them; {...} is filled in at run time.",
+                "# A new or changed text shows up either in an entry or in this list.", "", *sorted(texts)]
+        self.check("texts.txt", "\n".join(text))
 
     def test_size(self):
         pages = self.help_pages()
@@ -332,16 +405,31 @@ class AgentView(HtalkCase):
             print("\n".join(text))
         self.check("size.txt", "\n".join(text))
 
-    # Fixed codes in the source
+    # The source text
+
+    def rust_source(self):
+        """Every production source file's text, with what lex() makes of it."""
+        source = REPO / "src"
+        self.assertTrue(source.is_dir(), "two lists are read from %s; run this test in a checkout" % source)
+        return {text: lex(text) for text in (path.read_text(encoding="utf-8") for path in sorted(source.rglob("*.rs")))}
 
     def scan_codes(self):
-        source = REPO / "src"
-        self.assertTrue(source.is_dir(), "the list of fixed codes is read from %s; run this test in a checkout" % source)
-        text = "\n".join(path.read_text(encoding="utf-8") for path in sorted(source.rglob("*.rs")))
-        found = {"error": set(ERROR_CODE.findall(text)), "detail": set(DETAIL_CODE.findall(text)),
-                 "class": set(CLASS_NAME.findall(text)),
-                 "runtime": {re.sub(r"\{[^}]*\}", "{}", code) for code in RUNTIME_CODE.findall(text)}}
-        found["detail"] -= found["class"]
+        found = {"error": set(), "detail": set(), "runtime": set()}
+        elsewhere = set()
+        for skeleton, literals in self.rust_source().values():
+            inside = set()
+            for key, call in (("error", RAISED), ("detail", DETAILED)):
+                for start, end in arguments(skeleton, call):
+                    within = {offset for offset in literals if start <= offset < end}
+                    inside |= within
+                    found[key] |= {literals[offset] for offset in within}
+            elsewhere |= {text for offset, text in literals.items() if offset not in inside}
+            found["runtime"] |= {text for text in literals.values() if RUNTIME_CODE.fullmatch(text)}
+        for key in ("error", "detail"):
+            found["runtime"] |= {code for code in found[key] if "{" in code}
+            found[key] = {code for code in found[key] if "{" not in code and not CLASS_NAME.fullmatch(code)}
+        found["runtime"] = {re.sub(r"\{[^}]*\}", "{}", code) for code in found["runtime"]}
+        found["own"] = found["error"] & elsewhere
         return {key: sorted(values) for key, values in found.items()}
 
     # Scenarios
@@ -458,6 +546,7 @@ class AgentView(HtalkCase):
         def fail(*words, env=None, title=None, db=True):
             result = self.htalk(*words, code=2, env=env, db=db)
             self.assertEqual("error", result["state"], words)
+            self.failed.add(result["error"])
             self.record(title or result["error"], words, 2, result, db)
             return result
 
@@ -502,7 +591,9 @@ class AgentView(HtalkCase):
         fail("--as", "alice", "send", "bob", "--message", "After retirement")
 
         self.lines += ["", "# A retired registration"]
-        fail("peer", "check", "bob", title="a failed check of a retired peer; its detail is a class name")
+        self.add_peer("dora")
+        self.htalk("peer", "retire", "dora")
+        fail("peer", "check", "dora", title="a failed check of a retired peer")
         fail("peer", "add", "bob", "--harness", "codex", "--session", session, "--workspace", work,
              title="peer_already_has_a_different_address, the registered peer is retired")
         fail("peer", "add", "carol", "--harness", "codex", "--session", other, "--workspace", work,

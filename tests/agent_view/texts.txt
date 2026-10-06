@@ -1,0 +1,34 @@
+# Texts the source can put into an answer that no entry in the other files shows.
+# They are read from the source files that write next_action, recovery or an MCP tool
+# result, and stand here as the source spells them; {...} is filled in at run time.
+# A new or changed text shows up either in an entry or in this list.
+
+A mailbox command is required.
+Cancelled before connecting to the mailbox.
+Cancelled before running htalk.
+Catalogue binding changed; no mailbox command was sent. Discover the profile again.
+Connector cleanup failed: {e}. A write may be saved; inspect sent/show before repeating it. This call was not retried.
+Connector cleanup ownership unavailable: {e}; no command was sent.
+Connector reaping failed: {e}. Inspect saved state before repeating a write.
+Could not run htalk: {e}
+Remote call failed; inspect saved state before repeating a write.
+Remote mailbox call outcome is unknown. A write may be saved. Inspect sent/show with the saved ID before repeating a write or any task. This call was not retried.
+Selected profiles: {}.
+Snapshot from the explicitly selected Tailscale daemon. Only locally pinned peer IDs are fetched. Reachability is not agent liveness.
+Snapshot of advertised devices on the selected interface. Unavailable sources do not prove absence; channel reachability is not agent liveness.
+Some held writers have an invalid saved address.
+Some held writers have no saved address yet.
+Some live records could not be verified; run discovery again to refresh.
+Some loaded records could not be verified.
+The selected channel binding is unavailable or changed; no mailbox command was sent. Discover the profile again.
+This endpoint does not accept a catalogue scope.
+htalk cleanup failed: {e}. A write may be saved; inspect sent/inbox before repeating it.
+htalk cleanup ownership unavailable: {e}; inspect saved state before repeating a write.
+htalk did not finish after interruption
+htalk exited without JSON: {}. Inspect saved state before repeating a write.
+htalk mcp: {error}
+htalk output exceeded 4 MiB; use a smaller --limit
+htalk reaping failed: {e}. Inspect saved state before repeating a write.
+htalk receive: {error}
+htalk task failed; inspect sent/inbox before repeating a write.
+{e}. A write may be saved; inspect sent/inbox before repeating it.
