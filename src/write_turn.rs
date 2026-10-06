@@ -21,7 +21,6 @@ enum Mode {
     Heir,
 }
 thread_local! { static MODE: Cell<Mode> = const { Cell::new(Mode::Normal) }; }
-thread_local! { static HEIR_WAITS: Cell<u64> = const { Cell::new(0) }; }
 
 pub struct Probe(Mode);
 impl Drop for Probe {
@@ -40,18 +39,6 @@ pub fn started_write() {
 }
 pub fn queued(held: bool) {
     MODE.set(if held { Mode::Heir } else { Mode::Normal });
-    if held {
-        successor_grace();
-    }
-}
-pub fn successor_grace() {
-    thread::sleep(Duration::from_millis(4));
-}
-pub fn extra_successor_slot() -> bool {
-    uuid::Uuid::new_v4().as_bytes()[0] < 171
-}
-pub fn heir_waits() -> u64 {
-    HEIR_WAITS.get()
 }
 pub fn wait(attempt: i32) -> Option<bool> {
     match MODE.get() {
@@ -59,7 +46,6 @@ pub fn wait(attempt: i32) -> Option<bool> {
         Mode::Fresh => Some(false),
         Mode::Heir if attempt >= 5000 => Some(false),
         Mode::Heir => {
-            HEIR_WAITS.set(HEIR_WAITS.get().saturating_add(1));
             thread::sleep(Duration::from_millis(1));
             Some(true)
         }

@@ -82,6 +82,19 @@ python -m pip install dist/*.whl
 
 Distribution checks run the installed wheel from outside the checkout with an explicit executable path. A release still requires the live client checks in [releasing](releasing.md); fixture tests do not establish compatibility with an untested native client version.
 
+## Contended writes
+
+A `send` or `reply` that finds the mailbox busy before its first write queues for a turn, as the [reference](reference.md) describes, and this was kept after measuring it against plain SQLite lock waiting. With 32 senders writing one after another, plain waiting let one send in 9,600 fail with `database is locked` after 5.5 seconds, and with 128 senders 205 of 1,280 failed, while the turn lost none; the turn now has no random step.
+
+`scripts/contended_sends.py` repeats the measurement. It starts 2, 8 and 32 senders against one temporary mailbox and prints, for each, the exit codes, the sends that had to be repeated, the rows lost or doubled, and the median, mean and worst time of one send:
+
+```sh
+cargo build --release --locked
+HTALK_TEST_COMMAND="[\"$PWD/target/release/htalk\"]" python3 scripts/contended_sends.py
+```
+
+Run it on a local disk, not a network mount.
+
 ## Test rules
 
 A test meets htalk where its callers do, at one of these seams:

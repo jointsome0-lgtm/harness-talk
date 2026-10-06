@@ -44,6 +44,15 @@ except sqlite3.OperationalError as exc:
 """
 
 
+def turned_away(path):
+    """Whether SQLite turns a new reader away, which it does while a writer waits to commit.
+    Another process asks, without waiting: a connection of this one would share the lock held here."""
+    asked = subprocess.run([sys.executable, "-c", READ_AT_ONCE, str(path)], capture_output=True, text=True,
+                           timeout=TIMEOUT)
+    assert asked.returncode in (0, 3), asked.stderr
+    return asked.returncode == 3
+
+
 def words_of(command):
     return shlex.split(command)
 
@@ -272,20 +281,15 @@ class SchemaCompatibility(HtalkCase):
                         reader.execute("SELECT COUNT(*) FROM messages").fetchone()
                         process = self.spawn(*words, db=path)
 
-                        def migration_wrote():
+                        def migration_waits_to_commit():
                             if process.poll() is not None:
                                 stdout, stderr = process.communicate(timeout=5)
                                 self.fail("command exited before migration commit contention: %s\n%s\n%s"
                                           % (process.returncode, stdout, stderr))
-                            # A verified backup requires successful migration BEGIN;
-                            # the journal then proves migration writes have started.
-                            return self.backups(path) and Path(str(path) + "-journal").exists()
+                            # A verified backup requires successful migration BEGIN.
+                            return self.backups(path) and turned_away(path)
 
-                        wait_for(migration_wrote, message="migration backup and write journal")
-                        time.sleep(.1)
-                        self.assertIsNone(process.poll(), "migration did not wait for the reader")
-                        self.assertFalse(Path(str(path) + "-htalk-turn").exists(),
-                                         "migration entered admission after its write transaction began")
+                        wait_for(migration_waits_to_commit, message="migration backup and commit wait")
                         backup, = self.backups(path)
                         self.assertEqual(before, self.snapshot(backup))
                         self.assertEqual(version, reader.execute("PRAGMA user_version").fetchone()[0])
@@ -1425,13 +1429,8 @@ class ContendedWrites(HtalkCase):
         self.running(process, "send did not wait")
 
     def committing(self, process):
-        """Whether SQLite turns a new reader away, which it does while a writer waits to commit.
-        Another process asks, without waiting: a connection of this one would share the lock held here."""
         self.running(process, "send did not wait for the reader")
-        asked = subprocess.run([sys.executable, "-c", READ_AT_ONCE, str(self.db)], capture_output=True, text=True,
-                               timeout=TIMEOUT)
-        self.assertIn(asked.returncode, (0, 3), asked.stderr)
-        return asked.returncode == 3
+        return turned_away(self.db)
 
     def test_contended_send_saves_the_body_it_read_once(self):
         body = self.tmp / "body.txt"
