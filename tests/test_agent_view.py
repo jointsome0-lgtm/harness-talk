@@ -4,7 +4,8 @@ The files under tests/agent_view/ describe that view in plain text. Each test
 captures one part again, through the executable or MCP stdio, and compares it
 with its file. Nothing here imports the implementation. Two lists are read from
 the source text, because no command prints them: the fixed codes, and the texts
-that no captured entry shows.
+that no captured entry shows. They do not depend on which file under src/ holds
+a piece of code.
 
 After an intended change, regenerate the files and review their diff:
 
@@ -41,20 +42,22 @@ UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 ECHOED = {"id", "seq", "sender", "recipient", "in_reply_to", "body", "created_at", "ack_at", "notification_started_at",
           "notification_finished_at", "wait_returned_at", "name", "session_id", "workspace", "socket", "url", "retired_at"}
 # A detail may be a Python exception class name. Phase 2 removes those, so no name is written down here.
+# htalk's own codes are snake_case; the shape tells the two apart.
 CLASS_NAME = re.compile(r"[A-Z][A-Za-z]+")
 
 # Rust source, read far enough to tell string literals from comments and character literals.
-TOKEN = re.compile(r"""//[^\n]*|/\*.*?\*/|#\[cfg\(test\)\]|(?<!\w)b?r(#*)"(.*?)"\1|b?"((?:[^"\\]|\\.)*)"|'(?:[^'\\\n]|\\.)'""",
-                   re.S)
-ESCAPE = re.compile(r"\\(?:\n\s*|(.))", re.S)
+TOKEN = re.compile(r"""//[^\n]*|/\*.*?\*/|(?<!\w)b?r(#*)"(.*?)"\1|b?"((?:[^"\\]|\\.)*)"|'(?:[^'\\\n]|\\.)'""", re.S)
+ESCAPE = re.compile(r"\\(?:\n\s*|x([0-9a-fA-F]{2})|u\{([0-9a-fA-F_]+)\}|(.))", re.S)
 UNESCAPED = {"n": "\n", "t": "\t", "r": "\r", "0": "\0"}
+TEST_ONLY = re.compile(r"#\[cfg\((?:all\()?test\b[^\]]*\]")
 # Error::code(...), Self::code(...) and a module's own code(...); then the calls that carry a detail.
 RAISED = re.compile(r"(?<![.\w])(?:\w+::)*code\(")
 DETAILED = re.compile(r"(?<![.\w])(?:\w+::)*coded\(|\bOutcome::\w+\(|\.detail\(")
 RUNTIME_CODE = re.compile(r"[a-z]+_[a-z_]*:?\{[^}]*\}")
-# A source file that writes next_action, recovery or an MCP tool result holds texts an agent reads.
-ANSWERS = re.compile(r'"next_action"|"recovery"|CallToolResult')
-SQL = re.compile(r"\b(?:SELECT|INSERT|UPDATE|DELETE|CREATE|PRAGMA|WHERE|VALUES|FROM)\b")
+# A text is a literal with two or more plain words that is not SQL, a panic message or a pattern.
+WORD = re.compile(r"[A-Za-z][A-Za-z'-]*[.,;:!?]?")
+SQL = re.compile(r"\b(?:ALTER|CREATE|DELETE|FROM|INSERT|JOIN|ORDER|PRAGMA|SELECT|TABLE|UPDATE|VALUES|WHERE)\b")
+NOT_AN_ANSWER = re.compile(r"\.expect\(|\b(?:assert|assert_eq|assert_ne|debug_assert|panic|unreachable)!\(|\bRegex::new\(")
 
 
 def key_tree(value):
@@ -82,22 +85,41 @@ def tokens(text):
     return round(len(text.encode()) / 3.3)
 
 
+def unescaped(escape):
+    number, char = escape.group(1) or escape.group(2), escape.group(3)
+    return chr(int(number.replace("_", ""), 16)) if number else UNESCAPED.get(char, char or "")
+
+
+def item_end(skeleton, start):
+    """Where the item that starts here ends: its first ; outside braces, or the brace that closes it."""
+    depth = 0
+    for index in range(start, len(skeleton)):
+        if skeleton[index] == ";" and not depth:
+            return index + 1
+        depth += {"{": 1, "}": -1}.get(skeleton[index], 0)
+        if skeleton[index] == "}" and not depth:
+            return index + 1
+    return len(skeleton)
+
+
 def lex(source):
     """Rust source as (skeleton, literals): the code with every comment, character and string blanked,
-    and its string literals by offset. An in-file test module ends the file and is left out."""
+    and its string literals by offset. Items compiled only for tests are blanked too."""
     literals, skeleton, last = {}, [], 0
     for token in TOKEN.finditer(source):
-        if token.group() == "#[cfg(test)]":
-            source = source[:token.start()]
-            break
         raw, text = token.group(2), token.group(3)
         if text is not None:
-            raw = ESCAPE.sub(lambda escape: UNESCAPED.get(escape.group(1), escape.group(1) or ""), text)
+            raw = ESCAPE.sub(unescaped, text)
         if raw is not None:
             literals[token.start()] = raw
         skeleton += [source[last:token.start()], " " * len(token.group())]
         last = token.end()
-    return "".join(skeleton) + source[last:], literals
+    skeleton = "".join(skeleton) + source[last:]
+    for attribute in TEST_ONLY.finditer(skeleton):
+        start, end = attribute.start(), item_end(skeleton, attribute.end())
+        literals = {offset: text for offset, text in literals.items() if not start <= offset < end}
+        skeleton = skeleton[:start] + " " * (end - start) + skeleton[end:]
+    return skeleton, literals
 
 
 def arguments(skeleton, call):
@@ -368,15 +390,23 @@ class AgentView(HtalkCase):
         shown = squeezed(" ".join((SNAPSHOT / name).read_text(encoding="utf-8")
                                   for name in ("errors.txt", "help.txt", "mcp.txt", "notification.txt", "results.txt")))
         texts = set()
-        for source, (_, literals) in self.rust_source().items():
-            for text in literals.values() if ANSWERS.search(source) else ():
+        for skeleton, literals in self.rust_source():
+            excluded = list(arguments(skeleton, NOT_AN_ANSWER))
+            for offset, text in literals.items():
                 parts = [part for part in map(squeezed, re.split(r"\{[^}]*\}", text)) if len(part) >= 8]
-                if len(text.split()) >= 3 and not SQL.search(text) and not all(part in shown for part in parts):
-                    texts.add(squeezed(text))
-        text = ["# Texts the source can put into an answer that no entry in the other files shows.",
-                "# They are read from the source files that write next_action, recovery or an MCP tool",
-                "# result, and stand here as the source spells them; {...} is filled in at run time.",
-                "# A new or changed text shows up either in an entry or in this list.", "", *sorted(texts)]
+                if (sum(1 for word in text.split() if WORD.fullmatch(word)) >= 2 and not SQL.search(text)
+                        and not any(start <= offset < end for start, end in excluded)
+                        and not all(part in shown for part in parts)):
+                    texts.add(json.dumps(text, ensure_ascii=False))
+        text = ["# Texts in the source that no entry in the other files shows: every string literal with",
+                "# two or more plain words, outside the tests, that is not SQL, a panic message or a",
+                "# pattern. Each stands here exactly as the source spells it, as a JSON string; {...} is",
+                "# filled in at run time.",
+                "#",
+                "# Most reach an agent or an operator only through a failure the other files do not",
+                "# provoke: an MCP call that breaks half way, a receiver that cannot start, a process",
+                "# that cannot be cleaned up. This file pins their wording. It does not pin which failure",
+                "# returns which text; the suites that provoke those failures do.", "", *sorted(texts)]
         self.check("texts.txt", "\n".join(text))
 
     def test_size(self):
@@ -408,15 +438,15 @@ class AgentView(HtalkCase):
     # The source text
 
     def rust_source(self):
-        """Every production source file's text, with what lex() makes of it."""
+        """What lex() makes of every source file."""
         source = REPO / "src"
         self.assertTrue(source.is_dir(), "two lists are read from %s; run this test in a checkout" % source)
-        return {text: lex(text) for text in (path.read_text(encoding="utf-8") for path in sorted(source.rglob("*.rs")))}
+        return [lex(path.read_text(encoding="utf-8")) for path in sorted(source.rglob("*.rs"))]
 
     def scan_codes(self):
         found = {"error": set(), "detail": set(), "runtime": set()}
         elsewhere = set()
-        for skeleton, literals in self.rust_source().values():
+        for skeleton, literals in self.rust_source():
             inside = set()
             for key, call in (("error", RAISED), ("detail", DETAILED)):
                 for start, end in arguments(skeleton, call):
