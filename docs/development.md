@@ -81,3 +81,26 @@ python -m pip install dist/*.whl
 `--sdist` rebuilds the wheel from the source archive, checking that it contains the required sources. Use a fresh Cargo target directory: archive timestamps are normalized, and reusing cached outputs for the same package version can retain an older executable. For source installation, `python -m pip install .` invokes maturin and the Rust toolchain. For a standalone executable, use `cargo build --release --locked`; copy `target/release/htalk` to a directory on `PATH`.
 
 Distribution checks run the installed wheel from outside the checkout with an explicit executable path. A release still requires the live client checks in [releasing](releasing.md); fixture tests do not establish compatibility with an untested native client version.
+
+## Test rules
+
+A test meets htalk where its callers do, at one of these seams:
+
+- a command in and JSON out, through the executable selected by `HTALK_TEST_COMMAND` or through MCP stdio;
+- a fake client that observes the adapter's calls: the fake `claude`, `codex` and `opencode` executables, the fake Claude socket and the loopback OpenCode server;
+- a real mailbox file given to the command;
+- the receiver contracts under `integrations/`.
+
+Tests move outward to these seams. A new test never imports `harness_talk::`, never asserts an exception class name, never reads `/proc/locks` or a journal file, and never asserts a sleep length. It waits on something a caller could see too: the fake client's record of a call, what the database returns or refuses, a file the command has opened, or the command's exit.
+
+When a module is restructured, its tests move to a seam first and pass on the old code. Then the code changes. Then the inner tests go. A ported test asserts on what a command returns. A test that only checked internal calls or wire framing is deleted, not ported.
+
+The sdist includes `tests/**` and the workflows name test files. A change that adds, moves or deletes a test file updates `.github/workflows/tests.yml` with it.
+
+`scripts/test_census.py` counts the tests by kind and lists the ones that still reach inside: Rust tests built on the crate (they import `harness_talk::`, are compiled into `src/` through `#[path]` or sit in `src/`), tests that read `/proc/locks` or a journal file, and tests that assert a Python exception class name. A helper in the same file counts for the tests that call it. The script reads files as text and uses only the standard library, so it needs no build:
+
+```sh
+python3 scripts/test_census.py
+```
+
+The core cleanup, issue #65, adds rules for each of its pull requests. `main` stays green and releasable after each merge: `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`, then the Python and Node suites named in `.github/workflows/tests.yml`. Each pull request reports, before and after, the core size in tokens, the tests that reach inside, the test count and the lines of test code. A visible change found along the way is not made there; it is noted on issue #76. Code the next phase deletes, the Python class names, the `python_*` helpers and the hand-rolled HTTP client, is gathered into one place, not polished.

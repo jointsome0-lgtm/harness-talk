@@ -5,7 +5,7 @@ Fake claude/codex executables, a fake Claude messaging socket and a loopback
 OpenCode server stand in for clients. No test imports the implementation.
 """
 from contextlib import closing
-import fcntl
+import errno
 import json
 import os
 from pathlib import Path
@@ -1362,12 +1362,14 @@ class Discovery(HtalkCase):
         self.assertFalse(self.db.parent.exists())
 
 
-class WriteAdmission(HtalkCase):
+class ContendedWrites(HtalkCase):
+    """What a sender relies on while another process holds the mailbox. Each test waits on the message
+    file its send opened, on what the database refuses, on the fake client or on the send's exit."""
+
     def setUp(self):
         super().setUp()
         self.add_peer("alice")
         self.codex_recipient("bob")
-        self.turn = Path(str(self.db) + "-htalk-turn")
 
     def hold(self, statement):
         db = sqlite3.connect(self.db, isolation_level=None)
@@ -1375,116 +1377,101 @@ class WriteAdmission(HtalkCase):
         db.execute(statement)
         return db
 
-    def admission_locks(self, identity):
-        """Read kernel lock owners and waiters for one admission directory."""
-        try:
-            lines = Path("/proc/locks").read_text().splitlines()
-        except OSError as exc:
-            self.fail("admission readiness requires readable /proc/locks: %s" % exc)
-        matches = []
-        for line in lines:
-            fields = line.split()
-            blocked = len(fields) > 1 and fields[1] == "->"
-            fields = fields[2:] if blocked else fields[1:]
-            try:
-                kind, scope, mode, pid, key, start, end = fields
-                major, minor, inode = key.split(":")
-                key = (int(major, 16), int(minor, 16), int(inode))
-                owner = int(pid)
-            except ValueError:
-                self.fail("unsupported /proc/locks entry: %r" % line)
-            if key == identity:
-                matches.append((blocked, kind, scope, mode, owner, start, end))
-        return matches
+    def body_pipe(self):
+        """A message file whose reader is known: it opens for writing only once a send has opened it."""
+        path = self.tmp / "body.txt"
+        os.mkfifo(path)
+        return path
 
-    def test_contended_send_keeps_the_first_message_file_contents(self):
-        body = self.tmp / "body.txt"
-        body.write_bytes(b"First\r\nSecond\rThird")
+    def running(self, process, otherwise):
+        if process.poll() is not None:
+            self.fail("%s: %r" % (otherwise, process.communicate()))
+
+    def opened_by(self, process, pipe):
+        def writer():
+            self.running(process, "send exited before it read its message file")
+            try:
+                return os.fdopen(os.open(pipe, os.O_WRONLY | os.O_NONBLOCK), "wb")
+            except OSError as exc:
+                if exc.errno != errno.ENXIO:
+                    raise
+        return wait_for(writer, message="send to open its message file")
+
+    def keeps_waiting(self, process):
+        """A send that has its body and cannot write yet neither fails nor returns."""
+        try:
+            process.wait(timeout=0.5)
+        except subprocess.TimeoutExpired:
+            pass
+        self.running(process, "send did not wait for the other writer")
+
+    def writing(self):
+        """Whether some connection holds the mailbox's write lock, asked of SQLite without waiting."""
+        with closing(sqlite3.connect(self.db, timeout=0, isolation_level=None)) as probe:
+            try:
+                probe.execute("BEGIN IMMEDIATE")
+            except sqlite3.OperationalError:
+                return True
+            probe.execute("ROLLBACK")
+        return False
+
+    def test_contended_send_saves_the_body_it_read_once(self):
+        body = self.body_pipe()
         writer = self.hold("BEGIN IMMEDIATE")
         proc = self.spawn("--as", "alice", "send", "bob", "--message-file", body, "--no-notify")
-        wait_for(self.turn.exists, message="send waiting after reading its body")
-        body.write_text("Changed while waiting")
+        with self.opened_by(proc, body) as out:
+            # The send holds the file it opened. From here on its path names other contents.
+            changed = self.tmp / "changed.txt"
+            changed.write_text("Changed while waiting")
+            changed.replace(body)
+            out.write(b"First\r\nSecond\rThird")
+        self.keeps_waiting(proc)
         writer.rollback()
         sent = self.finish(proc)
         self.assertEqual("First\nSecond\nThird", sent["body"])
         self.assertEqual([(sent["id"], sent["body"])], self.sql("SELECT id,body FROM messages"))
 
-    def test_commit_wait_does_not_restart_the_write(self):
+    def test_send_blocked_at_commit_by_a_reader_finishes_once(self):
         reader = self.hold("BEGIN")
         reader.execute("SELECT * FROM peers").fetchall()
         proc = self.spawn("--as", "alice", "send", "bob", "--message", "Held commit", "--no-notify")
-        wait_for(Path(str(self.db) + "-journal").exists, message="write reached its journal")
-        time.sleep(.1)
-        self.assertIsNone(proc.poll())
-        self.assertFalse(self.turn.exists())
+
+        def begun():
+            self.running(proc, "send did not wait for the reader")
+            return self.writing()
+
+        # The reader lets the send begin its write and keeps it from committing.
+        wait_for(begun, message="send to begin its write")
         reader.rollback()
         sent = self.finish(proc)
         self.assertEqual([(sent["id"],)], self.sql("SELECT id FROM messages"))
 
-    def test_interrupt_while_waiting_for_admission_saves_nothing(self):
-        self.turn.mkdir(mode=0o700)
-        holder = os.open(self.turn, os.O_RDONLY | os.O_DIRECTORY)
-        self.addCleanup(os.close, holder)
-        fcntl.flock(holder, fcntl.LOCK_EX)
-        directory = os.fstat(holder)
-        identity = (os.major(directory.st_dev), os.minor(directory.st_dev), directory.st_ino)
-        held = (False, "FLOCK", "ADVISORY", "WRITE", os.getpid(), "0", "EOF")
-        self.assertEqual([held], self.admission_locks(identity),
-                         "cannot observe the held admission FLOCK; /proc/locks observation unsupported")
+    def test_interrupt_while_another_writer_holds_the_mailbox_saves_nothing(self):
+        body = self.body_pipe()
         writer = self.hold("BEGIN IMMEDIATE")
-        proc = self.spawn("--as", "alice", "send", "bob", "--message", "Interrupted", "--no-notify")
-        waiting = (True, "FLOCK", "ADVISORY", "WRITE", proc.pid, "0", "EOF")
-
-        def blocked_on_admission():
-            if proc.poll() is not None:
-                stdout, stderr = proc.communicate(timeout=5)
-                self.fail("send exited before its admission FLOCK waiter was observed: exit %s\nstdout=%s\nstderr=%s"
-                          % (proc.returncode, stdout, stderr))
-            locks = self.admission_locks(identity)
-            self.assertIn(held, locks, "the admission holder disappeared before interruption")
-            return waiting in locks
-
-        # Observe readiness before the CLI's five-second admission timeout.
-        wait_for(blocked_on_admission, timeout=3, message="this child's blocked admission FLOCK on %r" % (identity,))
-        writer.rollback()
+        proc = self.spawn("--as", "alice", "send", "bob", "--message-file", body, "--no-notify", group=True)
+        with self.opened_by(proc, body) as out:
+            out.write(b"Interrupted")
+        self.keeps_waiting(proc)
         proc.send_signal(signal.SIGINT)
-        self.assertEqual("interrupted", self.finish(proc, code=130)["state"])
-        self.assertEqual([], self.sql("SELECT id FROM messages"))
-        self.assertFalse(Path("/proc/%d" % proc.pid).exists(), "the interrupted child still has process resources")
-        self.assertTrue(proc.stdout.closed)
-        self.assertTrue(proc.stderr.closed)
-        self.assertEqual([held], self.admission_locks(identity), "the child's admission lock waiter survived exit")
-        fcntl.flock(holder, fcntl.LOCK_UN)
-        self.assertEqual([], self.admission_locks(identity))
-        probe = os.open(self.turn, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            self.assertEqual(directory.st_ino, os.fstat(probe).st_ino)
-            self.assertEqual(directory.st_dev, os.fstat(probe).st_dev)
-            fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            self.assertEqual([held], self.admission_locks(identity))
-        finally:
-            os.close(probe)
-        self.assertEqual([], self.admission_locks(identity))
-
-    def test_admission_is_released_before_the_notification_attempt(self):
-        ident = str(uuid.uuid4())
-        words = ["--as", "alice", "send", "bob", "--id", ident, "--message", "One notice"]
-        self.configure(codex_queue={"mode": "block"})
-        writer = self.hold("BEGIN IMMEDIATE")
-        proc = self.spawn(*words)
-        wait_for(self.turn.exists, message="send entered admission")
+        interrupted = self.finish(proc, code=130)
+        self.assertEqual(("interrupted", None), (interrupted["state"], interrupted["message_id"]))
+        with self.assertRaises(ProcessLookupError, msg="the interrupted send left a process behind"):
+            os.killpg(proc.pid, 0)
         writer.rollback()
+        self.assertEqual([], self.sql("SELECT id FROM messages"))
+
+    def test_repeated_send_returns_during_the_first_notification(self):
+        words = ["--as", "alice", "send", "bob", "--id", str(uuid.uuid4()), "--message", "One notice"]
+        self.configure(codex_queue={"mode": "block"})
+        proc = self.spawn(*words)
         self.started("codex_queue")
-        holder = os.open(self.turn, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            fcntl.flock(holder, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        finally:
-            os.close(holder)
-        (self.state / "codex_queue.release").touch()
-        self.assertEqual("submission_unknown", self.finish(proc, code=2)["submission"])
         repeated = self.htalk(*words)
+        self.assertIsNone(proc.poll(), "the repeated send waited for the first notification")
         self.assertFalse(repeated["created"])
-        self.assertEqual("submission_unknown", repeated["submission"])
+        self.release("codex_queue")
+        first = self.finish(proc, code=2)
+        self.assertEqual((True, repeated["id"], "submission_unknown"), (first["created"], first["id"], first["submission"]))
         self.assertEqual(1, len(self.calls("codex", ["queue"])))
 
 

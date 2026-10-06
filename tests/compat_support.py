@@ -295,9 +295,11 @@ class HtalkCase(unittest.TestCase):
             self.assertEqual(error, result["error"])
         return result
 
-    def spawn(self, *words, db=True, env=None, argv=None):
+    def spawn(self, *words, db=True, env=None, argv=None, group=False):
+        """Start htalk. With group=True it leads its own process group, so leftovers can be asked for."""
         process = subprocess.Popen(argv or self.argv(words, db), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True, encoding="utf-8", env=self.environment(env), cwd=self.tmp,
+                                   start_new_session=group,
                                    preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
         self.processes.append(process)
         return process

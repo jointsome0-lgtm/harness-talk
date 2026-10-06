@@ -73,6 +73,8 @@ jobs:
         run: python -B -m unittest discover -s tests -p test_managed_receiver.py -v
       - name: Test reverse SSH socket recovery
         run: python -B -m unittest discover -s tests -p test_ssh_sockets.py -v
+      - name: Count the tests and the ones that reach inside
+        run: python scripts/test_census.py
 
   msrv:
     runs-on: ubuntu-24.04
