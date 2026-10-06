@@ -640,7 +640,8 @@ fn read_response(r: &mut Reader<impl Read>) -> Result<(i128, Vec<u8>), &'static 
 }
 
 /// Resolver configuration must not widen the registered loopback destination.
-fn connect_loopback<T>(
+/// Public for `tests/opencode_transport.rs` only.
+pub fn connect_loopback<T>(
     addrs: impl IntoIterator<Item = SocketAddr>,
     mut connect: impl FnMut(SocketAddr) -> Option<T>,
 ) -> Option<T> {
@@ -1182,83 +1183,4 @@ pub fn discover_with(
             .filter(|item| !seen.contains(item["session_id"].as_str().unwrap_or_default())),
     );
     found
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn response(bytes: &[u8]) -> Result<(i128, Vec<u8>), &'static str> {
-        read_response(&mut Reader {
-            conn: bytes,
-            buf: Vec::new(),
-            pos: 0,
-            eof: false,
-        })
-    }
-
-    #[test]
-    fn eof_cannot_terminate_headers_or_trailers() {
-        for bytes in [
-            b"HTTP/1.1 204 No Content\r\n".as_slice(),
-            b"HTTP/1.1 204 No Content\r\nX-Test: x\r\n",
-            b"HTTP/1.1 400 Bad\r\nContent-Length: 0\r\n",
-            b"HTTP/1.1 400 Bad\r\nContent-Length: 0\r",
-            b"HTTP/1.1 100 Continue\r\n",
-            b"HTTP/1.1 400 Bad\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n",
-            b"HTTP/1.1 400 Bad\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nTrailer: x\r\n",
-            b"HTTP/1.1 400 Bad\r\nTransfer-Encoding: chunked\r\n\r\n0",
-        ] {
-            assert_eq!(response(bytes), Err("IncompleteRead"), "{bytes:?}");
-        }
-    }
-
-    #[test]
-    fn chunk_data_requires_a_crlf_separator() {
-        for separator in ["xx", "\n\n", "\rX"] {
-            let bytes = format!(
-                "HTTP/1.1 400 Bad\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx{separator}0\r\n\r\n"
-            );
-            assert_eq!(response(bytes.as_bytes()), Err("invalid_response"));
-        }
-        assert_eq!(
-            response(b"HTTP/1.1 400 Bad\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r"),
-            Err("IncompleteRead")
-        );
-    }
-
-    #[test]
-    fn complete_empty_and_chunked_responses_keep_their_status() {
-        assert_eq!(
-            response(b"HTTP/1.1 204 No Content\r\n\r\n"),
-            Ok((204, vec![]))
-        );
-        assert_eq!(
-            response(b"HTTP/1.1 400 Bad\nContent-Length: 0\n\n"),
-            Ok((400, vec![]))
-        );
-        assert_eq!(
-            response(b"HTTP/1.1 400 Bad\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\nTrailer: x\r\n\r\n"),
-            Ok((400, b"x".to_vec()))
-        );
-    }
-
-    #[test]
-    fn resolver_results_are_filtered_before_any_connection_attempt() {
-        let external: SocketAddr = "192.0.2.1:4096".parse().unwrap();
-        let external6: SocketAddr = "[2001:db8::1]:4096".parse().unwrap();
-        let local: SocketAddr = "127.0.0.1:4096".parse().unwrap();
-        let local6: SocketAddr = "[::1]:4096".parse().unwrap();
-        let mut attempts = Vec::new();
-        let selected = connect_loopback([external, local6, external6, local], |addr| {
-            attempts.push(addr);
-            (addr == local).then_some(addr)
-        });
-        assert_eq!(attempts, [local6, local]);
-        assert_eq!(selected, Some(local));
-        assert_eq!(
-            connect_loopback::<()>([external, external6], |_| panic!("non-loopback connection")),
-            None
-        );
-    }
 }

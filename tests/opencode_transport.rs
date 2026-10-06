@@ -284,6 +284,17 @@ fn post_write_outcomes_require_complete_http_responses() {
         post(|| raw("HTTP/1.1 400 Bad\r\nContent-Length: 3\r\n\r\n{x}")),
         ("not_submitted", "opencode_http_400".into())
     );
+    for complete in [
+        "HTTP/1.1 400 Bad\nContent-Length: 0\n\n",
+        "HTTP/1.1 400 Bad\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\nTrailer: x\r\n\r\n",
+    ] {
+        c.fake
+            .hook(move |r| (r.method == "POST").then(|| raw(complete)));
+        assert_eq!(
+            outcome(opencode::notify(&c.peer, "text", &no_skip)),
+            ("not_submitted", "opencode_http_400".into())
+        );
+    }
     assert_eq!(
         post(|| raw("HTTP/1.1 400 Bad\r\nContent-Length: 1000\r\n\r\n{}")),
         ("submission_unknown", "opencode_IncompleteRead".into())
@@ -463,6 +474,13 @@ fn malformed_framing_keeps_a_durable_unknown_without_replay() {
         "HTTP/1.1 400 Bad\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n",
         "HTTP/1.1 400 Bad\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nTrailer: x\r\n",
         "HTTP/1.1 400 Bad\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nxXX0\r\n\r\n",
+        "HTTP/1.1 204 No Content\r\nX-Test: x\r\n",
+        "HTTP/1.1 400 Bad\r\nContent-Length: 0\r",
+        "HTTP/1.1 100 Continue\r\n",
+        "HTTP/1.1 400 Bad\r\nTransfer-Encoding: chunked\r\n\r\n0",
+        "HTTP/1.1 400 Bad\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\n\n0\r\n\r\n",
+        "HTTP/1.1 400 Bad\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\rX0\r\n\r\n",
+        "HTTP/1.1 400 Bad\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r",
     ] {
         c.fake
             .hook(move |r| (r.method == "POST").then(|| raw(wire)));
@@ -732,4 +750,28 @@ fn cancellation_after_successful_preflight_prevents_post_and_replay() {
     );
     assert_eq!(again.row.submission, Submission::SubmissionUnknown);
     assert_eq!(c.fake.requests().len(), 3);
+}
+
+// Reaches inside: a loopback server cannot make the resolver return an outside address.
+// Replaced by #76 when the client is swapped.
+#[test]
+fn resolver_results_are_filtered_before_any_connection_attempt() {
+    use std::net::SocketAddr;
+    let external: SocketAddr = "192.0.2.1:4096".parse().unwrap();
+    let external6: SocketAddr = "[2001:db8::1]:4096".parse().unwrap();
+    let local: SocketAddr = "127.0.0.1:4096".parse().unwrap();
+    let local6: SocketAddr = "[::1]:4096".parse().unwrap();
+    let mut attempts = Vec::new();
+    let selected = opencode::connect_loopback([external, local6, external6, local], |addr| {
+        attempts.push(addr);
+        (addr == local).then_some(addr)
+    });
+    assert_eq!(attempts, [local6, local]);
+    assert_eq!(selected, Some(local));
+    assert_eq!(
+        opencode::connect_loopback::<()>([external, external6], |_| panic!(
+            "non-loopback connection"
+        )),
+        None
+    );
 }

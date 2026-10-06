@@ -285,6 +285,24 @@ else:
             client.close()
         self.assertEqual(0, self.sql('SELECT count(*) FROM messages')[0][0])
 
+    def test_binary_and_socket_paths_with_a_quote_a_percent_token_and_a_space_still_connect(self):
+        _, trust, _, _, _ = self.ssh_fixture()
+        port = json.loads(trust.read_text())['devices'][0]['ssh_port']
+        # OpenSSH expands percent tokens in the proxy command and then hands it to a shell.
+        odd = self.tmp / "own a'b%h"
+        odd.mkdir(mode=0o700)
+        self.ts_binary = self.ts_binary.rename(odd / "tail'scale %h")
+        self.ts_socket = odd / "tail'scale %h.sock"
+        endpoint = socket.socket(socket.AF_UNIX)
+        endpoint.bind(str(self.ts_socket))
+        endpoint.close()
+        client = self.connected(trust, 'Reviewer')
+        result = client.call('peer', 'list')
+        self.assertFalse(result.get('isError', False), result)
+        self.assertEqual(['bob'], [p['name'] for p in result['structuredContent']['result']['peers']])
+        client.close()
+        self.assertIn(['--socket=' + str(self.ts_socket), 'nc', '100.64.0.2', str(port)], self.ts_calls())
+
     def test_missing_uuid_selector_never_falls_back_to_display_name(self):
         config, trust, _, _, _ = self.ssh_fixture()
         missing = str(uuid.uuid4())
@@ -394,6 +412,19 @@ else:
                 self.status_file.write_text(fixture)
                 self.calls_file.unlink(missing_ok=True)
                 self.assert_tailscale_source_error(trust, expected_errors[label])
+
+        for label, local, online, address in (
+                ('address outside the tailnet', 'nlocal', True, '192.168.1.2'),
+                ('online is not a boolean', 'nlocal', None, '100.64.0.2'),
+                ('peer has the local ID', 'nknown', True, '100.64.0.2')):
+            with self.subTest(label=label):
+                self.status_file.write_text(json.dumps({
+                    'Version': '1.102.4', 'BackendState': 'Running',
+                    'Self': {'ID': local, 'Online': True, 'TailscaleIPs': ['100.64.0.1']},
+                    'Peer': {'nodekey:first': {'ID': 'nknown', 'Online': online, 'TailscaleIPs': [address]}},
+                }))
+                self.calls_file.unlink(missing_ok=True)
+                self.assert_tailscale_source_error(trust, 'catalog_tailscale_invalid_status')
 
         with self.subTest(label='tailscale CLI failure'):
             self.status({})
@@ -560,6 +591,17 @@ class DirectSshCatalog(SshCatalogFixture):
         self.htalk('--as', 'alice', 'catalog', 'publish', '--config', config,
                    'carol', '--profile-id', shadow['profile_id'], '--name', missing, '--role', 'Review')
         self.connect_error(trust, missing, 'catalog_profile_unavailable')
+        for selector in ('reviewer', profile_id.upper()):
+            self.connect_error(trust, selector, 'catalog_profile_unavailable')
+        self.htalk('--as', 'alice', 'catalog', 'publish', '--config', config,
+                   'carol', '--profile-id', shadow['profile_id'], '--name', profile_id.upper(), '--role', 'Review')
+        client = self.connected(trust, profile_id.upper())
+        self.assertEqual(['carol'], [p['name'] for p in self.result(client, 'peer', 'list')['peers']])
+        client.close()
+        self.htalk('--as', 'alice', 'catalog', 'publish', '--config', config,
+                   'carol', '--profile-id', shadow['profile_id'], '--name', profile_id, '--role', 'Review')
+        self.htalk('peer', 'retire', 'bob')
+        self.connect_error(trust, profile_id, 'catalog_profile_unavailable')
         self.assertEqual(0, self.sql('SELECT count(*) FROM messages')[0][0])
 
     def test_wrong_host_key_and_deployment_block_discovery_before_write(self):

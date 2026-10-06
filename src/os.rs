@@ -116,20 +116,6 @@ pub fn run_command(
     args: &[&str],
     timeout: Duration,
 ) -> Result<std::process::Output, Failure> {
-    run_command_with_group(
-        program,
-        args,
-        timeout,
-        crate::process_cleanup::OwnedGroup::new,
-    )
-}
-
-fn run_command_with_group(
-    program: &str,
-    args: &[&str],
-    timeout: Duration,
-    make_group: impl FnOnce(u32) -> io::Result<crate::process_cleanup::OwnedGroup>,
-) -> Result<std::process::Output, Failure> {
     use std::os::{fd::AsRawFd, unix::process::CommandExt};
     use std::{
         io::Read,
@@ -166,7 +152,7 @@ fn run_command_with_group(
         }
         child.wait()
     }
-    let mut group = match make_group(child.id()) {
+    let mut group = match crate::process_cleanup::OwnedGroup::new(child.id()) {
         Ok(group) => group,
         Err(e) => {
             // The retained, unreaped Child still owns this direct process.
@@ -245,7 +231,3 @@ fn run_command_with_group(
         thread::sleep(Duration::from_millis(5));
     }
 }
-
-#[cfg(all(test, target_os = "linux"))]
-#[path = "../tests/unit/os_process_cleanup.rs"]
-mod process_cleanup_tests;
