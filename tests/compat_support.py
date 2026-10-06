@@ -330,7 +330,13 @@ class HtalkCase(unittest.TestCase):
         for process in self.processes:
             if process.poll() is None:
                 process.kill()
-            process.communicate()
+                process.wait()
+            for stream in (process.stdin, process.stdout, process.stderr):
+                try:
+                    if stream:
+                        stream.close()
+                except (OSError, ValueError):
+                    pass
         # A gated fake may outlive an interrupted htalk. Kill only processes still running this test's fakes.
         for entry in self.calls():
             try:

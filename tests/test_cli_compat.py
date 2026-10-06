@@ -22,7 +22,7 @@ import unittest
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from compat_support import MESSAGE_KEYS, PEER_KEYS, ROW_KEYS, HtalkCase, process_start, wait_for  # noqa: E402
+from compat_support import MESSAGE_KEYS, PEER_KEYS, ROW_KEYS, TIMEOUT, HtalkCase, process_start, wait_for  # noqa: E402
 
 LEGACY_V1 = """
 CREATE TABLE peers (name TEXT PRIMARY KEY, harness TEXT NOT NULL, session_id TEXT NOT NULL,
@@ -35,6 +35,13 @@ CREATE TABLE messages (seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT
 PRAGMA user_version=1;
 """
 PEER_COLUMNS = ["name", "harness", "session_id", "workspace", "socket", "url", "delivery"]
+# Exit 3 when SQLite refuses a read at once because the database is busy.
+READ_AT_ONCE = """import sqlite3, sys
+try:
+    sqlite3.connect(sys.argv[1], timeout=0).execute("SELECT id FROM messages").fetchall()
+except sqlite3.OperationalError as exc:
+    sys.exit(3 if exc.sqlite_errorcode == sqlite3.SQLITE_BUSY else 1)
+"""
 
 
 def words_of(command):
@@ -1417,17 +1424,14 @@ class ContendedWrites(HtalkCase):
             pass
         self.running(process, "send did not wait")
 
-    def writing(self):
-        """Whether some connection holds the mailbox's write lock, asked of SQLite without waiting."""
-        with closing(sqlite3.connect(self.db, timeout=0, isolation_level=None)) as probe:
-            try:
-                probe.execute("BEGIN IMMEDIATE")
-            except sqlite3.OperationalError as exc:
-                if exc.sqlite_errorcode != sqlite3.SQLITE_BUSY:
-                    raise
-                return True
-            probe.execute("ROLLBACK")
-        return False
+    def committing(self, process):
+        """Whether SQLite turns a new reader away, which it does while a writer waits to commit.
+        Another process asks, without waiting: a connection of this one would share the lock held here."""
+        self.running(process, "send did not wait for the reader")
+        asked = subprocess.run([sys.executable, "-c", READ_AT_ONCE, str(self.db)], capture_output=True, text=True,
+                               timeout=TIMEOUT)
+        self.assertIn(asked.returncode, (0, 3), asked.stderr)
+        return asked.returncode == 3
 
     def test_contended_send_saves_the_body_it_read_once(self):
         body = self.tmp / "body.txt"
@@ -1448,14 +1452,8 @@ class ContendedWrites(HtalkCase):
         reader = self.hold("BEGIN")
         reader.execute("SELECT * FROM peers").fetchall()
         proc = self.spawn("--as", "alice", "send", "bob", "--message", "Held commit", "--no-notify")
-
-        def begun():
-            self.running(proc, "send did not wait for the reader")
-            return self.writing()
-
-        # The reader lets the send begin its write and keeps it from committing.
-        wait_for(begun, message="send to begin its write")
-        self.keeps_waiting(proc)
+        # The reader lets the send write and keeps it from committing.
+        wait_for(lambda: self.committing(proc), message="send to wait for its commit")
         reader.rollback()
         sent = self.finish(proc)
         self.assertEqual([(sent["id"],)], self.sql("SELECT id FROM messages"))
