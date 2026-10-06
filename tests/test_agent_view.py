@@ -49,14 +49,16 @@ CLASS_NAME = re.compile(r"[A-Z][A-Za-z]+")
 TOKEN = re.compile(r"""//[^\n]*|/\*.*?\*/|(?<!\w)b?r(#*)"(.*?)"\1|b?"((?:[^"\\]|\\.)*)"|'(?:[^'\\\n]|\\.)'""", re.S)
 ESCAPE = re.compile(r"\\(?:\n\s*|x([0-9a-fA-F]{2})|u\{([0-9a-fA-F_]+)\}|(.))", re.S)
 UNESCAPED = {"n": "\n", "t": "\t", "r": "\r", "0": "\0"}
-TEST_ONLY = re.compile(r"#\[cfg\((?:all\()?test\b[^\]]*\]")
+TEST_ONLY = re.compile(r"#\[cfg\((?:test|all\((?![^\]]*\bnot\(\s*test\b)[^\]]*\btest\b[^\]]*\))\)\]")
 # Error::code(...), Self::code(...) and a module's own code(...); then the calls that carry a detail.
 RAISED = re.compile(r"(?<![.\w])(?:\w+::)*code\(")
 DETAILED = re.compile(r"(?<![.\w])(?:\w+::)*coded\(|\bOutcome::\w+\(|\.detail\(")
 RUNTIME_CODE = re.compile(r"[a-z]+_[a-z_]*:?\{[^}]*\}")
-# A text is a literal with two or more plain words that is not SQL, a panic message or a pattern.
+# A text is a literal of two or more words, one of them a plain word, that is not SQL (a statement, a
+# clause or a ? placeholder), a panic message or a pattern.
 WORD = re.compile(r"[A-Za-z][A-Za-z'-]*[.,;:!?]?")
-SQL = re.compile(r"\b(?:ALTER|CREATE|DELETE|FROM|INSERT|JOIN|ORDER|PRAGMA|SELECT|TABLE|UPDATE|VALUES|WHERE)\b")
+SQL = re.compile(r"^[\s({]*(?:ALTER|BEGIN|COMMIT|CREATE|DELETE|DROP|INSERT|PRAGMA|ROLLBACK|SELECT|UPDATE)\b"
+                 r"|\b(?:FROM|WHERE|VALUES|ORDER BY)\b|[=(,\s]\?(?:[\d\s,)]|$)")
 NOT_AN_ANSWER = re.compile(r"\.expect\(|\b(?:assert|assert_eq|assert_ne|debug_assert|panic|unreachable)!\(|\bRegex::new\(")
 
 
@@ -91,12 +93,12 @@ def unescaped(escape):
 
 
 def item_end(skeleton, start):
-    """Where the item that starts here ends: its first ; outside braces, or the brace that closes it."""
+    """Where the item that starts here ends: its first ; outside every bracket, or the brace that closes it."""
     depth = 0
     for index in range(start, len(skeleton)):
         if skeleton[index] == ";" and not depth:
             return index + 1
-        depth += {"{": 1, "}": -1}.get(skeleton[index], 0)
+        depth += {"{": 1, "(": 1, "[": 1, "}": -1, ")": -1, "]": -1}.get(skeleton[index], 0)
         if skeleton[index] == "}" and not depth:
             return index + 1
     return len(skeleton)
@@ -114,9 +116,12 @@ def lex(source):
             literals[token.start()] = raw
         skeleton += [source[last:token.start()], " " * len(token.group())]
         last = token.end()
-    skeleton = "".join(skeleton) + source[last:]
+    skeleton, end = "".join(skeleton) + source[last:], 0
     for attribute in TEST_ONLY.finditer(skeleton):
-        start, end = attribute.start(), item_end(skeleton, attribute.end())
+        start = attribute.start()
+        if start < end:
+            continue  # inside an item that is already blanked
+        end = item_end(skeleton, attribute.end())
         literals = {offset: text for offset, text in literals.items() if not start <= offset < end}
         skeleton = skeleton[:start] + " " * (end - start) + skeleton[end:]
     return skeleton, literals
@@ -393,20 +398,24 @@ class AgentView(HtalkCase):
         for skeleton, literals in self.rust_source():
             excluded = list(arguments(skeleton, NOT_AN_ANSWER))
             for offset, text in literals.items():
+                words = text.split()
                 parts = [part for part in map(squeezed, re.split(r"\{[^}]*\}", text)) if len(part) >= 8]
-                if (sum(1 for word in text.split() if WORD.fullmatch(word)) >= 2 and not SQL.search(text)
+                if (len(words) >= 2 and any(WORD.fullmatch(word) for word in words) and not SQL.search(text)
                         and not any(start <= offset < end for start, end in excluded)
-                        and not all(part in shown for part in parts)):
+                        and not (parts and all(part in shown for part in parts))):
                     texts.add(json.dumps(text, ensure_ascii=False))
-        text = ["# Texts in the source that no entry in the other files shows: every string literal with",
-                "# two or more plain words, outside the tests, that is not SQL, a panic message or a",
-                "# pattern. Each stands here exactly as the source spells it, as a JSON string; {...} is",
-                "# filled in at run time.",
+        text = ["# Texts in the source that no entry in the other files shows: every string literal of",
+                "# two or more words, one of them a plain word, outside the tests, that is not SQL, a",
+                "# panic message or a pattern. Each stands here exactly as the source spells it, as a",
+                "# JSON string; {...} is filled in at run time.",
                 "#",
                 "# Most reach an agent or an operator only through a failure the other files do not",
                 "# provoke: an MCP call that breaks half way, a receiver that cannot start, a process",
-                "# that cannot be cleaned up. This file pins their wording. It does not pin which failure",
-                "# returns which text; the suites that provoke those failures do.", "", *sorted(texts)]
+                "# that cannot be cleaned up. This file is a net under those entries, not a proof. It",
+                "# pins the wording of the texts it holds, as spelled in the source. It does not pin",
+                "# which failure returns which text; the suites that provoke those failures do. Some",
+                "# lines are not answers at all, such as the HTTP request head: the scan cannot tell.",
+                "", *sorted(texts)]
         self.check("texts.txt", "\n".join(text))
 
     def test_size(self):

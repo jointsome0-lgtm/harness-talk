@@ -1,20 +1,25 @@
-# Texts in the source that no entry in the other files shows: every string literal with
-# two or more plain words, outside the tests, that is not SQL, a panic message or a
-# pattern. Each stands here exactly as the source spells it, as a JSON string; {...} is
-# filled in at run time.
+# Texts in the source that no entry in the other files shows: every string literal of
+# two or more words, one of them a plain word, outside the tests, that is not SQL, a
+# panic message or a pattern. Each stands here exactly as the source spells it, as a
+# JSON string; {...} is filled in at run time.
 #
 # Most reach an agent or an operator only through a failure the other files do not
 # provoke: an MCP call that breaks half way, a receiver that cannot start, a process
-# that cannot be cleaned up. This file pins their wording. It does not pin which failure
-# returns which text; the suites that provoke those failures do.
+# that cannot be cleaned up. This file is a net under those entries, not a proof. It
+# pins the wording of the texts it holds, as spelled in the source. It does not pin
+# which failure returns which text; the suites that provoke those failures do. Some
+# lines are not answers at all, such as the HTTP request head: the scan cannot tell.
 
 " Selected profiles: {}."
 "--codex-socket needs an absolute Unix socket path"
 "--mcp-command needs an absolute executable path"
 "A mailbox command is required."
 "AF_UNIX path too long"
+"Accept: application/json\r\n"
 "Another receiver holds this state directory"
 "Another receiver owns this Codex session; reuse its saved state after it stops"
+"Authorization: {auth}\r\n"
+"Basic {}"
 "Cancelled before connecting to the mailbox."
 "Cancelled before running htalk."
 "Cannot inspect Codex server socket {}: {error}. No notification was attempted. Once the intended Codex server is available, inspect saved receiver state with receive status --state DIR before restarting or rebinding. Htalk does not start Codex."
@@ -23,6 +28,8 @@
 "Connector cleanup failed: {e}. A write may be saved; inspect sent/show before repeating it. This call was not retried."
 "Connector cleanup ownership unavailable: {e}; no command was sent."
 "Connector reaping failed: {e}. Inspect saved state before repeating a write."
+"Content-Length: {}\r\n"
+"Content-Type: application/json\r\n"
 "Could not run htalk: {e}"
 "Direct child exit not confirmed"
 "Incomplete process stat {name}"
@@ -47,6 +54,7 @@
 "Process group anchor changed; cleanup not confirmed"
 "Process group member has a different owner"
 "Process ownership changed"
+"ProxyCommand={} {} nc {} {}"
 "RPC deadline expired"
 "Receiver binding changed; use receive status --state DIR, then receive rebind for an inspected replacement socket"
 "Receiver session lock must be a private owned regular file"
@@ -80,6 +88,7 @@
 "htalk reaping failed: {e}. Inspect saved state before repeating a write."
 "htalk receive: {error}"
 "htalk task failed; inspect sent/inbox before repeating a write."
+"htalk {} --limit {} --{} {}{}"
 "invalid integer value: {value:?}"
 "{e}. A write may be saved; inspect sent/inbox before repeating it."
 "{method} {target} HTTP/1.1\r\nHost: {host}\r\nAccept-Encoding: identity\r\n"
