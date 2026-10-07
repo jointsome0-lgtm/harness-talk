@@ -3,7 +3,7 @@
 mod fixture;
 
 use fixture::{Fake, closed_port, session};
-use harness_talk::opencode::discover_with;
+use harness_talk::adapters::opencode::discover_with;
 use rusqlite::{Connection, params};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;

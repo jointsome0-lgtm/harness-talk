@@ -1,4 +1,4 @@
-use crate::error::Failure;
+use crate::{compat, error::Failure};
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::{
     env, fs, io,
@@ -80,11 +80,14 @@ pub fn resolve(path: &Path) -> PathBuf {
 pub fn resolve_strict(path: &Path) -> io::Result<PathBuf> {
     fs::canonicalize(expand_user(path))
 }
-pub fn same_workspace(native: Option<&str>, registered: &str) -> bool {
-    native
-        .and_then(|p| resolve_strict(Path::new(p)).ok())
-        .zip(resolve_strict(Path::new(registered)).ok())
-        .is_some_and(|(a, b)| a == b)
+/// Compare a native path with the canonical workspace saved by registration.
+pub fn same_workspace(directory: Option<&serde_json::Value>, workspace: &str) -> bool {
+    match directory {
+        Some(serde_json::Value::String(directory)) if Path::new(directory).is_absolute() => {
+            resolve(Path::new(directory)).as_os_str() == std::ffi::OsStr::new(workspace)
+        }
+        _ => false,
+    }
 }
 pub fn owned_socket(path: &Path) -> Result<PathBuf, Failure> {
     let metadata = fs::metadata(path)?;
@@ -92,6 +95,73 @@ pub fn owned_socket(path: &Path) -> Result<PathBuf, Failure> {
         return Err(Failure::coded("recipient_socket_unavailable"));
     }
     Ok(path.to_path_buf())
+}
+/// Connect a Unix stream socket within `timeout`, like Python's `settimeout` then `connect`.
+pub fn connect_unix(path: &Path, timeout: Duration) -> io::Result<std::os::unix::net::UnixStream> {
+    use std::os::{
+        fd::FromRawFd,
+        unix::{ffi::OsStrExt, net::UnixStream},
+    };
+    let bytes = path.as_os_str().as_bytes();
+    // SAFETY: plain socket syscalls on a descriptor owned by the returned UnixStream.
+    unsafe {
+        let fd = libc::socket(
+            libc::AF_UNIX,
+            libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
+            0,
+        );
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let stream = UnixStream::from_raw_fd(fd);
+        let mut address: libc::sockaddr_un = std::mem::zeroed();
+        address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+        if bytes.len() >= address.sun_path.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "AF_UNIX path too long",
+            ));
+        }
+        for (slot, byte) in address.sun_path.iter_mut().zip(bytes) {
+            *slot = *byte as libc::c_char;
+        }
+        let length =
+            (std::mem::size_of::<libc::sa_family_t>() + bytes.len() + 1) as libc::socklen_t;
+        if libc::connect(fd, (&raw const address).cast(), length) != 0 {
+            let error = io::Error::last_os_error();
+            if error.raw_os_error() != Some(libc::EINPROGRESS) {
+                return Err(error);
+            }
+            let mut poll = libc::pollfd {
+                fd,
+                events: libc::POLLOUT,
+                revents: 0,
+            };
+            let milliseconds = timeout.as_millis().clamp(1, i32::MAX as u128) as i32;
+            match libc::poll(&mut poll, 1, milliseconds) {
+                0 => return Err(io::Error::from_raw_os_error(libc::ETIMEDOUT)),
+                n if n < 0 => return Err(io::Error::last_os_error()),
+                _ => (),
+            }
+            let mut status: libc::c_int = 0;
+            let mut size = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+            if libc::getsockopt(
+                fd,
+                libc::SOL_SOCKET,
+                libc::SO_ERROR,
+                (&raw mut status).cast(),
+                &mut size,
+            ) != 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            if status != 0 {
+                return Err(io::Error::from_raw_os_error(status));
+            }
+        }
+        stream.set_nonblocking(false)?;
+        Ok(stream)
+    }
 }
 pub fn shell_join(words: &[&str]) -> String {
     words
@@ -162,8 +232,8 @@ pub fn run_command(
             return Err(e.into());
         }
     };
-    let mut stdout = child.stdout.take().ok_or(Failure::Class("OSError"))?;
-    let mut stderr = child.stderr.take().ok_or(Failure::Class("OSError"))?;
+    let mut stdout = child.stdout.take().ok_or(compat::OS_ERROR)?;
+    let mut stderr = child.stderr.take().ok_or(compat::OS_ERROR)?;
     for fd in [stdout.as_raw_fd(), stderr.as_raw_fd()] {
         // Nonblocking reads keep the deadline in force even if a grandchild
         // inherits an output pipe after the direct child exits.
@@ -222,11 +292,11 @@ pub fn run_command(
         }
         if interrupted() || Instant::now() >= deadline {
             finish(&mut group, &mut child)?;
-            return Err(Failure::Class(if interrupted() {
-                "KeyboardInterrupt"
+            return Err(if interrupted() {
+                compat::KEYBOARD_INTERRUPT
             } else {
-                "TimeoutExpired"
-            }));
+                compat::TIMEOUT_EXPIRED
+            });
         }
         thread::sleep(Duration::from_millis(5));
     }

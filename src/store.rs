@@ -37,17 +37,6 @@ fn code(c: &str) -> Error {
     Error::code(c)
 }
 
-/// The recorded detail of a failure that is not a typed outcome: htalk's own
-/// validation errors are plain ValueErrors, others keep only their class name.
-fn failure_detail(e: Error) -> String {
-    match e {
-        Error::Code(_) | Error::Value(_) => "ValueError".into(),
-        Error::Db(e) => Failure::from(e).to_string(),
-        Error::Io(e) => Failure::from(e).to_string(),
-        Error::Interrupted => "KeyboardInterrupt".into(),
-    }
-}
-
 fn read_row(r: &rusqlite::Row) -> Result<Row, Error> {
     Ok(Row {
         seq: r.get("seq")?,
@@ -589,7 +578,7 @@ impl Store {
             Some(reason) => Outcome::not_submitted(reason.as_str()),
             None => match self.peer(&message.row.recipient) {
                 Ok(peer) => notify(&peer, &message),
-                Err(e) => Outcome::not_submitted(failure_detail(e)),
+                Err(e) => Outcome::not_submitted(crate::compat::failure_detail(e)),
             },
         };
         // SIGINT leaves the durable claim unfinished, as a KeyboardInterrupt
@@ -636,7 +625,9 @@ impl Store {
         if message.row.ack_at.is_some() {
             message.notification_cleanup = Some(match self.peer(&message.row.recipient) {
                 Ok(peer) => dismiss(&peer, &message),
-                Err(e) => Cleanup::new(CleanupStatus::Unknown).detail(failure_detail(e)),
+                Err(e) => {
+                    Cleanup::new(CleanupStatus::Unknown).detail(crate::compat::failure_detail(e))
+                }
             });
         }
         Ok(message)

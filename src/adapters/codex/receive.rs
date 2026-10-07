@@ -1,9 +1,9 @@
 //! Bridge a fixed remote watch stream into one existing Codex CLI session.
 //! The ledger records notification submission, never task completion.
+use super::{rpc::BoundSocket, state};
 use crate::{
-    codex,
     commands::{Receive, ReceiveAction},
-    model::{Harness, Message, NativePeer, Submission},
+    model::{Message, NativePeer, Submission},
     validate,
 };
 use serde::{Deserialize, Serialize};
@@ -37,14 +37,13 @@ struct Binding {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     mcp_command: Option<PathBuf>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    codex_socket: Option<codex::rpc::BoundSocket>,
+    codex_socket: Option<BoundSocket>,
 }
 
 impl Binding {
     fn target(&self) -> NativePeer {
         NativePeer {
             name: self.peer.clone(),
-            harness: Harness::Codex,
             session_id: self.session.clone(),
             workspace: self.workspace.to_string_lossy().into_owned(),
             socket: self
@@ -58,14 +57,14 @@ impl Binding {
 
     fn probe(&self) -> std::result::Result<Value, crate::error::Failure> {
         match &self.codex_socket {
-            Some(bound) => codex::probe_bound(&self.target(), bound),
-            None => codex::probe(&self.target()),
+            Some(bound) => super::probe_bound(&self.target(), bound),
+            None => super::probe(&self.target()),
         }
     }
 }
 
-fn capture_socket(path: PathBuf) -> Result<codex::rpc::BoundSocket> {
-    codex::rpc::BoundSocket::capture(path.clone()).map_err(|error| {
+fn capture_socket(path: PathBuf) -> Result<BoundSocket> {
+    BoundSocket::capture(path.clone()).map_err(|error| {
         format!(
             "Cannot inspect Codex server socket {}: {error}. No notification was attempted. \
             Once the intended Codex server is available, inspect saved receiver state with \
@@ -234,7 +233,7 @@ pub(crate) fn run(receive: Receive) -> Result<()> {
         codex_socket: watch
             .codex_socket
             .as_deref()
-            .map(|value| -> Result<codex::rpc::BoundSocket> {
+            .map(|value| -> Result<BoundSocket> {
                 let path = Path::new(value);
                 if !path.is_absolute() {
                     return Err("--codex-socket needs an absolute Unix socket path".into());
@@ -374,7 +373,7 @@ fn maintain(action: &ReceiveAction) -> Result<()> {
     )?;
     let bound = capture_socket(previous.path.clone())?;
     let peer = state.binding.target();
-    codex::probe_bound(&peer, &bound)?;
+    super::probe_bound(&peer, &bound)?;
     bound.check()?;
     let changed = previous != &bound;
     state.binding.codex_socket = Some(bound);
@@ -391,7 +390,7 @@ fn maintain(action: &ReceiveAction) -> Result<()> {
 fn operate(directory: &Path, mut state: State, _lock: File) -> Result<()> {
     let peer = state.binding.target();
     state.binding.probe()?;
-    let database = fs::canonicalize(codex::state::state_path()?)?;
+    let database = fs::canonicalize(state::state_path()?)?;
     let _session_lock = lock_session(&peer.session_id, &database)?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -457,7 +456,7 @@ fn operate(directory: &Path, mut state: State, _lock: File) -> Result<()> {
                     let bound_socket = state.binding.codex_socket.clone();
                     let locked_store = database.clone();
                     let outcome = tokio::task::spawn_blocking(move ||
-                        codex::notify_in_store(&target, &message_id, &body, &locked_store, bound_socket.as_ref())).await?;
+                        super::notify_in_store(&target, &message_id, &body, &locked_store, bound_socket.as_ref())).await?;
                     if outcome.submission == Submission::Submitted {
                         state.receipts.insert(id.into(), outcome.detail.clone());
                         state.pending = None;

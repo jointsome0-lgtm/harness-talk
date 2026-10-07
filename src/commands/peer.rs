@@ -69,20 +69,14 @@ fn discover(
     opencode: Option<&[String]>,
 ) -> Answer {
     let harness = harness.map(str::parse::<Harness>).transpose()?;
-    if codex.is_some() && !matches!(harness, None | Some(Harness::Codex)) {
-        return Err(Error::code("codex_socket_requires_codex_discovery"));
-    }
-    if opencode.is_some() && !matches!(harness, None | Some(Harness::Opencode)) {
-        return Err(Error::code("opencode_url_requires_opencode_discovery"));
-    }
-    let value = crate::discovery::discover(harness, workspace, codex, opencode);
+    let value = crate::discovery::discover(harness, workspace, codex, opencode)?;
     let failed = value["sources"]
         .as_array()
         .is_none_or(|sources| sources.iter().all(|s| s["status"] == "unavailable"));
     Ok((value, if failed { 2 } else { 0 }))
 }
 
-fn registration(add: &PeerAdd) -> Result<Peer, Error> {
+pub(crate) fn registration(add: &PeerAdd) -> Result<Peer, Error> {
     if add.delivery == "pull" {
         if add.session.is_some()
             || add.workspace.is_some()

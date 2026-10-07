@@ -4,7 +4,7 @@ mod fixture;
 
 use fixture::{Fake, Reply, closed_port, session};
 use harness_talk::model::NativePeer as Peer;
-use harness_talk::{error::Failure, model::*, opencode};
+use harness_talk::{adapters::opencode, error::Failure, model::*};
 use serde_json::{Value, json};
 use std::{
     cell::Cell,
@@ -33,7 +33,6 @@ fn case() -> Case {
     let fake = Fake::start(vec![session("ses_synthetic", workspace.as_str())]);
     let peer = Peer {
         name: "muse".into(),
-        harness: Harness::Opencode,
         session_id: "ses_synthetic".into(),
         workspace: workspace.clone(),
         socket: None,
@@ -432,7 +431,6 @@ fn failed_tls_handshake_is_before_the_request() {
     let dir = fixture::tempdir();
     let peer = Peer {
         name: "muse".into(),
-        harness: Harness::Opencode,
         session_id: "ses_synthetic".into(),
         workspace: dir.path().to_str().unwrap().into(),
         socket: None,

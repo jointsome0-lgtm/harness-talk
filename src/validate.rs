@@ -1,5 +1,4 @@
-use crate::error::Error;
-use std::net::IpAddr;
+use crate::{compat::python_whitespace, error::Error};
 
 pub fn uuid(value: &str) -> Result<String, Error> {
     let hex = value.replace("urn:", "").replace("uuid:", "");
@@ -20,67 +19,6 @@ pub fn peer_name(value: &str) -> Result<(), Error> {
         return Err(Error::code("invalid_peer_name"));
     }
     Ok(())
-}
-pub fn opencode_session_id(value: &str) -> Result<String, Error> {
-    if !value.starts_with("ses")
-        || value.len() < 4
-        || value.len() > 256
-        || !value
-            .bytes()
-            .all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(&c))
-    {
-        return Err(Error::code("invalid_opencode_session_id"));
-    }
-    Ok(value.to_owned())
-}
-pub fn opencode_url(value: Option<&str>) -> Result<String, Error> {
-    // url::Url uses browser-style host normalization. Check the supplied host
-    // first so shorthand, percent-encoded and IDNA lookalikes stay rejected.
-    let value = value
-        .unwrap_or("http://127.0.0.1:4096")
-        .trim_start_matches(|c: char| c <= ' ')
-        .replace(['\t', '\r', '\n'], "");
-    let invalid = || Error::code("invalid_opencode_url");
-    let (scheme, rest) = value.split_once("://").ok_or_else(invalid)?;
-    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-    let scheme = scheme.to_ascii_lowercase();
-    if !matches!(scheme.as_str(), "http" | "https") || authority.contains('@') {
-        return Err(invalid());
-    }
-    let (host, port) = if let Some(bracketed) = authority.strip_prefix('[') {
-        let (host, after) = bracketed.split_once(']').ok_or_else(invalid)?;
-        (host, after.strip_prefix(':').unwrap_or(""))
-    } else {
-        authority.split_once(':').unwrap_or((authority, ""))
-    };
-    let host = host.to_ascii_lowercase();
-    if host.is_empty() {
-        return Err(invalid());
-    }
-    if host != "localhost" && !host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback()) {
-        return Err(Error::code("opencode_url_must_be_loopback"));
-    }
-    if !port.is_empty() {
-        if !port.bytes().all(|b| b.is_ascii_digit()) {
-            return Err(Error::Value(
-                "Port could not be cast to integer value".into(),
-            ));
-        }
-        port.parse::<u16>()
-            .map_err(|_| Error::Value("Port out of range 0-65535".into()))?;
-    }
-    let parsed = url::Url::parse(&value).map_err(|_| invalid())?;
-    if parsed.query().is_some_and(|q| !q.is_empty())
-        || parsed.fragment().is_some_and(|f| !f.is_empty())
-    {
-        return Err(invalid());
-    }
-    let rest = rest
-        .split(['?', '#'])
-        .next()
-        .unwrap_or(rest)
-        .trim_end_matches('/');
-    Ok(format!("{scheme}://{rest}"))
 }
 
 pub fn text(body: &str) -> Result<(), Error> {
@@ -105,9 +43,6 @@ pub fn page(limit: i64, cursor: Option<i64>) -> Result<(), Error> {
         return Err(Error::code("seq_cursor_must_be_a_positive_integer"));
     }
     Ok(())
-}
-pub fn python_whitespace(c: char) -> bool {
-    c.is_whitespace() || matches!(c, '\u{1c}'..='\u{1f}')
 }
 pub fn preview(body: &str) -> String {
     body.split([

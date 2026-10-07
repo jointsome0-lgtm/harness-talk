@@ -1,4 +1,4 @@
-use harness_talk::validate::opencode_url;
+use harness_talk::adapters::opencode::opencode_url;
 
 #[test]
 fn only_literal_loopback_hosts_are_accepted_before_url_normalization() {

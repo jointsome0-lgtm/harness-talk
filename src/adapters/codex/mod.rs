@@ -2,21 +2,60 @@
 //!
 //! Only fixed htalk codes and exception-class names leave this module as details, so foreign
 //! error text, paths and credentials never reach the shared database or command output.
+pub mod discovery;
+pub(crate) mod receive;
 pub mod rpc;
 pub mod state;
 
+use super::{Adapter, Address, Query};
+use crate::compat::{self, index, io_failure, python_uuid, text_output};
 use crate::model::NativePeer as Peer;
-use crate::{error::Failure, model::*, os};
+use crate::os::{self, same_workspace};
+use crate::{
+    error::{Error, Failure},
+    model::*,
+    validate,
+};
 use rpc::Rpc;
 use serde_json::{Value, json};
-use std::{
-    io,
-    path::{Path, PathBuf},
-    sync::OnceLock,
-    time::Duration,
-};
+use std::{path::Path, sync::OnceLock, time::Duration};
 
 const QUEUE_TIMEOUT: Duration = Duration::from_secs(20);
+
+pub(crate) struct Codex;
+impl Adapter for Codex {
+    // Without a socket the notification goes through the installed `codex` CLI.
+    fn address(
+        &self,
+        session: &str,
+        workspace: &str,
+        socket: Option<&str>,
+        url: Option<&str>,
+    ) -> Result<Address, Error> {
+        let session_id = validate::uuid(session)?;
+        if url.is_some() {
+            return Err(Error::code("url_is_only_for_opencode"));
+        }
+        Ok(Address {
+            session_id,
+            workspace: super::workspace(workspace)?,
+            socket: socket.map(|s| os::resolve(Path::new(s)).to_string_lossy().into_owned()),
+            url: None,
+        })
+    }
+    fn notify(&self, peer: &Peer, message: &Message, body: &str, skip: Skip<'_>) -> Outcome {
+        notify(peer, &message.row.id, body, skip)
+    }
+    fn dismiss(&self, peer: &Peer, message: &Message) -> Cleanup {
+        dismiss(peer, message)
+    }
+    fn probe(&self, peer: &Peer) -> Result<Value, Failure> {
+        probe(peer)
+    }
+    fn discover(&self, query: &Query<'_>) -> Found {
+        discovery::discover(query.codex_sockets)
+    }
+}
 
 pub fn notify(peer: &Peer, message_id: &str, body: &str, skip: Skip<'_>) -> Outcome {
     match socket(peer) {
@@ -54,17 +93,10 @@ pub(crate) fn notify_in_store(
     }
 }
 
-/// Delete only this acknowledged message's saved Codex queue receipt.
+/// Delete only this message's saved Codex queue receipt. The caller has checked that its
+/// recipient acknowledged it.
 pub fn dismiss(peer: &Peer, message: &Message) -> Cleanup {
     let row = &message.row;
-    if row.ack_at.is_none() || peer.name != row.recipient {
-        return Cleanup::new(CleanupStatus::Skipped)
-            .detail("message_not_acknowledged_by_recipient");
-    }
-    if peer.harness != Harness::Codex {
-        return Cleanup::new(CleanupStatus::Unsupported)
-            .detail("client_has_no_notification_removal");
-    }
     let socket = socket(peer);
     let prefix = if socket.is_some() {
         "codex_queued:"
@@ -89,7 +121,7 @@ pub fn dismiss(peer: &Peer, message: &Message) -> Cleanup {
         let queue_id = if socket.is_some() {
             queued.to_owned()
         } else {
-            python_uuid(queued).ok_or(Failure::Class("ValueError"))?
+            python_uuid(queued).ok_or(compat::VALUE_ERROR)?
         };
         let mut rpc = match socket {
             Some(path) => {
@@ -107,7 +139,7 @@ pub fn dismiss(peer: &Peer, message: &Message) -> Cleanup {
             "thread/queue/delete",
             json!({"threadId": peer.session_id, "queuedSubmissionId": queue_id}),
         )?;
-        let object = result.as_object().ok_or(Failure::Class("AttributeError"))?;
+        let object = result.as_object().ok_or(compat::ATTRIBUTE_ERROR)?;
         let Some(&Value::Bool(deleted)) = object.get("deleted") else {
             return Err(Failure::coded("codex_queue_delete_receipt_invalid"));
         };
@@ -184,9 +216,7 @@ fn notify_socket(
             return Err(Failure::coded("codex_queue_receipt_mismatch"));
         }
         drop(rpc);
-        let id = index(queued, "id")?
-            .as_str()
-            .ok_or(Failure::Class("TypeError"))?;
+        let id = index(queued, "id")?.as_str().ok_or(compat::TYPE_ERROR)?;
         Ok(Outcome::submitted(format!("codex_queued:{id}")))
     })();
     result.unwrap_or_else(|failure| {
@@ -228,7 +258,9 @@ fn notify_cli(peer: &Peer, body: &str, skip: Skip<'_>, database: Option<&Path>) 
     let output = match os::run_command("codex", &args, QUEUE_TIMEOUT) {
         Ok(output) => output,
         // Spawn failures precede submission; anything after the process starts is uncertain.
-        Err(failure @ Failure::Class("FileNotFoundError" | "PermissionError")) => {
+        Err(failure)
+            if failure == compat::FILE_NOT_FOUND_ERROR || failure == compat::PERMISSION_ERROR =>
+        {
             return Outcome::not_submitted(failure.to_string());
         }
         Err(failure) => return Outcome::unknown(failure.to_string()),
@@ -264,7 +296,7 @@ fn check_live(rpc: &mut Rpc, peer: &Peer) -> Result<Value, Failure> {
     )?;
     let thread = index(&result, "thread")?
         .as_object()
-        .ok_or(Failure::Class("AttributeError"))?;
+        .ok_or(compat::ATTRIBUTE_ERROR)?;
     if thread.get("id").and_then(Value::as_str) != Some(peer.session_id.as_str())
         || !same_workspace(thread.get("cwd"), &peer.workspace)
     {
@@ -273,7 +305,7 @@ fn check_live(rpc: &mut Rpc, peer: &Peer) -> Result<Value, Failure> {
     let status = match thread.get("status") {
         None => None,
         Some(Value::Object(status)) => status.get("type").and_then(Value::as_str),
-        Some(_) => return Err(Failure::Class("AttributeError")),
+        Some(_) => return Err(compat::ATTRIBUTE_ERROR),
     };
     let status = status
         .filter(|s| matches!(*s, "idle" | "active"))
@@ -304,213 +336,4 @@ fn saved_identity_at(peer: &Peer, path: &Path) -> Result<Value, Failure> {
         json!({"harness": "codex", "session_id": id, "workspace": cwd,
         "metadata_source": path.to_string_lossy(), "transport": "codex_cli_queue", "runtime_status": "unknown"}),
     )
-}
-
-// ----- Helpers shared with the Claude transport -----
-
-/// Python-style `value[key]`: KeyError for a missing key, TypeError for a non-object.
-pub(crate) fn index<'a>(value: &'a Value, key: &str) -> Result<&'a Value, Failure> {
-    match value {
-        Value::Object(map) => map.get(key).ok_or(Failure::Class("KeyError")),
-        _ => Err(Failure::Class("TypeError")),
-    }
-}
-
-/// Decode captured output as Python's `text=True` does, with universal newlines.
-pub(crate) fn text_output(output: &std::process::Output) -> Result<String, Failure> {
-    let decode = |bytes: &[u8]| {
-        std::str::from_utf8(bytes)
-            .map(|s| s.replace("\r\n", "\n").replace('\r', "\n"))
-            .map_err(|_| Failure::Class("UnicodeDecodeError"))
-    };
-    let stdout = decode(&output.stdout)?;
-    decode(&output.stderr)?;
-    Ok(stdout)
-}
-
-/// Compare a native path with the canonical workspace saved by registration.
-pub(crate) fn same_workspace(directory: Option<&Value>, workspace: &str) -> bool {
-    match directory {
-        Some(Value::String(directory)) if Path::new(directory).is_absolute() => {
-            os::resolve(Path::new(directory)).as_os_str() == std::ffi::OsStr::new(workspace)
-        }
-        _ => false,
-    }
-}
-
-/// Canonical UUID text as Python's `str(uuid.UUID(value))`, or None when Python raises ValueError.
-pub(crate) fn python_uuid(value: &str) -> Option<String> {
-    crate::validate::uuid(value).ok()
-}
-
-/// The string form of Python's `Path(value)`: repeated separators and `.` parts collapse.
-pub(crate) fn python_path(value: &str) -> String {
-    let root = if value.starts_with("//") && !value.starts_with("///") {
-        "//"
-    } else if value.starts_with('/') {
-        "/"
-    } else {
-        ""
-    };
-    let parts: Vec<&str> = value
-        .split('/')
-        .filter(|p| !p.is_empty() && *p != ".")
-        .collect();
-    let joined = format!("{root}{}", parts.join("/"));
-    if joined.is_empty() {
-        ".".into()
-    } else {
-        joined
-    }
-}
-
-/// The recipient socket must be a Unix socket owned by this account.
-pub(crate) fn owned_socket(path: &Path) -> Result<PathBuf, Failure> {
-    use std::os::unix::fs::{FileTypeExt, MetadataExt};
-    let path = PathBuf::from(python_path(&path.to_string_lossy()));
-    let info = std::fs::metadata(&path).map_err(io_failure)?;
-    if !info.file_type().is_socket() || info.uid() != unsafe { libc::getuid() } {
-        return Err(Failure::coded("recipient_socket_unavailable"));
-    }
-    Ok(path)
-}
-
-/// Python's OSError subclass for an errno, recorded by class name only.
-pub(crate) fn io_failure(error: io::Error) -> Failure {
-    Failure::from(error)
-}
-
-/// An I/O failure on a socket with a timeout: an expired timeout is Python's TimeoutError.
-pub(crate) fn socket_failure(error: io::Error) -> Failure {
-    match error.kind() {
-        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut => Failure::Class("TimeoutError"),
-        _ => io_failure(error),
-    }
-}
-
-/// Connect a Unix stream socket within `timeout`, like Python's `settimeout` then `connect`.
-pub(crate) fn connect_unix(
-    path: &Path,
-    timeout: Duration,
-) -> io::Result<std::os::unix::net::UnixStream> {
-    use std::os::{
-        fd::FromRawFd,
-        unix::{ffi::OsStrExt, net::UnixStream},
-    };
-    let bytes = path.as_os_str().as_bytes();
-    // SAFETY: plain socket syscalls on a descriptor owned by the returned UnixStream.
-    unsafe {
-        let fd = libc::socket(
-            libc::AF_UNIX,
-            libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
-            0,
-        );
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let stream = UnixStream::from_raw_fd(fd);
-        let mut address: libc::sockaddr_un = std::mem::zeroed();
-        address.sun_family = libc::AF_UNIX as libc::sa_family_t;
-        if bytes.len() >= address.sun_path.len() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "AF_UNIX path too long",
-            ));
-        }
-        for (slot, byte) in address.sun_path.iter_mut().zip(bytes) {
-            *slot = *byte as libc::c_char;
-        }
-        let length =
-            (std::mem::size_of::<libc::sa_family_t>() + bytes.len() + 1) as libc::socklen_t;
-        if libc::connect(fd, (&raw const address).cast(), length) != 0 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() != Some(libc::EINPROGRESS) {
-                return Err(error);
-            }
-            let mut poll = libc::pollfd {
-                fd,
-                events: libc::POLLOUT,
-                revents: 0,
-            };
-            let milliseconds = timeout.as_millis().clamp(1, i32::MAX as u128) as i32;
-            match libc::poll(&mut poll, 1, milliseconds) {
-                0 => return Err(io::Error::from_raw_os_error(libc::ETIMEDOUT)),
-                n if n < 0 => return Err(io::Error::last_os_error()),
-                _ => (),
-            }
-            let mut status: libc::c_int = 0;
-            let mut size = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
-            if libc::getsockopt(
-                fd,
-                libc::SOL_SOCKET,
-                libc::SO_ERROR,
-                (&raw mut status).cast(),
-                &mut size,
-            ) != 0
-            {
-                return Err(io::Error::last_os_error());
-            }
-            if status != 0 {
-                return Err(io::Error::from_raw_os_error(status));
-            }
-        }
-        stream.set_nonblocking(false)?;
-        Ok(stream)
-    }
-}
-
-/// `json.dumps` with its default separators and ASCII escaping, so client frames match 0.4.0.
-pub(crate) fn python_dumps(value: &Value) -> String {
-    fn string(out: &mut String, text: &str) {
-        out.push('"');
-        for c in text.chars() {
-            match c {
-                '"' => out.push_str("\\\""),
-                '\\' => out.push_str("\\\\"),
-                '\n' => out.push_str("\\n"),
-                '\r' => out.push_str("\\r"),
-                '\t' => out.push_str("\\t"),
-                '\u{8}' => out.push_str("\\b"),
-                '\u{c}' => out.push_str("\\f"),
-                ' '..='~' => out.push(c),
-                _ => {
-                    for unit in c.encode_utf16(&mut [0; 2]) {
-                        out.push_str(&format!("\\u{unit:04x}"));
-                    }
-                }
-            }
-        }
-        out.push('"');
-    }
-    fn write(out: &mut String, value: &Value) {
-        match value {
-            Value::String(text) => string(out, text),
-            Value::Array(items) => {
-                out.push('[');
-                for (i, item) in items.iter().enumerate() {
-                    if i > 0 {
-                        out.push_str(", ");
-                    }
-                    write(out, item);
-                }
-                out.push(']');
-            }
-            Value::Object(map) => {
-                out.push('{');
-                for (i, (key, item)) in map.iter().enumerate() {
-                    if i > 0 {
-                        out.push_str(", ");
-                    }
-                    string(out, key);
-                    out.push_str(": ");
-                    write(out, item);
-                }
-                out.push('}');
-            }
-            other => out.push_str(&other.to_string()),
-        }
-    }
-    let mut out = String::new();
-    write(&mut out, value);
-    out
 }

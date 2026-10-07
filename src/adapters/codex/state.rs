@@ -1,6 +1,9 @@
 //! The installed Codex CLI's saved thread addresses, read without starting a client.
-use super::io_failure;
-use crate::{error::Failure, os, validate::python_whitespace};
+use crate::{
+    compat::{self, io_failure, python_whitespace},
+    error::Failure,
+    os,
+};
 use rusqlite::{Connection, OpenFlags, types::ValueRef};
 use serde_json::Value;
 use std::{
@@ -24,7 +27,7 @@ pub fn state_path() -> Result<PathBuf, Failure> {
     let configured = match read_config(&home.join("config.toml"))? {
         Some(config) => match config.get("sqlite_home") {
             Some(toml::Value::String(value)) if !value.is_empty() => Some(PathBuf::from(value)),
-            Some(value) if truthy(value) => return Err(Failure::Class("TypeError")),
+            Some(value) if truthy(value) => return Err(compat::TYPE_ERROR),
             _ => None,
         },
         None => None,
@@ -80,8 +83,7 @@ pub(crate) fn saved_thread_at(
             ValueRef::Integer(n) => Value::from(n),
             ValueRef::Real(f) => serde_json::Number::from_f64(f).map_or(Value::Null, Value::Number),
             ValueRef::Text(bytes) => Value::String(
-                String::from_utf8(bytes.to_vec())
-                    .map_err(|_| Failure::Class("OperationalError"))?,
+                String::from_utf8(bytes.to_vec()).map_err(|_| compat::OPERATIONAL_ERROR)?,
             ),
         })
     };
@@ -107,10 +109,10 @@ fn read_config(path: &Path) -> Result<Option<toml::Table>, Failure> {
         };
     }
     let bytes = fs::read(path).map_err(io_failure)?;
-    let text = String::from_utf8(bytes).map_err(|_| Failure::Class("UnicodeDecodeError"))?;
+    let text = String::from_utf8(bytes).map_err(|_| compat::UNICODE_DECODE_ERROR)?;
     text.parse::<toml::Table>()
         .map(Some)
-        .map_err(|_| Failure::Class("TOMLDecodeError"))
+        .map_err(|_| compat::TOML_DECODE_ERROR)
 }
 
 fn truthy(value: &toml::Value) -> bool {

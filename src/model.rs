@@ -1,40 +1,7 @@
+pub use crate::adapters::Harness;
 use crate::error::Failure;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::fmt;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Harness {
-    Codex,
-    Claude,
-    Opencode,
-}
-impl Harness {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Codex => "codex",
-            Self::Claude => "claude",
-            Self::Opencode => "opencode",
-        }
-    }
-}
-impl fmt::Display for Harness {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-impl std::str::FromStr for Harness {
-    type Err = crate::error::Error;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "codex" => Ok(Self::Codex),
-            "claude" => Ok(Self::Claude),
-            "opencode" => Ok(Self::Opencode),
-            _ => Err(crate::error::Error::code("unsupported_harness")),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -168,11 +135,10 @@ impl std::str::FromStr for Delivery {
     }
 }
 
-/// Validated address passed to the built-in native notification adapters.
+/// Validated address passed to the adapter of the peer's harness.
 #[derive(Debug, Clone, PartialEq)]
 pub struct NativePeer {
     pub name: String,
-    pub harness: Harness,
     pub session_id: String,
     pub workspace: String,
     pub socket: Option<String>,

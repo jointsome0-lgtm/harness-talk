@@ -2,7 +2,7 @@
 //! `codex` executable for `queue` and `app-server --stdio`, and fixture SQLite state.
 use harness_talk::model::NativePeer as Peer;
 use harness_talk::{
-    codex::{self, rpc::Rpc, state},
+    adapters::codex::{self, rpc::Rpc, state},
     error::Failure,
     model::*,
 };
@@ -60,7 +60,6 @@ impl Fixture {
     fn peer(&self, socket: Option<&Path>) -> Peer {
         Peer {
             name: "reader".into(),
-            harness: Harness::Codex,
             session_id: "7d3d4bd5-9d5f-4f8f-8c1c-0e4a1f6b2a10".into(),
             workspace: self.workspace(),
             socket: socket.map(|s| s.to_string_lossy().into_owned()),
@@ -1131,38 +1130,14 @@ fn saved_identity_follows_configuration_precedence() {
 }
 
 #[test]
-fn cleanup_requires_an_acknowledged_confirmed_receipt_and_the_saved_identity() {
+fn cleanup_requires_a_confirmed_receipt_and_the_saved_identity() {
     let fixture = Fixture::new("cleanup-rules");
     fixture.fake_codex();
     fixture.mode("removed");
     fixture.thread("/other-workspace", 0, "cli");
     let peer = fixture.peer(None);
     let receipt = format!("codex_cli_queued:{QUEUE_ID}");
-    let mut unacknowledged = message(&peer, Some(&receipt), Submission::Submitted, true);
-    unacknowledged.row.ack_at = None;
-    let mut other = message(&peer, Some(&receipt), Submission::Submitted, true);
-    other.row.recipient = "other".into();
-    let mut claude = peer.clone();
-    claude.harness = Harness::Claude;
     let cases = [
-        (
-            &peer,
-            unacknowledged,
-            CleanupStatus::Skipped,
-            "message_not_acknowledged_by_recipient",
-        ),
-        (
-            &peer,
-            other,
-            CleanupStatus::Skipped,
-            "message_not_acknowledged_by_recipient",
-        ),
-        (
-            &claude,
-            message(&peer, Some(&receipt), Submission::Submitted, true),
-            CleanupStatus::Unsupported,
-            "client_has_no_notification_removal",
-        ),
         (
             &peer,
             message(&peer, Some(&receipt), Submission::SubmissionUnknown, false),

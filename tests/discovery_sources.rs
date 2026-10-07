@@ -1,8 +1,10 @@
 //! Discovery sources against fixture rows, fake RPC calls, fixture lock tables and
 //! fixture Codex state; never live clients, sockets of real sessions or /proc/locks.
-use harness_talk::discovery::{
-    Call, claude_sessions, codex_app_servers, codex_writers, finish, with_writers,
+use harness_talk::adapters::claude::sessions as claude_sessions;
+use harness_talk::adapters::codex::discovery::{
+    Call, app_servers as codex_app_servers, with_writers, writers as codex_writers,
 };
+use harness_talk::discovery::finish;
 use harness_talk::error::Failure;
 use harness_talk::model::Found;
 use serde_json::{Value, json};
