@@ -108,6 +108,17 @@ class DatabaseSelection(HtalkCase):
         self.assertFalse((self.tmp / "~").exists())
         self.assertEqual(["bob"], [p["name"] for p in self.htalk("peer", "list", db=self.home / "tilde.sqlite3")["peers"]])
 
+    def test_a_path_with_a_space_and_letters_outside_ascii(self):
+        odd = self.tmp / "почта и ящик"
+        self.add_peer("bob", db=odd / "mail.sqlite3")
+        self.assertEqual(["bob"], [peer["name"] for peer in self.htalk("peer", "list", db=odd / "mail.sqlite3")["peers"]])
+        missing = self.error("peer", "list", db=odd / "none.sqlite3", error="database_not_found")
+        self.assertEqual(str(odd / "none.sqlite3"), missing["resolved_path"])
+        home = {"HOME": str(odd), "USERPROFILE": str(odd), "LOCALAPPDATA": str(odd / "local")}
+        self.add_peer("dave", db=False, env=home)
+        self.assertEqual(["dave"], [peer["name"] for peer in self.htalk("peer", "list", db=False, env=home)["peers"]])
+        self.assertEqual(2, len(list(odd.rglob("mail.sqlite3"))))
+
     def test_existing_empty_corrupt_and_newer_files(self):
         self.db.parent.mkdir()
         self.db.touch()
@@ -1676,7 +1687,6 @@ class OpenCodeDiscovery(HtalkCase):
     """Read-only OpenCode discovery: server sources, saved metadata and per-record diagnostics."""
     NO_SERVER = "http://127.0.0.1:abc"  # Malformed, so nothing is asked and the default server is not tried.
     UPDATED = 1788990000000
-
 
     def setUp(self):
         self.need_opencode()
