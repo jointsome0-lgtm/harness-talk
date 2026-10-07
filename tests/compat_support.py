@@ -34,8 +34,12 @@ TIMEOUT = 30
 
 PEER_KEYS = {"name", "harness", "session_id", "workspace", "socket", "url", "retired_at"}
 ROW_KEYS = {"seq", "id", "sender", "recipient", "in_reply_to", "body", "created_at", "ack_at", "submission",
-            "notification_started_at", "notification_finished_at", "notification_detail", "wait_returned_at"}
-MESSAGE_KEYS = ROW_KEYS | {"reply", "state", "recovery", "next_action"}
+            "notification_detail"}
+# What the mailbox keeps of a message and no result shows.
+KEPT = ("notification_started_at", "notification_finished_at", "wait_returned_at")
+MESSAGE_KEYS = ROW_KEYS | {"reply", "state"}
+# What a message adds when its notice or the removal of its notice is not settled.
+UNSETTLED = {"recovery", "next_action"}
 
 
 class CommandUnavailable(Exception):
@@ -471,6 +475,10 @@ class HtalkCase(unittest.TestCase):
     def sql(self, query, params=(), path=None):
         with closing(sqlite3.connect(path or self.db, timeout=5)) as db, db:
             return db.execute(query, params).fetchall()
+
+    def kept(self, message_id):
+        """The three times the mailbox keeps of a message, by name."""
+        return dict(zip(KEPT, self.sql("SELECT %s FROM messages WHERE id=?" % ",".join(KEPT), (message_id,))[0]))
 
     def columns(self, table, path=None):
         return [row[1] for row in self.sql("PRAGMA table_info(%s)" % table, path=path)]

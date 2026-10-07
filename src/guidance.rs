@@ -2,7 +2,7 @@ use crate::{
     cli::Context,
     commands::{self, Mailbox, PeerCommand},
     error::Error,
-    model::{NativeSession, Peer},
+    model::{NativeSession, Peer, SkipReason},
     os, validate,
 };
 use serde_json::{Value, json};
@@ -18,7 +18,22 @@ pub fn command(db: &Path, actor: Option<&str>, parts: &[&str]) -> String {
     os::shell_join(&words)
 }
 
+/// What to do about a message whose notice or whose removal is not settled. Any other message
+/// is answered without advice.
 pub fn message_actions(db: &Path, actor: &str, message: &mut Value) {
+    let cleanup = message["notification_cleanup"]["status"].as_str();
+    let stuck = message["recipient"] == actor
+        && matches!(cleanup, Some("pending" | "unknown" | "unavailable"));
+    let detail = message["notification_detail"].as_str();
+    let unconfirmed = match message["submission"].as_str() {
+        Some("submission_unknown") => true,
+        // A notice that failed, and not one that was never due.
+        Some("not_submitted") => detail.is_some_and(|d| SkipReason::parse(d).is_none()),
+        _ => false,
+    };
+    if !stuck && !unconfirmed {
+        return;
+    }
     let id = message["id"].as_str().unwrap_or("");
     let mut recovery = json!({"show":command(db, Some(actor), &["show", id])});
     let mut action;
@@ -48,20 +63,8 @@ pub fn message_actions(db: &Path, actor: &str, message: &mut Value) {
         }
     } else {
         action = "Inspect the saved answer with recovery.show; the recipient can retrieve it from their inbox.".to_owned();
-        if message["notification_detail"] == "returned_by_recipient_wait" {
-            action.push_str(" The recipient's wait recorded this answer for return, so no client notice was sent.");
-        }
     }
-    if message["notification_detail"] == "recipient_retired" {
-        action.push_str(" The recipient peer is retired, so no client notice was sent.");
-    }
-    if message["notification_detail"] == "pull_only" {
-        action.push_str(" The recipient uses pull delivery and must poll inbox; no client notice was attempted.");
-    }
-    let cleanup = message["notification_cleanup"]["status"].as_str();
-    if message["recipient"] == actor
-        && matches!(cleanup, Some("pending" | "unknown" | "unavailable"))
-    {
+    if stuck {
         recovery["retry_notification_cleanup"] = command(db, Some(actor), &["ack", id]).into();
         action.push_str(" Acknowledgment is saved. After submission finishes, use recovery.retry_notification_cleanup to retry removal.");
         if cleanup == Some("pending") {
@@ -76,14 +79,8 @@ pub fn message_actions(db: &Path, actor: &str, message: &mut Value) {
     message["next_action"] = action.into();
 }
 
-pub fn page_actions(
-    db: &Path,
-    actor: &str,
-    result: &mut Value,
-    sent: bool,
-    limit: i64,
-    bodies: bool,
-) {
+/// The command for the page after this one, when there is one.
+pub fn next_page(db: &Path, actor: &str, result: &mut Value, sent: bool, limit: i64, bodies: bool) {
     if result["omitted"].as_i64().unwrap_or(0) == 0 {
         return;
     }
@@ -104,14 +101,7 @@ pub fn page_actions(
     if sent && bodies {
         parts.push("--bodies");
     }
-    result["recovery"] = json!({"next_page":command(db,Some(actor),&parts)});
-    let more = if sent { "Older" } else { "Newer" };
-    let extra = format!("{more} messages remain: use recovery.next_page.");
-    result["next_action"] = match result["next_action"].as_str().filter(|s| !s.is_empty()) {
-        Some(previous) => format!("{previous} {extra}"),
-        None => extra,
-    }
-    .into();
+    result["next_page"] = command(db, Some(actor), &parts).into();
 }
 
 /// What a failed catalogue command answers, and its exit code.

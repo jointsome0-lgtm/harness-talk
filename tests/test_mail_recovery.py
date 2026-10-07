@@ -43,7 +43,7 @@ class MailRecovery(HtalkCase):
                     self.assertEqual(answer["id"], returned["reply"]["id"])
                     self.assertEqual("Answer", returned["reply"]["body"])
                     self.assertIsNone(returned["reply"]["ack_at"])
-                    self.assertIsNone(returned["reply"]["wait_returned_at"])
+                    self.assertIsNone(self.kept(returned["reply"]["id"])["wait_returned_at"])
                     self.assertNotIn("wait_ended", returned)
                     self.assertEqual([], self.sql("SELECT * FROM waits"))
             self.error("--as", "bob", "wait", request["id"], "--seconds", "30",
@@ -55,10 +55,8 @@ class MailRecovery(HtalkCase):
         finally:
             writer.rollback()
         returned = self.htalk("--as", "alice", "wait", request["id"], "--seconds", "30")
-        self.assertIsNotNone(returned["reply"]["wait_returned_at"])
+        self.assertIsNotNone(self.kept(returned["reply"]["id"])["wait_returned_at"])
         self.assertIsNone(returned["reply"]["ack_at"])
-        self.assertEqual(returned["reply"]["wait_returned_at"],
-                         self.htalk("--as", "alice", "show", answer["id"])["wait_returned_at"])
 
     def test_registered_wait_timeout_and_interrupt_do_not_block_on_cleanup(self):
         for interrupt in (False, True):
@@ -101,11 +99,11 @@ class MailRecovery(HtalkCase):
             process = self.spawn("--as", "alice", "wait", request["id"], "--seconds", "0")
             returned = self.finish_while_locked(process)
             self.assertEqual(answer["id"], returned["reply"]["id"])
-            self.assertIsNone(returned["reply"]["wait_returned_at"])
+            self.assertIsNone(self.kept(returned["reply"]["id"])["wait_returned_at"])
             self.assertIsNone(returned["reply"]["ack_at"])
         finally:
             reader.rollback()
-        self.assertIsNone(self.htalk("--as", "alice", "show", answer["id"])["wait_returned_at"])
+        self.assertIsNone(self.kept(answer["id"])["wait_returned_at"])
 
     def test_cli_empty_id_is_rejected_and_omitted_id_is_generated(self):
         for _ in range(2):

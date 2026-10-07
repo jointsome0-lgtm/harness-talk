@@ -124,14 +124,14 @@ impl Context {
 }
 
 impl Session<'_> {
-    /// One message as an answer, with what its reader can do next.
+    /// One message as an answer, with what its reader can do when something is not settled.
     pub(crate) fn message(&self, mut value: Value) -> Value {
         guidance::message_actions(self.db, self.actor, &mut value);
         value["actor_source"] = json!(self.actor_source);
         value
     }
 
-    /// A page of messages as an answer, each with what its reader can do next.
+    /// A page of messages as an answer, with the command for the next page.
     pub(crate) fn page(
         &self,
         page: Page,
@@ -145,7 +145,7 @@ impl Session<'_> {
                 guidance::message_actions(self.db, self.actor, message);
             }
         }
-        guidance::page_actions(self.db, self.actor, &mut value, sent, limit, bodies);
+        guidance::next_page(self.db, self.actor, &mut value, sent, limit, bodies);
         value["actor_source"] = json!(self.actor_source);
         Ok(value)
     }

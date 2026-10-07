@@ -43,7 +43,7 @@ not native session IDs. A reply has its own id and an in_reply_to request ID.
 Put --db and --as before the command, or set HTALK_DB and HTALK_PEER.
 A command run by a registered Claude Code session can omit --as.
 Use htalk COMMAND --help, or htalk peer COMMAND --help, for examples.
-Commands return JSON with state, submission and recovery guidance.
+Results are JSON; one that failed or is uncertain adds next_action and recovery.
 Exit 0: completed, including send --wait that returned an answer. Exit 2:
 invalid input, or an unconfirmed notification without an answer; the message
 may be saved. Exit 130: interrupted; inspect recovery.
@@ -543,7 +543,7 @@ Options:
           [default: 20]
 
       --after-seq <SEQ>
-          Continue with messages newer than this seq; recovery.next_page supplies it.
+          Continue with messages newer than this seq; next_page supplies it.
 
   -h, --help
           Print help (see a summary with '-h')
@@ -551,7 +551,7 @@ Options:
 Example: htalk --as bob inbox
 Read messages[].body, then ack that message's id. Reply to a question
 using the same id; acknowledging alone leaves the question open.
-When omitted is above 0, run recovery.next_page for newer messages.
+When omitted is above 0, run next_page for newer messages.
 
 ==> htalk watch --help
 Emit ready, then a message event for each open inbox item. Polls locally without model calls. Reading changes no acknowledgments or delivery receipts.
@@ -580,7 +580,7 @@ Options:
           [default: 20]
 
       --before-seq <SEQ>
-          Continue with messages older than this seq; recovery.next_page supplies it.
+          Continue with messages older than this seq; next_page supplies it.
 
       --bodies
           Return full message and answer texts.
@@ -592,5 +592,5 @@ Example: htalk --as alice sent
 Use a saved request's id with show or wait. Inspect reply for its answer.
 Texts are summarized as body_bytes and body_preview, the first nonblank line
 up to 120 characters; show or --bodies returns them in full.
-When omitted is above 0, run recovery.next_page for older messages.
+When omitted is above 0, run next_page for older messages.
 A saved message with an uncertain notification must not be resent.

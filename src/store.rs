@@ -20,8 +20,6 @@ pub const PAGE_LIMIT: i64 = 20;
 // Every peer row carries retired_at, which is null for an active peer.
 const PEER_ROWS: &str =
     "SELECT p.*, r.retired_at FROM peers p LEFT JOIN retired_peers r ON r.name = p.name";
-pub(crate) const INBOX_ACTION: &str =
-    "Read and ack messages explicitly. Unanswered questions remain until replied to.";
 pub(crate) const INBOX: &str = "m.recipient=? AND
             ((m.in_reply_to IS NULL AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.in_reply_to=m.id)) OR
              (m.in_reply_to IS NOT NULL AND m.ack_at IS NULL))";
@@ -697,15 +695,12 @@ impl Store {
             messages,
             total,
             omitted,
-            next_action: None,
         })
     }
 
     /// Unanswered incoming questions and unacknowledged answers, oldest first.
     pub fn inbox(&self, actor: &str, limit: i64, after_seq: Option<i64>) -> Result<Page, Error> {
-        let mut page = self.page(actor, INBOX, false, limit, after_seq)?;
-        page.next_action = Some(INBOX_ACTION.into());
-        Ok(page)
+        self.page(actor, INBOX, false, limit, after_seq)
     }
 
     /// Outgoing messages, newest first. Without bodies, texts are summarized.

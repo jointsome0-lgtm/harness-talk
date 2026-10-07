@@ -141,7 +141,7 @@ impl Binding {
         });
         let mut value = serde_json::to_value(page)?;
         if let Some(next) = next {
-            value["recovery"] = json!({"next_page":next});
+            value["next_page"] = next.into();
         }
         Ok(Some(value))
     }

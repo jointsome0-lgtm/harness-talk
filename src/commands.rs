@@ -28,7 +28,7 @@ fn integer_argument(value: &str) -> Result<String, String> {
     disable_help_subcommand = true,
     arg_required_else_help = false,
     about = "htalk: durable local messages with optional client notifications.",
-    after_help = "Setup: use one shared database and register both participants.\n  htalk peer discover\n  htalk peer add --help\n\nExchange, using each session's own registered name:\n  htalk --as alice send bob --message 'Please check this.' --wait 45\n  htalk --as bob inbox\n  htalk --as bob ack REQUEST_ID\n  htalk --as bob reply REQUEST_ID --message 'Checked.'\n  htalk --as alice wait REQUEST_ID\n  htalk --as alice ack REPLY_ID\nRead the body before ack. REQUEST_ID and REPLY_ID are message IDs from JSON,\nnot native session IDs. A reply has its own id and an in_reply_to request ID.\n\nPut --db and --as before the command, or set HTALK_DB and HTALK_PEER.\nA command run by a registered Claude Code session can omit --as.\nUse htalk COMMAND --help, or htalk peer COMMAND --help, for examples.\nCommands return JSON with state, submission and recovery guidance.\nExit 0: completed, including send --wait that returned an answer. Exit 2:\ninvalid input, or an unconfirmed notification without an answer; the message\nmay be saved. Exit 130: interrupted; inspect recovery."
+    after_help = "Setup: use one shared database and register both participants.\n  htalk peer discover\n  htalk peer add --help\n\nExchange, using each session's own registered name:\n  htalk --as alice send bob --message 'Please check this.' --wait 45\n  htalk --as bob inbox\n  htalk --as bob ack REQUEST_ID\n  htalk --as bob reply REQUEST_ID --message 'Checked.'\n  htalk --as alice wait REQUEST_ID\n  htalk --as alice ack REPLY_ID\nRead the body before ack. REQUEST_ID and REPLY_ID are message IDs from JSON,\nnot native session IDs. A reply has its own id and an in_reply_to request ID.\n\nPut --db and --as before the command, or set HTALK_DB and HTALK_PEER.\nA command run by a registered Claude Code session can omit --as.\nUse htalk COMMAND --help, or htalk peer COMMAND --help, for examples.\nResults are JSON; one that failed or is uncertain adds next_action and recovery.\nExit 0: completed, including send --wait that returned an answer. Exit 2:\ninvalid input, or an unconfirmed notification without an answer; the message\nmay be saved. Exit 130: interrupted; inspect recovery."
 )]
 pub(crate) struct Cli {
     #[arg(long, action = ArgAction::Version, help = "show program's version number and exit")]
@@ -276,7 +276,7 @@ pub(crate) enum Mailbox {
     #[command(
         about = "List incoming work that remains open.",
         long_about = "Read incoming unanswered questions and unacknowledged answers, oldest first. Reading changes no acknowledgments.",
-        after_help = "Example: htalk --as bob inbox\nRead messages[].body, then ack that message's id. Reply to a question\nusing the same id; acknowledging alone leaves the question open.\nWhen omitted is above 0, run recovery.next_page for newer messages."
+        after_help = "Example: htalk --as bob inbox\nRead messages[].body, then ack that message's id. Reply to a question\nusing the same id; acknowledging alone leaves the question open.\nWhen omitted is above 0, run next_page for newer messages."
     )]
     Inbox {
         #[arg(
@@ -293,7 +293,7 @@ pub(crate) enum Mailbox {
             value_name = "SEQ",
             value_parser = integer_argument,
             allow_negative_numbers = true,
-            help = "Continue with messages newer than this seq; recovery.next_page supplies it."
+            help = "Continue with messages newer than this seq; next_page supplies it."
         )]
         after_seq: Option<String>,
     },
@@ -306,7 +306,7 @@ pub(crate) enum Mailbox {
     #[command(
         about = "List outgoing messages and recover their IDs.",
         long_about = "Recover outgoing IDs after interruption, including messages with uncertain notifications, newest first. Does not resend.",
-        after_help = "Example: htalk --as alice sent\nUse a saved request's id with show or wait. Inspect reply for its answer.\nTexts are summarized as body_bytes and body_preview, the first nonblank line\nup to 120 characters; show or --bodies returns them in full.\nWhen omitted is above 0, run recovery.next_page for older messages.\nA saved message with an uncertain notification must not be resent."
+        after_help = "Example: htalk --as alice sent\nUse a saved request's id with show or wait. Inspect reply for its answer.\nTexts are summarized as body_bytes and body_preview, the first nonblank line\nup to 120 characters; show or --bodies returns them in full.\nWhen omitted is above 0, run next_page for older messages.\nA saved message with an uncertain notification must not be resent."
     )]
     Sent {
         #[arg(
@@ -323,7 +323,7 @@ pub(crate) enum Mailbox {
             value_name = "SEQ",
             value_parser = integer_argument,
             allow_negative_numbers = true,
-            help = "Continue with messages older than this seq; recovery.next_page supplies it."
+            help = "Continue with messages older than this seq; next_page supplies it."
         )]
         before_seq: Option<String>,
         #[arg(long, help = "Return full message and answer texts.")]

@@ -4,15 +4,15 @@
                                        characters   tokens
 commands                                       28
   of which groups with subcommands              3
-help, all pages                             21846     6623
-help, htalk --help alone                     2553      774
+help, all pages                             21824     6616
+help, htalk --help alone                     2567      778
 MCP tool description                          875      265
 MCP input schema                              244       74
 MCP server instructions                       188       57
 notification text                             549      166
 
 help page by page:
-htalk --help                                 2553      774
+htalk --help                                 2567      778
 htalk catalog --help                          873      265
 htalk catalog publish --help                  579      175
 htalk catalog unpublish --help                234       71
@@ -38,6 +38,6 @@ htalk reply --help                            808      245
 htalk wait --help                             785      238
 htalk show --help                             445      135
 htalk ack --help                              665      202
-htalk inbox --help                            670      204
+htalk inbox --help                            652      198
 htalk watch --help                            573      174
-htalk sent --help                             887      269
+htalk sent --help                             869      264

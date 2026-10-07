@@ -10,6 +10,7 @@
 # which failure returns which text; the suites that provoke those failures do. Some
 # lines are not answers at all, such as the HTTP request head: the scan cannot tell.
 
+" After reading, use recovery.ack_after_reading."
 " Selected profiles: {}."
 "--codex-socket needs an absolute Unix socket path"
 "--mcp-command needs an absolute executable path"
@@ -28,6 +29,7 @@
 "Could not run htalk: {e}"
 "Direct child exit not confirmed"
 "Incomplete process stat {name}"
+"Inspect the saved answer with recovery.show; the recipient can retrieve it from their inbox."
 "Invalid process handle"
 "Invalid process stat {name}: {e}"
 "Invalid process stat"
@@ -49,6 +51,7 @@
 "Process ownership changed"
 "ProxyCommand={} {} nc {} {}"
 "RPC deadline expired"
+"Read the saved answer with recovery.show_reply."
 "Receiver binding changed; use receive status --state DIR, then receive rebind for an inspected replacement socket"
 "Receiver session lock must be a private owned regular file"
 "Receiver session locks need a private directory owned by this account"
