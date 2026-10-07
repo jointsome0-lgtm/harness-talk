@@ -1,7 +1,6 @@
 //! One child run to its end with its output kept, inside a process group this program owns.
 use super::group::OwnedGroup;
 use crate::{
-    compat,
     error::Failure,
     os::{Grouped, interrupted, set_nonblocking},
 };
@@ -57,8 +56,8 @@ pub fn run_command(
             return Err(e.into());
         }
     };
-    let mut stdout = child.stdout.take().ok_or(compat::OS_ERROR)?;
-    let mut stderr = child.stderr.take().ok_or(compat::OS_ERROR)?;
+    let mut stdout = child.stdout.take().ok_or(Failure::OS_ERROR)?;
+    let mut stderr = child.stderr.take().ok_or(Failure::OS_ERROR)?;
     // Nonblocking reads keep the deadline in force even if a grandchild
     // inherits an output pipe after the direct child exits.
     if let Err(error) = set_nonblocking(&stdout).and_then(|()| set_nonblocking(&stderr)) {
@@ -114,9 +113,9 @@ pub fn run_command(
         if interrupted() || Instant::now() >= deadline {
             finish(&mut group, &mut child)?;
             return Err(if interrupted() {
-                compat::KEYBOARD_INTERRUPT
+                Failure::INTERRUPTED
             } else {
-                compat::TIMEOUT_EXPIRED
+                Failure::COMMAND_TIMED_OUT
             });
         }
         thread::sleep(Duration::from_millis(5));

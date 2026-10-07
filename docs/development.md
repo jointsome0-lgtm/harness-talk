@@ -24,7 +24,7 @@ identity mismatches. It neither advertises on the LAN nor contacts real agents.
 Native mDNS and SSH checks require explicitly selected owned devices and a
 separate temporary endpoint.
 
-The agent view is everything an agent reads from htalk. `tests/agent_view/` describes it in plain text: the rendered `--help` of every command (`help.txt`), what htalk supplies over MCP stdio (`mcp.txt`), the notification text (`notification.txt`), the keys and fixed values of command results (`results.txt`), the fixed error and detail codes with the `next_action` and `recovery` each failure returns (`errors.txt`), the texts in the source that no captured entry shows (`texts.txt`), and how much of that text an agent loads (`size.txt`). `tests/test_agent_view.py` captures each part again through the executable and MCP stdio and fails on any difference. It reads `src/` only as text, for the fixed codes and the unshown texts that no command prints, so it runs in a checkout. It writes down no exception class name; a detail that is one appears as `<an exception class name>`. After an intended change to the agent view, regenerate the files and review their diff with the rest of the change:
+The agent view is everything an agent reads from htalk. `tests/agent_view/` describes it in plain text: the rendered `--help` of every command (`help.txt`), what htalk supplies over MCP stdio (`mcp.txt`), the notification text (`notification.txt`), the keys and fixed values of command results (`results.txt`), the fixed error and detail codes with the `next_action` and `recovery` each failure returns (`errors.txt`), the texts in the source that no captured entry shows (`texts.txt`), and how much of that text an agent loads (`size.txt`). `tests/test_agent_view.py` captures each part again through the executable and MCP stdio and fails on any difference. It reads `src/` only as text, for the fixed codes and the unshown texts that no command prints, so it runs in a checkout. After an intended change to the agent view, regenerate the files and review their diff with the rest of the change:
 
 ```sh
 python3 -B tests/test_agent_view.py --update
@@ -125,7 +125,7 @@ The core cleanup, issue #65, adds rules for each of its pull requests. `main` st
 The core is what a change to mailbox behaviour must read: the commands and their dispatch, the store and its schema, the turn of a contended send, the model of a peer and a message, errors, validation, the recovery guidance, the notification, the session a command runs in, the adapter contract and the portable part of `src/os/`.
 
 - In the core: `src/main.rs`, `src/lib.rs`, `src/cli.rs`, `src/commands.rs`, `src/commands/**`, `src/store.rs`, `src/schema.rs`, `src/write_turn.rs`, `src/model.rs`, `src/error.rs`, `src/validate.rs`, `src/guidance.rs`, `src/notify.rs`, `src/identity.rs`, `src/adapters/mod.rs` and `src/os/mod.rs`.
-- Outside: the adapters under `src/adapters/`, `src/catalog/**`, `src/mcp.rs`, `src/discovery.rs`, `src/compat.rs` and the platform code under `src/os/`.
+- Outside: the adapters under `src/adapters/`, `src/catalog/**`, `src/mcp.rs`, `src/discovery.rs` and the platform code under `src/os/`.
 
 `scripts/core_tokens.py` measures it. The measure is the bytes of the core files divided by 3.3, a rough count of tokens. The script prints each core file, the total and, for information, the core together with the adapters:
 

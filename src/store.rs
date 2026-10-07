@@ -501,7 +501,7 @@ impl Store {
             Some(reason) => Outcome::not_submitted(reason.as_str()),
             None => match self.peer(&message.row.recipient) {
                 Ok(peer) => notify(&peer, &message),
-                Err(e) => Outcome::not_submitted(crate::compat::failure_detail(e)),
+                Err(e) => Outcome::not_submitted(fixed(e).to_string()),
             },
         };
         // An interrupt leaves the durable claim unfinished, as a KeyboardInterrupt
@@ -548,9 +548,7 @@ impl Store {
         if message.row.ack_at.is_some() {
             message.notification_cleanup = Some(match self.peer(&message.row.recipient) {
                 Ok(peer) => dismiss(&peer, &message),
-                Err(e) => {
-                    Cleanup::new(CleanupStatus::Unknown).detail(crate::compat::failure_detail(e))
-                }
+                Err(e) => Cleanup::new(CleanupStatus::Unknown).detail(fixed(e).to_string()),
             });
         }
         Ok(message)
@@ -726,22 +724,27 @@ impl Store {
     }
 }
 
+/// Only fixed codes leave the store with a notification: its own, or that its state could
+/// not be read.
+fn fixed(e: Error) -> Failure {
+    match e {
+        Error::Code(code) => Failure::coded(code),
+        _ => Failure::coded("notification_state_unavailable"),
+    }
+}
+
 /// The transports' final check before a write: a read-only open that never creates
-/// or migrates. Only fixed codes cross this boundary.
+/// or migrates.
 pub fn skip_reason_readonly(
     db: &Path,
     message_id: &str,
     recipient: &str,
 ) -> Result<Option<SkipReason>, Failure> {
-    let unavailable = || Failure::coded("notification_state_unavailable");
     let conn = Connection::open_with_flags(
         os::resolve(db),
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .and_then(|c| c.busy_timeout(Duration::from_secs(3)).map(|()| c))
-    .map_err(|_| unavailable())?;
-    skip_reason(&conn, message_id, recipient).map_err(|e| match e {
-        Error::Code(c) => Failure::Coded(c),
-        _ => unavailable(),
-    })
+    .map_err(|e| fixed(e.into()))?;
+    skip_reason(&conn, message_id, recipient).map_err(fixed)
 }

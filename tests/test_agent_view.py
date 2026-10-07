@@ -41,9 +41,6 @@ UUID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
 # Row and address fields echo the fixture or the clock. Their keys are listed; their values are not.
 ECHOED = {"id", "seq", "sender", "recipient", "in_reply_to", "body", "created_at", "ack_at", "notification_started_at",
           "notification_finished_at", "wait_returned_at", "name", "session_id", "workspace", "socket", "url", "retired_at"}
-# A detail may be a Python exception class name. Phase 2 removes those, so no name is written down here.
-# htalk's own codes are snake_case; the shape tells the two apart.
-CLASS_NAME = re.compile(r"[A-Z][A-Za-z]+")
 
 # Rust source, read far enough to tell string literals from comments and character literals.
 TOKEN = re.compile(r"""//[^\n]*|/\*.*?\*/|(?<!\w)b?r(#*)"(.*?)"\1|b?"((?:[^"\\]|\\.)*)"|'(?:[^'\\\n]|\\.)'""", re.S)
@@ -52,7 +49,7 @@ UNESCAPED = {"n": "\n", "t": "\t", "r": "\r", "0": "\0"}
 TEST_ONLY = re.compile(r"#\[cfg\((?:test|all\((?![^\]]*\bnot\(\s*test\b)[^\]]*\btest\b[^\]]*\))\)\]")
 # Error::code(...), Self::code(...) and a module's own code(...); then the calls that carry a detail.
 RAISED = re.compile(r"(?<![.\w])(?:\w+::)*code\(")
-DETAILED = re.compile(r"(?<![.\w])(?:\w+::)*coded\(|\bOutcome::\w+\(|\.detail\(")
+DETAILED = re.compile(r"(?<![.\w])(?:\w+::)*coded\(|\b(?:Self|Failure)::(?:Coded|System)\(|\bOutcome::\w+\(|\.detail\(")
 RUNTIME_CODE = re.compile(r"[a-z]+_[a-z_]*:?\{[^}]*\}")
 # A text is a literal of two or more words, one of them a plain word, that is not SQL (a statement, a
 # clause or a ? placeholder), a panic message or a pattern.
@@ -182,8 +179,6 @@ class AgentView(HtalkCase):
         self.lines.append("keys: " + key_tree(result)[1:-1])
         for path, value in leaves(result):
             key = path.rpartition(".")[2]
-            if key in ("error", "detail", "notification_detail") and isinstance(value, str) and CLASS_NAME.fullmatch(value):
-                value = "<an exception class name>"
             if re.split(r"[.\[]", path)[0] in ("recovery", "next_action") or key not in ECHOED:
                 self.lines.append("%s = %s" % (path, json.dumps(value, ensure_ascii=False)))
 
@@ -371,15 +366,13 @@ class AgentView(HtalkCase):
         text = ["# Fixed codes, read from the source text, and what a failed command returns.",
                 "#",
                 "# The lists hold every string literal inside a call that raises an error code",
-                "# (Error::code) or that carries a detail (Failure::coded, a notification outcome, a",
-                "# cleanup detail). Values the source spells another way, such as a skipped notice's",
-                "# reason, appear in the entries below and in results.txt, not in the lists.",
+                "# (Error::code) or that carries a detail (a Failure, a notification outcome, a cleanup",
+                "# detail). Values the source spells another way, such as a skipped notice's reason,",
+                "# appear in the entries below and in results.txt, not in the lists.",
                 "#",
                 "# A code appears as error in a command's error result, or as a detail:",
                 "# notification_detail, notification_cleanup.detail, a discovery source's detail.",
-                "# A failed check returns its detail code as error. Where no fixed code applies, a",
-                "# detail is an exception class name; docs/reference.md documents that, and no name",
-                "# is listed here."]
+                "# A failed check returns its detail code as error. Every detail is a fixed code."]
         for title, key in (("error codes", "error"), ("detail codes", "detail"),
                            ("codes built at run time, {} is the variable part", "runtime")):
             text += ["", "## " + title, *scanned[key]]
@@ -466,7 +459,7 @@ class AgentView(HtalkCase):
             found["runtime"] |= {text for text in literals.values() if RUNTIME_CODE.fullmatch(text)}
         for key in ("error", "detail"):
             found["runtime"] |= {code for code in found[key] if "{" in code}
-            found[key] = {code for code in found[key] if "{" not in code and not CLASS_NAME.fullmatch(code)}
+            found[key] = {code for code in found[key] if "{" not in code}
         found["runtime"] = {re.sub(r"\{[^}]*\}", "{}", code) for code in found["runtime"]}
         found["own"] = found["error"] & elsewhere
         return {key: sorted(values) for key, values in found.items()}

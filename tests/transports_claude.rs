@@ -150,7 +150,7 @@ fn discovery_failures_are_not_submitted_and_uncertain_writes_are_unknown() {
             json!({}),
             None,
             Submission::NotSubmitted,
-            "recipient_unavailable",
+            "invalid_claude_agents_response",
         ),
         (
             json!([row, row]),
@@ -180,7 +180,7 @@ fn discovery_failures_are_not_submitted_and_uncertain_writes_are_unknown() {
             json!([row]),
             None,
             Submission::NotSubmitted,
-            "FileNotFoundError",
+            "file_not_found",
         ),
         (
             json!([row]),
@@ -202,13 +202,13 @@ fn discovery_failures_are_not_submitted_and_uncertain_writes_are_unknown() {
             json!([row]),
             Some(json!({"sessionId": SESSION, "cwd": cwd})),
             Submission::NotSubmitted,
-            "KeyError",
+            "invalid_client_data",
         ),
         (
             json!([row]),
             Some(json!({"sessionId": SESSION, "cwd": cwd, "messagingSocketPath": 7})),
             Submission::NotSubmitted,
-            "TypeError",
+            "invalid_client_data",
         ),
         (
             json!([row]),
@@ -224,27 +224,32 @@ fn discovery_failures_are_not_submitted_and_uncertain_writes_are_unknown() {
                 json!({"sessionId": SESSION, "cwd": cwd, "messagingSocketPath": fixture.dir.join("absent.sock")}),
             ),
             Submission::NotSubmitted,
-            "FileNotFoundError",
+            "file_not_found",
         ),
-        (json!(5), None, Submission::NotSubmitted, "TypeError"),
+        (
+            json!(5),
+            None,
+            Submission::NotSubmitted,
+            "invalid_claude_agents_response",
+        ),
         // Malformed discovery is still before any notification bytes are written.
         (
             json!([row, "text"]),
             None,
             Submission::NotSubmitted,
-            "AttributeError",
+            "invalid_claude_agents_response",
         ),
         (
             json!({"sessionId": SESSION}),
             None,
             Submission::NotSubmitted,
-            "AttributeError",
+            "invalid_claude_agents_response",
         ),
         (
             json!([row]),
             Some(json!(["list"])),
             Submission::NotSubmitted,
-            "AttributeError",
+            "invalid_client_data",
         ),
     ];
     for (rows, metadata, submission, detail) in cases {
@@ -261,14 +266,14 @@ fn discovery_failures_are_not_submitted_and_uncertain_writes_are_unknown() {
         );
     }
     fixture.agents_text("not json");
-    assert_eq!("JSONDecodeError", fixture.notify("Notice").detail);
+    assert_eq!("invalid_json", fixture.notify("Notice").detail);
     fs::write(fixture.dir.join("bin/exit"), "3").unwrap();
     fixture.agents(&json!([]));
-    assert_eq!("CalledProcessError", fixture.notify("Notice").detail);
+    assert_eq!("command_failed", fixture.notify("Notice").detail);
     fs::remove_file(fixture.dir.join("bin/claude")).unwrap();
     let missing = fixture.notify("Notice");
     assert_eq!(
-        (Submission::NotSubmitted, "FileNotFoundError"),
+        (Submission::NotSubmitted, "file_not_found"),
         (missing.submission, missing.detail.as_str())
     );
 
@@ -279,7 +284,7 @@ fn discovery_failures_are_not_submitted_and_uncertain_writes_are_unknown() {
     drop(UnixListener::bind(fixture.socket()).unwrap());
     let refused = fixture.notify("Notice");
     assert_eq!(
-        (Submission::NotSubmitted, "ConnectionRefusedError"),
+        (Submission::NotSubmitted, "connection_refused"),
         (refused.submission, refused.detail.as_str())
     );
 

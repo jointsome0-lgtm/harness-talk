@@ -3,7 +3,6 @@ pub mod adapters;
 mod catalog;
 pub mod cli;
 mod commands;
-mod compat;
 pub mod discovery;
 pub mod error;
 pub mod guidance;

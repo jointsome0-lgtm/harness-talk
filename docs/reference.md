@@ -61,7 +61,7 @@ For a native recipient, after saving a message the store durably claims its one 
 
 Run `peer check` in the scope that will send. `recipient_unavailable` can mean restricted discovery rather than an offline client. Use the client's normal permission approval for a needed host check; do not replay an already-saved notification. An unavailable client can later retrieve the message from `inbox`.
 
-`notification_detail` and a cleanup `detail` carry fixed htalk codes, such as `recipient_unavailable` or `codex_rpc_rejected:-32600`. Any other failure is recorded by its exception class name only, without its message text.
+`notification_detail` and a cleanup `detail` carry fixed htalk codes, such as `recipient_unavailable` or `codex_rpc_rejected:-32600`. A failure below the client is recorded by a fixed code too, such as `file_not_found`, `connection_refused`, `timed_out` or `invalid_client_data`. No message text is saved.
 
 | `submission` | Evidence |
 | --- | --- |

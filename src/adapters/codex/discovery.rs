@@ -2,7 +2,6 @@
 //! kernel's writer locks of CLI sessions.
 use super::{rpc::Rpc, state};
 use crate::{
-    compat,
     discovery::{address, lossy, source},
     error::Failure,
     model::Found,
@@ -43,18 +42,22 @@ pub fn default_socket() -> PathBuf {
     state::codex_home().join("app-server-control/app-server-control.sock")
 }
 
-fn int(text: &str, radix: u32) -> Result<i64, Failure> {
-    i64::from_str_radix(text, radix).map_err(|_| compat::VALUE_ERROR)
+fn invalid_table() -> Failure {
+    Failure::coded("invalid_lock_table")
 }
 
-/// Text column as Python's sqlite3 would decode it; undecodable text aborts the query.
+fn int(text: &str, radix: u32) -> Result<i64, Failure> {
+    i64::from_str_radix(text, radix).map_err(|_| invalid_table())
+}
+
+/// Undecodable text aborts the query.
 fn column(value: ValueRef<'_>) -> Result<Value, Failure> {
     Ok(match value {
         ValueRef::Null => Value::Null,
         ValueRef::Integer(i) => json!(i),
         ValueRef::Real(f) => json!(f),
         ValueRef::Text(t) => {
-            json!(std::str::from_utf8(t).map_err(|_| compat::OPERATIONAL_ERROR)?)
+            json!(std::str::from_utf8(t).map_err(|_| Failure::INVALID_UTF8)?)
         }
         ValueRef::Blob(_) => json!({"blob": true}),
     })
@@ -81,7 +84,7 @@ pub fn writers(
                 "partial"
             }),
         );
-        src.insert("detail".into(), json!(failure.class_name()));
+        src.insert("detail".into(), json!(failure.code()));
     }
     Found {
         sessions,
@@ -118,8 +121,7 @@ fn scan_writers(
             files.insert(os::lock_key(&info), ident);
         }
     }
-    let table = std::fs::read(lock_table)?;
-    let table = String::from_utf8(table).map_err(|_| compat::UNICODE_DECODE_ERROR)?;
+    let table = String::from_utf8(std::fs::read(lock_table)?).map_err(|_| invalid_table())?;
     let mut held: Vec<(String, i64)> = Vec::new();
     for line in table.lines() {
         let fields: Vec<&str> = line.split_whitespace().collect();
@@ -129,7 +131,7 @@ fn scan_writers(
         }
         let parts: Vec<&str> = fields[5].split(':').collect();
         let [major, minor, inode] = parts[..] else {
-            return Err(compat::VALUE_ERROR);
+            return Err(invalid_table());
         };
         let (major, minor, inode) = (int(major, 16)?, int(minor, 16)?, int(inode, 10)?);
         let (Ok(major), Ok(minor), Ok(inode)) = (
@@ -155,7 +157,7 @@ fn scan_writers(
     }
     let metadata = state_path()?;
     if !metadata.is_absolute() {
-        return Err(compat::VALUE_ERROR);
+        return Err(Failure::INVALID_DATA);
     }
     let db = rusqlite::Connection::open_with_flags(
         &metadata,
@@ -199,24 +201,24 @@ fn scan_writers(
     Ok(())
 }
 
-/// Whether Python would have raised a per-record ValueError/KeyError/TypeError rather than
-/// an OSError (transport, timeout or scan limit) that ends the whole source.
+/// Whether a failure is one bad record, where a failed transport, a timeout or a scan limit
+/// ends the whole source.
 fn per_record(failure: &Failure) -> bool {
     match failure {
         Failure::Coded(code) => !matches!(
-            code.as_str(),
+            code.as_ref(),
             "codex_websocket_failure"
                 | "codex_rpc_timeout"
                 | "codex_rpc_closed"
                 | "codex_discovery_limit"
                 | "codex_discovery_time_limit"
         ),
-        class => compat::one_record(class),
+        Failure::System(_) => false,
     }
 }
 
 fn reject() -> Failure {
-    compat::VALUE_ERROR
+    Failure::INVALID_DATA
 }
 
 fn connect(path: &Path) -> Result<Call<'static>, Failure> {

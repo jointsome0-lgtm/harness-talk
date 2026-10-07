@@ -28,7 +28,7 @@ CORE = (
     "src/adapters/mod.rs", "src/os/mod.rs",
 )
 ADAPTERS = ("src/adapters/",)
-OUTSIDE = ("src/catalog/", "src/mcp.rs", "src/discovery.rs", "src/compat.rs", "src/os/")
+OUTSIDE = ("src/catalog/", "src/mcp.rs", "src/discovery.rs", "src/os/")
 
 
 def place(name):

@@ -196,7 +196,7 @@ fn responses_follow_http_client_framing() {
         );
     }
     for (length, expected) in [
-        ("1000", "opencode_IncompleteRead"),
+        ("1000", "opencode_invalid_response"),
         ("nonsense", "opencode_invalid_response"),
     ] {
         let response = format!("HTTP/1.1 200 OK\r\nContent-Length: {length}\r\n\r\n{body}");
@@ -277,7 +277,7 @@ fn post_write_outcomes_require_complete_http_responses() {
     };
     assert_eq!(
         post(|| Reply::Close),
-        ("submission_unknown", "opencode_RemoteDisconnected".into())
+        ("submission_unknown", "opencode_connection_closed".into())
     );
     assert_eq!(
         post(|| raw("HTTP/1.1 400 Bad\r\nContent-Length: 3\r\n\r\n{x}")),
@@ -296,7 +296,7 @@ fn post_write_outcomes_require_complete_http_responses() {
     }
     assert_eq!(
         post(|| raw("HTTP/1.1 400 Bad\r\nContent-Length: 1000\r\n\r\n{}")),
-        ("submission_unknown", "opencode_IncompleteRead".into())
+        ("submission_unknown", "opencode_invalid_response".into())
     );
     assert_eq!(
         post(|| raw("HTTP/1.1 400 Bad\r\nContent-Length: nonsense\r\n\r\n{}")),
@@ -312,7 +312,7 @@ fn post_write_outcomes_require_complete_http_responses() {
     );
     assert_eq!(
         post(|| raw("HTTP/1.1 2x4 odd\r\n\r\n")),
-        ("submission_unknown", "opencode_BadStatusLine".into())
+        ("submission_unknown", "opencode_invalid_response".into())
     );
     assert_eq!(
         post(|| raw("HTTP/1.1 204 No Content\r\n\r\n")),
@@ -320,7 +320,7 @@ fn post_write_outcomes_require_complete_http_responses() {
     );
     assert_eq!(
         post(|| Reply::Sleep(Duration::from_secs(7))),
-        ("submission_unknown", "opencode_TimeoutError".into())
+        ("submission_unknown", "opencode_timed_out".into())
     );
 }
 
@@ -360,7 +360,7 @@ fn preflight_failures_never_post() {
     health_hook(&c, || Reply::Close);
     assert_eq!(
         outcome(opencode::notify(&c.peer, "text", &no_skip)),
-        ("not_submitted", "opencode_RemoteDisconnected".into())
+        ("not_submitted", "opencode_connection_closed".into())
     );
     assert!(c.fake.posts().is_empty());
 }
@@ -396,10 +396,10 @@ fn saved_state_is_rechecked_after_preflight_and_before_the_post() {
         outcome(opencode::notify(&c.peer, "text", &skip)),
         ("not_submitted", "notification_state_unavailable".into())
     );
-    let skip = || Err(Failure::Class("OperationalError"));
+    let skip = || Err(Failure::coded("notification_state_unavailable"));
     assert_eq!(
         outcome(opencode::notify(&c.peer, "text", &skip)),
-        ("not_submitted", "OperationalError".into())
+        ("not_submitted", "notification_state_unavailable".into())
     );
     // Preflight failure: the saved state is not even read.
     let called = Cell::new(false);
@@ -728,7 +728,7 @@ fn cancellation_after_successful_preflight_prevents_post_and_replay() {
     );
     assert_eq!(
         *observed.borrow(),
-        Some((Submission::NotSubmitted, "KeyboardInterrupt".into()))
+        Some((Submission::NotSubmitted, "interrupted".into()))
     );
     let saved = store.get(&message.row.id, None).unwrap();
     assert_eq!(saved.row.submission, Submission::SubmissionUnknown);
