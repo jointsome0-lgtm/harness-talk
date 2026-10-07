@@ -44,13 +44,12 @@ pub fn default_db() -> PathBuf {
     if let Some(db) = env::var_os("HTALK_DB").filter(|v| !v.is_empty()) {
         return db.into();
     }
-    data_home(false).join("harness-talk/mail.sqlite3")
+    data_home().join("harness-talk/mail.sqlite3")
 }
-/// `$XDG_DATA_HOME`, or `~/.local/share` without it. `empty_is_unset` says whether an empty
-/// value counts as none: the two callers have always differed in that.
-pub fn data_home(empty_is_unset: bool) -> PathBuf {
+/// `$XDG_DATA_HOME`, or `~/.local/share` when it is unset or empty.
+pub fn data_home() -> PathBuf {
     env::var_os("XDG_DATA_HOME")
-        .filter(|v| !(empty_is_unset && v.is_empty()))
+        .filter(|v| !v.is_empty())
         .map_or_else(|| home().join(".local/share"), PathBuf::from)
 }
 

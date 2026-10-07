@@ -94,6 +94,10 @@ class DatabaseSelection(HtalkCase):
         self.assertTrue((xdg / "harness-talk/mail.sqlite3").exists())
         self.htalk(*address, db=False)
         self.assertTrue((self.home / ".local/share/harness-talk/mail.sqlite3").exists())
+        # An empty XDG_DATA_HOME is an unset one: the same mailbox, and nothing under the working directory.
+        listed = self.htalk("peer", "list", db=False, env={"XDG_DATA_HOME": ""})
+        self.assertEqual(["bob"], [peer["name"] for peer in listed["peers"]])
+        self.assertFalse((self.tmp / "harness-talk").exists())
         # A relative or ~ path resolves against the working directory or HOME, in errors too.
         missing = self.error("peer", "list", db="rel/mail.sqlite3", cwd=self.work, error="database_not_found")
         self.assertEqual(str(self.work / "rel/mail.sqlite3"), missing["resolved_path"])
@@ -1150,6 +1154,25 @@ class Interrupts(HtalkCase):
         self.assertEqual((saved["ack_at"], "submitted"), (recovered["ack_at"], recovered["submission"]))
         self.assertEqual(1, len(self.calls("codex", ["queue"])))
 
+    def test_interrupted_ack_returns_while_the_client_still_holds_the_removal(self):
+        self.add_peer("alice")
+        self.codex_recipient("bob")
+        self.configure(codex_queue={"mode": "ok", "queue_id": str(uuid.uuid4())}, codex_app_server={"mode": "block"})
+        first, second = (self.htalk("--as", "alice", "send", "bob", "--message", text)["id"] for text in ("One", "Two"))
+
+        def removals():
+            return [call for call in self.calls("codex") if call.get("rpc") == "thread/queue/delete"]
+
+        # Two acknowledgments wait on the same held client. Nobody interrupts the first one.
+        waiting = self.spawn("--as", "bob", "ack", first)
+        wait_for(lambda: len(removals()) == 1, message="the first removal to reach the client")
+        acking = self.spawn("--as", "bob", "ack", second)
+        wait_for(lambda: len(removals()) == 2, message="the second removal to reach the client")
+        self.assertEqual(second, self.interrupt(acking)["message_id"])
+        self.assertIsNone(waiting.poll(), "the interrupted ack waited as long as the one nobody interrupted")
+        self.release("codex_delete")
+        self.assertIsNotNone(self.finish(waiting)["ack_at"])
+
 
 class ProcessRecovery(HtalkCase):
     def setUp(self):
@@ -1517,15 +1540,21 @@ class ContendedWrites(HtalkCase):
 
     def test_interrupt_while_another_writer_holds_the_mailbox_saves_nothing(self):
         writer = self.hold("BEGIN IMMEDIATE")
+        # A registration waits for the same writer. Nobody interrupts it.
+        waiting = self.spawn("peer", "add", "carol", "--harness", "claude", "--session", str(uuid.uuid4()),
+                             "--workspace", str(self.work))
+        self.keeps_waiting(waiting)
         proc = self.spawn("--as", "alice", "send", "bob", "--message-file", self.pipe, "--no-notify", group=True)
         self.give_body(proc, b"Interrupted")
         self.keeps_waiting(proc)
         proc.send_signal(signal.SIGINT)
         interrupted = self.finish(proc, code=130)
         self.assertEqual(("interrupted", None), (interrupted["state"], interrupted["message_id"]))
+        self.running(waiting, "the interrupted send waited as long as the writer nobody interrupted")
         with self.assertRaises(ProcessLookupError, msg="the interrupted send left a process behind"):
             os.killpg(proc.pid, 0)
         writer.rollback()
+        self.assertEqual("carol", self.finish(waiting)["name"])
         self.assertEqual([], self.sql("SELECT id FROM messages"))
 
     def test_repeated_send_returns_during_the_first_notification(self):

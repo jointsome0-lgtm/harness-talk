@@ -222,6 +222,10 @@ impl Drop for Registration<'_> {
 /// SQLite resets `attempt` for each locking event. Keep its five-second sleep
 /// budget, but cap each pause at 5 ms instead of backing off to 100 ms.
 fn wait_for_lock(attempt: i32) -> bool {
+    // An interrupted command writes nothing more, so it does not wait for its turn to.
+    if os::interrupted() {
+        return false;
+    }
     if let Some(retry) = crate::write_turn::wait(attempt) {
         return retry;
     }
