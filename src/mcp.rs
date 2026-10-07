@@ -1,5 +1,8 @@
 //! One protocol adapter; mailbox behavior remains in the ordinary CLI.
-use crate::commands::{Arguments, Cli, Command as Table, Mailbox, OverMcp};
+use crate::{
+    commands::{Arguments, Cli, Command as Table, Mailbox, OverMcp},
+    os::{self, Grouped},
+};
 use clap::Parser;
 use rmcp::{
     RoleServer, ServerHandler, ServiceExt,
@@ -72,7 +75,7 @@ impl Plain {
     pub(crate) fn serve(self) -> Result<(), Box<dyn std::error::Error>> {
         serve(match self {
             Self::Local { db, peer } => Self::Local {
-                db: crate::os::resolve(&db),
+                db: os::resolve(&db),
                 peer,
             },
             connect => connect,
@@ -152,7 +155,7 @@ impl Server {
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .process_group(0)
+            .own_group()
             .kill_on_drop(true);
         // Track cleanup independently of the SDK request future. On shutdown
         // we wait for children even if the client has already disconnected.
@@ -293,7 +296,7 @@ async fn run_remote_checked(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .process_group(0)
+        .own_group()
         .kill_on_drop(true)
         .spawn()
     {
@@ -302,7 +305,7 @@ async fn run_remote_checked(
             return error("Could not start the configured mailbox connector; no command was sent.");
         }
     };
-    let mut group = match crate::process_cleanup::OwnedGroup::new(child.id().unwrap()) {
+    let mut group = match os::OwnedGroup::new(child.id().unwrap()) {
         Ok(group) => group,
         Err(e) => {
             return error(format!(
@@ -401,7 +404,7 @@ async fn run_child(
         Ok(child) => child,
         Err(e) => return error(format!("Could not run htalk: {e}")),
     };
-    let mut group = match crate::process_cleanup::OwnedGroup::new(child.id().unwrap()) {
+    let mut group = match os::OwnedGroup::new(child.id().unwrap()) {
         Ok(group) => group,
         Err(e) => {
             return error(format!(
@@ -430,8 +433,8 @@ async fn run_child(
                     _ = tokio::time::sleep(Duration::from_secs(120)) => {},
                 }
             } => {
-                // The retained pidfd targets only the original CLI process.
-                // SIGINT lets it finish a write or return recovery JSON.
+                // The retained handle targets only the original CLI process.
+                // An interrupt lets it finish a write or return recovery JSON.
                 let _ = group.interrupt();
                 timeout(Duration::from_secs(2), &mut capture).await
                     .unwrap_or_else(|_| Err(io::Error::other("htalk did not finish after interruption")))
@@ -486,10 +489,7 @@ pub(crate) fn serve(backend: impl Backend) -> Result<(), Box<dyn std::error::Err
         .enable_all()
         .build()?;
     let result = runtime.block_on(async {
-        let mut interrupt =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
-        let mut terminate =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+        let (mut interrupt, mut terminate) = os::stop_requests()?;
         let cancel = shutdown.clone();
         tokio::spawn(async move {
             loop {

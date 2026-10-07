@@ -14,6 +14,9 @@ Class names are asked of this Python's standard library, so none is written
 down here. A literal is a hint, not proof of a read or an assertion: the lists
 are for a person to go through.
 
+It also counts the lines of `src/` outside `src/os/` that name something only
+a Unix or Linux system has. That number stays 0.
+
 The census reads files as text. It needs no build and nothing but the standard
 library, and prints the same numbers from any clean checkout of one commit.
 """
@@ -35,6 +38,9 @@ RUST_TEST_ONLY = re.compile(r"#\[cfg\((?:test|all\([^\]]*\btest\b[^\]]*\))\)\]")
 RUST_FN = re.compile(r"\bfn\s+(\w+)")
 RUST_PATH = re.compile(r"#\[path\s*=\s*\"([^\"]+)\"\]")
 NODE_TEST = re.compile(r"^test\(", re.M)
+# What only a Unix or Linux system has. A line that names one belongs in `src/os/`.
+UNIX_ONLY = re.compile(r"/proc|libc::|signal_hook|pidfd|flock|O_DIRECTORY|unix::|os::fd|UnixStream|process_group"
+                       r"|XDG_|\.local/share|/usr/bin/ssh|SIGTERM|SIGINT|st_dev|st_ino")
 QUOTED = re.compile(r"""(["'`])((?:(?!\1)[^\\\n]|\\.)*)\1""")
 CALLED = re.compile(r"\b(\w+)\s*\(")
 
@@ -150,6 +156,16 @@ def reasons(functions):
         yield test.name, classes, locks
 
 
+def unix_only(repo):
+    """The lines outside `src/os/` that name a Unix-only facility, counted by file."""
+    found = {}
+    for path in sorted((repo / "src").rglob("*.rs")):
+        hits = sum(1 for line in path.read_text(encoding="utf-8").splitlines() if UNIX_ONLY.search(line))
+        if hits and not path.is_relative_to(repo / "src" / "os"):
+            found[str(path.relative_to(repo))] = hits
+    return found
+
+
 def census(repo=REPO):
     pathed = {(source.parent / target).resolve() for source in (repo / "src").rglob("*.rs")
               for target in RUST_PATH.findall(source.read_text(encoding="utf-8"))}
@@ -174,10 +190,10 @@ def census(repo=REPO):
             kinds[kind] += 1
             why = {reason for reason, holds in ((built, built), (LOCKS, locks), (CLASS, classes)) if holds}
             tests.append((str(path.relative_to(repo)), name, why))
-    return kinds, lines, importing, tests
+    return kinds, lines, importing, tests, unix_only(repo)
 
 
-def report(kinds, lines, importing, tests):
+def report(kinds, lines, importing, tests, unix):
     def count(*wanted):
         return sum(1 for _, _, why in tests if why & set(wanted))
 
@@ -201,6 +217,8 @@ def report(kinds, lines, importing, tests):
            line("read /proc/locks or a journal file", count(LOCKS), 2),
            line("assert a Python exception class name", count(CLASS), 2),
            line("files under tests/ importing harness_talk::", importing), "",
+           line("Unix-only lines outside src/os/", sum(unix.values())),
+           *("  %3d  %s" % (hits, path) for path, hits in unix.items()), "",
            "Rust tests built on the crate"]
     out += ["  %3d  %s" % (len(names), path) for path, names in by_file(CRATE, PATHED, SRC).items()]
     for title, reason in (("Tests that read /proc/locks or a journal file", LOCKS),

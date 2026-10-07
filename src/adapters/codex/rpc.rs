@@ -2,17 +2,12 @@
 use crate::{
     compat::{self, io_failure, owned_socket, python_dumps, socket_failure},
     error::Failure,
-    os::connect_unix,
-    process_cleanup::OwnedGroup,
+    os::{self, Grouped, OwnedGroup, connect_unix},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
     io::{Read, Write},
-    os::{
-        fd::AsRawFd,
-        unix::{net::UnixStream, process::CommandExt},
-    },
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio as Pipe},
     thread,
@@ -37,15 +32,16 @@ pub(crate) struct BoundSocket {
 
 impl BoundSocket {
     pub(crate) fn capture(path: PathBuf) -> Result<Self, Failure> {
-        use std::os::unix::fs::MetadataExt;
         let path = owned_socket(&path)?;
         let meta = std::fs::metadata(&path).map_err(io_failure)?;
+        let ((device, inode), (changed_seconds, changed_nanos)) =
+            (os::file_id(&meta), os::changed(&meta));
         Ok(Self {
             path,
-            device: meta.dev(),
-            inode: meta.ino(),
-            changed_seconds: meta.ctime(),
-            changed_nanos: meta.ctime_nsec(),
+            device,
+            inode,
+            changed_seconds,
+            changed_nanos,
         })
     }
 
@@ -131,7 +127,7 @@ impl Rpc {
             .stdin(Pipe::piped())
             .stdout(Pipe::piped())
             .stderr(Pipe::null())
-            .process_group(0)
+            .own_group()
             .spawn()
             .map_err(io_failure)?;
         let mut group = match OwnedGroup::new(child.id()) {
@@ -167,7 +163,7 @@ impl Rpc {
             closing: false,
         };
         if let Connection::Stdio(process) = &rpc.connection {
-            set_nonblocking(process.stdin.as_ref().unwrap()).map_err(io_failure)?;
+            os::set_nonblocking(process.stdin.as_ref().unwrap()).map_err(io_failure)?;
         }
         rpc.initialize()?;
         Ok(rpc)
@@ -229,7 +225,7 @@ impl Rpc {
     /// Stdio cleanup gives EOF one second, then uses a four-second TERM/KILL observation
     /// budget checked between process scans. Scans and scheduling can extend elapsed time.
     /// Reaping follows observed direct-child exit.
-    /// Retries omit the EOF grace. Linux pidfds and readable process identities are
+    /// Retries omit the EOF grace. `os::OwnedGroup` and what it reads of each process are
     /// required; descendants that leave the private group are outside this contract.
     /// Socket cleanup closes the local stream after at most one second of close I/O;
     /// it does not confirm remote consumption of any request.
@@ -327,7 +323,7 @@ impl Rpc {
 // Tungstenite can perform several reads/writes inside one handshake or frame operation.
 // Recompute the remaining time at the underlying I/O boundary, not just around socket.read().
 struct DeadlineStream {
-    stream: UnixStream,
+    stream: os::Socket,
     deadline: Instant,
 }
 
@@ -366,16 +362,6 @@ impl Write for DeadlineStream {
     }
 }
 
-fn set_nonblocking(stdin: &ChildStdin) -> std::io::Result<()> {
-    let fd = stdin.as_raw_fd();
-    // SAFETY: fcntl operates on the live stdin descriptor owned by this process handle.
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
-}
-
 fn stdio_failure(error: std::io::Error) -> Failure {
     if error.kind() == std::io::ErrorKind::TimedOut {
         Failure::coded("codex_rpc_timeout")
@@ -384,25 +370,14 @@ fn stdio_failure(error: std::io::Error) -> Failure {
     }
 }
 
-fn poll_until(fd: std::os::fd::RawFd, events: i16, deadline: Instant) -> std::io::Result<()> {
+fn poll_until(io: &impl os::Descriptor, writable: bool, deadline: Instant) -> std::io::Result<()> {
     loop {
         let wait = remaining(deadline).ok_or_else(deadline_timeout)?;
-        let mut poll = libc::pollfd {
-            fd,
-            events,
-            revents: 0,
-        };
-        let milliseconds = wait.as_nanos().div_ceil(1_000_000).min(i32::MAX as u128) as i32;
-        // SAFETY: polls one descriptor owned by the caller for the duration of this call.
-        match unsafe { libc::poll(&mut poll, 1, milliseconds) } {
-            0 => return Err(deadline_timeout()),
-            n if n < 0 => {
-                let error = std::io::Error::last_os_error();
-                if error.kind() != std::io::ErrorKind::Interrupted {
-                    return Err(error);
-                }
-            }
-            _ => {
+        match os::ready(io, writable, wait) {
+            Ok(false) => return Err(deadline_timeout()),
+            Err(error) if error.kind() != std::io::ErrorKind::Interrupted => return Err(error),
+            Err(_) => (),
+            Ok(true) => {
                 remaining(deadline).ok_or_else(deadline_timeout)?;
                 return Ok(());
             }
@@ -420,8 +395,7 @@ impl StdioProcess {
                 Ok(count) => bytes = &bytes[count..],
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    poll_until(stdin.as_raw_fd(), libc::POLLOUT, deadline)
-                        .map_err(stdio_failure)?;
+                    poll_until(stdin, true, deadline).map_err(stdio_failure)?;
                 }
                 Err(error) => return Err(io_failure(error)),
             }
@@ -436,7 +410,7 @@ impl StdioProcess {
             if self.buffer.len() >= FRAME_LIMIT {
                 return Err(Failure::coded("codex_rpc_frame_too_large"));
             }
-            poll_until(self.stdout.as_raw_fd(), libc::POLLIN, deadline).map_err(stdio_failure)?;
+            poll_until(&self.stdout, false, deadline).map_err(stdio_failure)?;
             let mut chunk = vec![0; 65536];
             let count = match self.stdout.read(&mut chunk) {
                 Ok(count) => count,

@@ -4,6 +4,7 @@ use super::{rpc::BoundSocket, state};
 use crate::{
     commands::{Receive, ReceiveAction},
     model::{Message, NativePeer, Submission},
+    os::{self, Grouped, Open},
     validate,
 };
 use serde::{Deserialize, Serialize};
@@ -12,10 +13,6 @@ use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::Write,
-    os::{
-        fd::AsRawFd,
-        unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt},
-    },
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -88,7 +85,7 @@ fn save(directory: &Path, state: &State) -> Result<()> {
         .write(true)
         .create(true)
         .truncate(true)
-        .mode(0o600)
+        .private()
         .open(directory.join("state.tmp"))?;
     serde_json::to_writer(&mut out, state)?;
     out.write_all(b"\n")?;
@@ -167,13 +164,13 @@ fn lock_session(session: &str, database: &Path) -> Result<File> {
     // Different Codex homes can select the same SQLite store. Key ownership
     // on that resolved store, not the caller-chosen receipt directory or home.
     let directory = database.parent().unwrap().join("htalk-receivers");
-    match fs::DirBuilder::new().mode(0o700).create(&directory) {
+    match os::create_private_dir(&directory) {
         Ok(()) => (),
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => (),
         Err(error) => return Err(error.into()),
     }
     let meta = fs::symlink_metadata(&directory)?;
-    if !meta.is_dir() || meta.uid() != unsafe { libc::getuid() } || meta.mode() & 0o077 != 0 {
+    if !meta.is_dir() || !os::is_private(&meta) {
         return Err("Receiver session locks need a private directory owned by this account".into());
     }
     let lock = OpenOptions::new()
@@ -181,26 +178,17 @@ fn lock_session(session: &str, database: &Path) -> Result<File> {
         .write(true)
         .create(true)
         .truncate(false)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
+        .private()
+        .no_follow()
         .open(directory.join(format!("{session}.lock")))?;
     let meta = lock.metadata()?;
-    if !meta.is_file()
-        || meta.uid() != unsafe { libc::getuid() }
-        || meta.mode() & 0o077 != 0
-        || meta.nlink() != 1
-    {
+    if !meta.is_file() || !os::is_private(&meta) || os::links(&meta) != 1 {
         return Err("Receiver session lock must be a private owned regular file".into());
     }
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
-        let error = std::io::Error::last_os_error();
-        if error.kind() == std::io::ErrorKind::WouldBlock {
-            return Err(
-                "Another receiver owns this Codex session; reuse its saved state after it stops"
-                    .into(),
-            );
-        }
-        return Err(error.into());
+    if !os::try_lock(&lock, false)? {
+        return Err(
+            "Another receiver owns this Codex session; reuse its saved state after it stops".into(),
+        );
     }
     // Keep the inode across restarts. Unlinking a held lock would permit a
     // second receiver to lock a new inode at the same pathname.
@@ -221,13 +209,13 @@ pub(crate) fn run(receive: Receive) -> Result<()> {
             if !path.is_absolute() {
                 return Err("--mcp-command needs an absolute executable path".into());
             }
-            Ok(crate::os::resolve_strict(path)?)
+            Ok(os::resolve_strict(path)?)
         })
         .transpose()?;
     let binding = Binding {
         peer: watch.peer,
         session: validate::uuid(&watch.session)?,
-        workspace: crate::os::resolve_strict(Path::new(&watch.workspace))?,
+        workspace: os::resolve_strict(Path::new(&watch.workspace))?,
         command: watch.connector,
         mcp_command,
         codex_socket: watch
@@ -238,7 +226,7 @@ pub(crate) fn run(receive: Receive) -> Result<()> {
                 if !path.is_absolute() {
                     return Err("--codex-socket needs an absolute Unix socket path".into());
                 }
-                capture_socket(crate::os::resolve(path))
+                capture_socket(os::resolve(path))
             })
             .transpose()?,
     };
@@ -246,12 +234,12 @@ pub(crate) fn run(receive: Receive) -> Result<()> {
     if !binding.workspace.is_dir() {
         return Err("Workspace must be a directory".into());
     }
-    let directory = crate::os::resolve(Path::new(&watch.state));
+    let directory = os::resolve(Path::new(&watch.state));
     if !directory.exists() {
-        fs::DirBuilder::new().mode(0o700).create(&directory)?;
+        os::create_private_dir(&directory)?;
     }
     let lock = state_lock(&directory, true)?;
-    if !try_lock(&lock, libc::LOCK_EX)? {
+    if !os::try_lock(&lock, false)? {
         return Err("Another receiver holds this state directory".into());
     }
     let state_file = directory.join("state.json");
@@ -298,7 +286,7 @@ pub(crate) fn run(receive: Receive) -> Result<()> {
 
 fn state_lock(directory: &Path, create: bool) -> Result<File> {
     let meta = fs::symlink_metadata(directory)?;
-    if !meta.is_dir() || meta.uid() != unsafe { libc::getuid() } || meta.mode() & 0o077 != 0 {
+    if !meta.is_dir() || !os::is_private(&meta) {
         return Err("Receiver state needs a private directory owned by this account".into());
     }
     let lock = OpenOptions::new()
@@ -306,30 +294,14 @@ fn state_lock(directory: &Path, create: bool) -> Result<File> {
         .write(true)
         .create(create)
         .truncate(false)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
+        .private()
+        .no_follow()
         .open(directory.join("lock"))?;
     let meta = lock.metadata()?;
-    if !meta.is_file()
-        || meta.uid() != unsafe { libc::getuid() }
-        || meta.mode() & 0o077 != 0
-        || meta.nlink() != 1
-    {
+    if !meta.is_file() || !os::is_private(&meta) || os::links(&meta) != 1 {
         return Err("Receiver state lock must be a private owned regular file".into());
     }
     Ok(lock)
-}
-
-fn try_lock(lock: &File, mode: i32) -> Result<bool> {
-    if unsafe { libc::flock(lock.as_raw_fd(), mode | libc::LOCK_NB) } == 0 {
-        return Ok(true);
-    }
-    let error = std::io::Error::last_os_error();
-    if error.kind() == std::io::ErrorKind::WouldBlock {
-        Ok(false)
-    } else {
-        Err(error.into())
-    }
 }
 
 fn maintain(action: &ReceiveAction) -> Result<()> {
@@ -337,10 +309,10 @@ fn maintain(action: &ReceiveAction) -> Result<()> {
         ReceiveAction::Status { state } => (true, state),
         ReceiveAction::Rebind { state } => (false, state),
     };
-    let directory = crate::os::resolve(Path::new(state));
+    let directory = os::resolve(Path::new(state));
     // Maintenance never initializes a directory or clears an uncertain outcome.
     let lock = state_lock(&directory, false)?;
-    let available = try_lock(&lock, if status { libc::LOCK_SH } else { libc::LOCK_EX })?;
+    let available = os::try_lock(&lock, status)?;
     if !status && !available {
         return Err("Stop the receiver before rebinding its state".into());
     }
@@ -399,15 +371,14 @@ fn operate(directory: &Path, mut state: State, _lock: File) -> Result<()> {
         let shutdown = CancellationToken::new();
         let reads = TaskTracker::new();
         let result = async {
-        let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-        let mut interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
+        let (mut interrupt, mut terminate) = os::stop_requests()?;
         let mut delay = 1;
         loop {
             let mut child = Command::new(&state.binding.command[0])
                 .args(&state.binding.command[1..]).stdin(Stdio::piped())
                 .stdout(Stdio::piped()).stderr(Stdio::null())
-                .process_group(0).kill_on_drop(true).spawn()?;
-            let mut group = crate::process_cleanup::OwnedGroup::new(child.id().unwrap())?;
+                .own_group().kill_on_drop(true).spawn()?;
+            let mut group = os::OwnedGroup::new(child.id().unwrap())?;
             // A watch stream carries IDs only. Its free text is never injected.
             let (stopped, result) = {
             let consume = async {

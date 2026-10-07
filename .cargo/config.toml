@@ -1,3 +1,4 @@
 [env]
 # Linux provides fdatasync; SQLite still uses FULL durability and syncs directories.
+# -DHAVE_FDATASYNC is Linux-only; a build script would give it to Linux targets alone.
 LIBSQLITE3_FLAGS = "-DHAVE_FDATASYNC"

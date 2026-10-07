@@ -1,10 +1,12 @@
 //! Known legacy schemas upgrade on first use, after a verified SQLite backup.
-use crate::error::Error;
+use crate::{
+    error::Error,
+    os::{self, Open},
+};
 use rusqlite::{
     Connection, OpenFlags, TransactionBehavior,
     backup::{Backup, StepResult},
 };
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
@@ -140,7 +142,7 @@ fn foreign_keys(db: &Connection) -> Result<(), Error> {
 /// second read connection can copy the committed state without a write gap.
 fn backup(path: &Path, previous: i64) -> Result<(), Error> {
     let directory = backup_directory(path);
-    match fs::DirBuilder::new().mode(0o700).create(&directory) {
+    match os::create_private_dir(&directory) {
         Ok(()) => (),
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists && directory.is_dir() => (),
         Err(e) => return Err(e.into()),
@@ -151,7 +153,7 @@ fn backup(path: &Path, previous: i64) -> Result<(), Error> {
         .read(true)
         .write(true)
         .create_new(true)
-        .mode(0o600)
+        .private()
         .open(&pending)?;
     struct Pending(PathBuf);
     impl Drop for Pending {

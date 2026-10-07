@@ -4,39 +4,22 @@
 //! and forgeable by the same OS account, so it is not authentication.
 use crate::{model::NativeSession, os, validate};
 use serde_json::Value;
-use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
 pub const MAX_DEPTH: usize = 64;
 const CLIENTS: [&[u8]; 3] = [b"claude", b"codex", b"opencode"];
 
-/// Any failure reading or parsing a /proc entry; each call site maps it to its own reason.
+/// Any failure reading or parsing a process entry; each call site maps it to its own reason.
 struct Unreadable;
 
-/// Return comm, parent PID and start time from /proc/PID/stat.
+/// Comm, parent PID and start time of a process.
 fn process(proc_root: &Path, pid: i64) -> Result<(String, i64, String), Unreadable> {
-    let bytes =
-        std::fs::read(proc_root.join(pid.to_string()).join("stat")).map_err(|_| Unreadable)?;
-    let text = String::from_utf8(bytes).map_err(|_| Unreadable)?;
-    // comm may contain spaces and parentheses; the fields after the last ")" cannot.
-    let (head, tail) = text.rsplit_once(')').unwrap_or(("", &text));
-    let fields: Vec<&str> = tail.split_whitespace().collect();
-    let parent = fields
-        .get(1)
-        .ok_or(Unreadable)?
-        .parse::<i64>()
-        .map_err(|_| Unreadable)?;
-    let started = fields.get(19).ok_or(Unreadable)?.to_string();
-    let comm = head.split_once('(').map_or("", |(_, comm)| comm).to_owned();
-    Ok((comm, parent, started))
+    os::process_stat(proc_root, pid).ok_or(Unreadable)
 }
 
 fn looks_like_client(proc_root: &Path, pid: i64, comm: &str) -> Result<bool, Unreadable> {
     // The kernel truncates comm to 15 bytes, so compare prefixes of comm and the executable name.
-    let exe =
-        std::fs::read_link(proc_root.join(pid.to_string()).join("exe")).map_err(|_| Unreadable)?;
-    let exe = exe.as_os_str().as_bytes();
-    let name = exe.rsplit(|b| *b == b'/').next().unwrap_or(exe);
+    let name = os::process_exe(proc_root, pid).ok_or(Unreadable)?;
     Ok(CLIENTS
         .iter()
         .any(|client| comm.as_bytes().starts_with(client) || name.starts_with(client)))

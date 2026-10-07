@@ -2,7 +2,7 @@
 use crate::{
     compat::{self, io_failure, python_whitespace},
     error::Failure,
-    os,
+    os::{self, errno},
 };
 use rusqlite::{Connection, OpenFlags, types::ValueRef};
 use serde_json::Value;
@@ -103,7 +103,7 @@ fn read_config(path: &Path) -> Result<Option<toml::Table>, Failure> {
     // Like Path.exists(): a missing entry or a non-directory parent means no configuration.
     if let Err(error) = fs::metadata(path) {
         return match error.raw_os_error() {
-            Some(libc::ENOENT | libc::ENOTDIR | libc::ELOOP | libc::EBADF) => Ok(None),
+            Some(errno::ENOENT | errno::ENOTDIR | errno::ELOOP | errno::EBADF) => Ok(None),
             _ if error.kind() == io::ErrorKind::NotFound => Ok(None),
             _ => Err(io_failure(error)),
         };

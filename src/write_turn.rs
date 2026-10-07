@@ -1,11 +1,7 @@
 //! Admission for contended sends before their first write transaction.
 use crate::{error::Error, os};
 use std::cell::Cell;
-use std::fs::{File, OpenOptions};
-use std::os::{
-    fd::AsRawFd,
-    unix::fs::{DirBuilderExt, OpenOptionsExt},
-};
+use std::fs::File;
 use std::path::Path;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -52,7 +48,7 @@ pub fn wait(attempt: i32) -> Option<bool> {
     }
 }
 
-// A timed-out flock can remain blocked. Bound that cost to one helper per
+// A timed-out lock request can remain blocked. Bound that cost to one helper per
 // process; other acquisitions fall back to SQLite while it remains blocked.
 static WAITING: AtomicBool = AtomicBool::new(false);
 
@@ -75,18 +71,13 @@ pub fn acquire(path: &Path) -> Result<Option<File>, Error> {
     name.push("-htalk-turn");
     // A directory can never alias a SQLite database file. Closing an auxiliary
     // descriptor must not release that database's process-wide POSIX locks.
-    if let Err(error) = std::fs::DirBuilder::new().mode(0o700).create(&name)
+    if let Err(error) = os::create_private_dir(Path::new(&name))
         && error.kind() != io::ErrorKind::AlreadyExists
     {
         return Ok(None);
     }
-    let file = match OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC)
-        .open(name)
-    {
-        Ok(f) => f,
-        Err(_) => return Ok(None),
+    let Ok(file) = os::open_directory(Path::new(&name)) else {
+        return Ok(None);
     };
     let (send, receive) = mpsc::sync_channel(1);
     if thread::Builder::new()
@@ -94,11 +85,10 @@ pub fn acquire(path: &Path) -> Result<Option<File>, Error> {
         .spawn(move || {
             let _waiting = waiting;
             let result = loop {
-                if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
-                    break Some(file);
-                }
-                if io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
-                    break None;
+                match os::lock(&file) {
+                    Ok(()) => break Some(file),
+                    Err(error) if error.kind() != io::ErrorKind::Interrupted => break None,
+                    Err(_) => (),
                 }
             };
             // Dropping the disconnected result releases an acquired lock after

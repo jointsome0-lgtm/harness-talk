@@ -12,7 +12,6 @@ mod mcp;
 pub mod model;
 pub mod notify;
 pub mod os;
-pub mod process_cleanup;
 mod schema;
 pub mod store;
 pub mod validate;

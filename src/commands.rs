@@ -36,7 +36,7 @@ pub(crate) struct Cli {
     #[arg(
         long,
         value_name = "PATH",
-        help = "Shared SQLite file. Default: HTALK_DB, then $XDG_DATA_HOME/harness-talk/mail.sqlite3, then ~/.local/share/harness-talk/mail.sqlite3. Only peer add creates a missing file."
+        help = crate::os::DB_HELP
     )]
     pub db: Option<String>,
     #[arg(

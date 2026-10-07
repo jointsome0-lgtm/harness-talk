@@ -3,7 +3,7 @@
 //! These tests reach inside. A caller cannot make a process identifier change hands or
 //! make `/proc` return a damaged record, so no command shows what is checked here.
 #![cfg(target_os = "linux")]
-use harness_talk::process_cleanup::{OwnedGroup, member_disappeared, parse_identity};
+use harness_talk::os::{OwnedGroup, member_disappeared, parse_identity};
 use std::{
     fs, io,
     os::unix::process::CommandExt,

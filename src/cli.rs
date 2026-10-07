@@ -151,17 +151,8 @@ impl Session<'_> {
     }
 }
 
-fn default_db() -> PathBuf {
-    if let Some(db) = env::var_os("HTALK_DB").filter(|v| !v.is_empty()) {
-        return db.into();
-    }
-    env::var_os("XDG_DATA_HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| os::home().join(".local/share"))
-        .join("harness-talk/mail.sqlite3")
-}
 fn native_session() -> NativeSession {
-    identity::claude_session(&|key| env::var(key).ok(), Path::new("/proc"), None, None)
+    identity::claude_session(&|key| env::var(key).ok(), Path::new(os::PROC), None, None)
 }
 
 fn execute(command: &Mailbox, context: &mut Context) -> Answer {
@@ -443,7 +434,7 @@ fn mcp(options: commands::Mcp, db: Option<String>, actor: Option<String>) -> i32
         }
         Plain::Connect(options.connector.clone())
     } else {
-        let db = db.map(PathBuf::from).unwrap_or_else(default_db);
+        let db = db.map(PathBuf::from).unwrap_or_else(os::default_db);
         let peer = actor
             .or_else(|| env::var("HTALK_PEER").ok())
             .unwrap_or_default();
@@ -510,15 +501,13 @@ pub fn main() -> i32 {
         Command::Mcp(options) => return mcp(options, db, actor),
         Command::Mailbox(command) => command,
     };
-    unsafe {
-        libc::umask(0o077);
-    }
-    let mut context = Context::new(db.map(PathBuf::from).unwrap_or_else(default_db), actor);
+    os::private_umask();
+    let mut context = Context::new(db.map(PathBuf::from).unwrap_or_else(os::default_db), actor);
     let result = os::install_interrupt_handler()
         .map_err(Error::from)
         .and_then(|_| execute(&command, &mut context));
     let (value, code) = match result {
-        // A migration that committed has a known result even if SIGINT arrived
+        // A migration that committed has a known result even if an interrupt arrived
         // immediately after commit. Failed/interrupted transactions still use 130.
         Ok(result) if matches!(command, Mailbox::Migrate) => result,
         _ if os::interrupted() => (interrupted(&command, &context), 130),

@@ -116,4 +116,6 @@ The sdist includes `tests/**` and the workflows name test files. A change that a
 python3 scripts/test_census.py
 ```
 
+The same script counts the lines of `src/` outside `src/os/` that name something only a Unix or Linux system has: `libc::`, a signal, `/proc`, a Unix extension of the standard library. That number is 0. Such a call goes into `src/os/`, and the rest of the program asks `os::` for it.
+
 The core cleanup, issue #65, adds rules for each of its pull requests. `main` stays green and releasable after each merge: `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`, then the Python and Node suites named in `.github/workflows/tests.yml`. Each pull request reports, before and after, the core size in tokens, the tests that reach inside, the test count and the lines of test code. A visible change found along the way is not made there; it is noted on issue #76. Code the next phase deletes, the Python class names, the `python_*` helpers and the hand-rolled HTTP client, is gathered into one place, not polished.
