@@ -1,19 +1,36 @@
-//! What the program asks of the operating system. Nothing outside this directory names a Unix
-//! or Linux facility: `unix` holds signals, sockets, file ownership and descriptors, `linux`
-//! holds owned process groups, `/proc` and file locks.
+//! What the program asks of the operating system. Nothing outside this directory names a
+//! system or one of its facilities. `unix` holds what Linux and macOS share: signals, sockets,
+//! file locks, file ownership and descriptors. `linux` holds owned process groups, `/proc` and
+//! the lock table. `windows` holds what the mailbox needs there. `unported` stands where a
+//! system has no port of a part yet; `build.rs` says which parts a system has.
+#[cfg(target_os = "linux")]
 mod linux;
+#[cfg(unix)]
 mod unix;
+#[cfg(not(target_os = "linux"))]
+mod unported;
+#[cfg(windows)]
+mod windows;
 
+#[cfg(target_os = "linux")]
 pub use linux::{
-    LOCK_TABLE, OwnedGroup, PROC, lock, lock_key, member_disappeared, parse_identity, process_exe,
-    process_stat, run_command, try_lock,
+    LOCK_TABLE, OwnedGroup, PROC, connect_unix, lock_key, member_disappeared, parse_identity,
+    process_exe, process_stat, run_command,
 };
+#[cfg(unix)]
 pub use unix::{
-    DB_HELP, Descriptor, Grouped, Open, SSH, Socket, Stop, changed, connect_unix,
-    create_private_dir, data_home, default_db, errno, file_id, hung_up, install_interrupt_handler,
-    interrupted, is_executable, is_mine, is_private, is_roots, is_socket, kill_group, links,
-    multicast_ready, open_directory, others_write, owned_socket, private_umask, ready,
-    set_nonblocking, stop_requests,
+    DB_HELP, Descriptor, Grouped, Open, SSH, Socket, Stop, changed, create_private_dir, default_db,
+    errno, file_id, hung_up, install_interrupt_handler, interrupted, is_executable, is_mine,
+    is_private, is_roots, is_socket, kill_group, links, lock, multicast_ready, open_directory,
+    others_write, owned_socket, private_umask, ready, set_nonblocking, stop_requests,
+    sync_directory, try_lock,
+};
+#[cfg(not(target_os = "linux"))]
+pub use unported::{OwnedGroup, PROC, process_exe, process_stat};
+#[cfg(windows)]
+pub use windows::{
+    DB_HELP, Grouped, Open, create_private_dir, default_db, hung_up, install_interrupt_handler,
+    interrupted, lock, open_directory, private_umask, stop_requests, sync_directory,
 };
 
 use std::{
@@ -35,6 +52,12 @@ pub fn home() -> PathBuf {
         None => env::home_dir().unwrap_or_else(|| PathBuf::from("/")),
     }
 }
+/// `$XDG_DATA_HOME`, or `~/.local/share` when it is unset or empty.
+pub fn data_home() -> PathBuf {
+    env::var_os("XDG_DATA_HOME")
+        .filter(|v| !v.is_empty())
+        .map_or_else(|| home().join(".local/share"), PathBuf::from)
+}
 pub fn expand_user(path: &Path) -> PathBuf {
     if path == Path::new("~") {
         home()
@@ -53,7 +76,9 @@ pub fn resolve(path: &Path) -> PathBuf {
         };
         for part in path.components() {
             match part {
-                Component::RootDir => out = PathBuf::from("/"),
+                // A drive or a share, on a system that has them, and then its root.
+                Component::Prefix(prefix) => out = PathBuf::from(prefix.as_os_str()),
+                Component::RootDir => out.push(part.as_os_str()),
                 Component::CurDir => (),
                 Component::ParentDir => {
                     out.pop();
@@ -71,7 +96,6 @@ pub fn resolve(path: &Path) -> PathBuf {
                         out = walk(&target, depth + 1);
                     }
                 }
-                Component::Prefix(_) => (),
             }
         }
         out

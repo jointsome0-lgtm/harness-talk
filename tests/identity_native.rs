@@ -1,5 +1,6 @@
 //! Native Claude recognition against a synthetic /proc tree and sessions directory,
-//! never the running system's.
+//! never the running system's. Only Linux has a `/proc` to read.
+#![cfg(target_os = "linux")]
 use harness_talk::identity::claude_session;
 use harness_talk::model::NativeSession;
 use serde_json::{Value, json};

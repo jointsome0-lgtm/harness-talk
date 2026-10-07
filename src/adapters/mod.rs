@@ -1,7 +1,9 @@
 //! The adapter contract and the registry. A harness is one module beside this file, its
 //! lines in the registry below and its page in `docs/`. The rest of the program reaches a
 //! harness only through `adapter()` and `all()`.
+#[cfg(native_clients)]
 pub mod claude;
+#[cfg(native_clients)]
 pub mod codex;
 pub mod opencode;
 
@@ -61,8 +63,14 @@ impl Harness {
 }
 pub(crate) fn adapter(harness: Harness) -> &'static dyn Adapter {
     match harness {
+        #[cfg(native_clients)]
         Harness::Codex => &codex::Codex,
+        #[cfg(native_clients)]
         Harness::Claude => &claude::Claude,
+        #[cfg(not(native_clients))]
+        Harness::Codex => &NotPorted(Harness::Codex),
+        #[cfg(not(native_clients))]
+        Harness::Claude => &NotPorted(Harness::Claude),
         Harness::Opencode => &opencode::Opencode,
     }
 }
@@ -85,7 +93,47 @@ impl std::str::FromStr for Harness {
 }
 
 /// `htalk receive` bridges a remote watch into a Codex session. No other harness has one.
+#[cfg(native_clients)]
 pub(crate) use codex::receive::run as receive;
+#[cfg(not(native_clients))]
+pub(crate) fn receive(_: crate::commands::Receive) -> Result<(), Error> {
+    Err(Error::not_ported())
+}
+
+/// Stands for a harness on a system its adapter is not ported to. Nothing is submitted and
+/// no client is asked.
+#[cfg(not(native_clients))]
+struct NotPorted(Harness);
+#[cfg(not(native_clients))]
+impl Adapter for NotPorted {
+    fn address(
+        &self,
+        _: &str,
+        _: &str,
+        _: Option<&str>,
+        _: Option<&str>,
+    ) -> Result<Address, Error> {
+        Err(Error::not_ported())
+    }
+    fn notify(&self, _: &NativePeer, _: &Message, _: &str, _: Skip<'_>) -> Outcome {
+        Outcome::not_submitted(Error::not_ported().fixed())
+    }
+    fn dismiss(&self, _: &NativePeer, _: &Message) -> Cleanup {
+        Cleanup::new(CleanupStatus::Unsupported).detail(Error::not_ported().fixed())
+    }
+    fn probe(&self, _: &NativePeer) -> Result<Value, Error> {
+        Err(Error::not_ported())
+    }
+    fn discover(&self, _: &Query<'_>) -> Found {
+        Found {
+            sessions: Vec::new(),
+            sources: vec![
+                serde_json::json!({"harness": self.0.as_str(), "status": "unavailable",
+                "detail": Error::not_ported().fixed()}),
+            ],
+        }
+    }
+}
 
 /// A native address as the mailbox keeps it.
 pub(crate) struct Address {

@@ -1,5 +1,7 @@
 //! Codex transports against real fixtures: a WebSocket app-server on a Unix socket, a fake
 //! `codex` executable for `queue` and `app-server --stdio`, and fixture SQLite state.
+//! Built where the Codex and Claude Code adapters are; `build.rs` says where.
+#![cfg(native_clients)]
 use harness_talk::model::NativePeer as Peer;
 use harness_talk::{
     adapters::codex::{self, rpc::Rpc, state},

@@ -1,3 +1,5 @@
+//! A child run to its end inside a process group this program owns, which only Linux has yet.
+#![cfg(target_os = "linux")]
 use harness_talk::{error::Error, os};
 use std::time::{Duration, Instant};
 

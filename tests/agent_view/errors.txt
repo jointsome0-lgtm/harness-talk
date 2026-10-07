@@ -171,6 +171,7 @@ unknown_request
 unsupported_database_version
 unsupported_delivery
 unsupported_harness
+unsupported_on_this_platform
 unsupported_unversioned_database
 url_is_only_for_opencode
 wait_requires_own_request
@@ -203,6 +204,7 @@ peer_retired
 reply_conflict_existing_answer_preserved
 session_already_has_a_peer_name
 unsupported_harness
+unsupported_on_this_platform    (no entry below)
 unsupported_unversioned_database
 
 # What each failure returns.

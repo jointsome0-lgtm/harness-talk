@@ -23,6 +23,11 @@ impl Error {
         Self::code("invalid_client_data")
     }
 
+    /// What a part answers on a system it is not ported to. `build.rs` says which those are.
+    pub fn not_ported() -> Self {
+        Self::code("unsupported_on_this_platform")
+    }
+
     pub fn invalid_utf8() -> Self {
         Self::code("invalid_utf8")
     }

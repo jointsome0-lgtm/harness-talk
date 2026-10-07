@@ -1,5 +1,7 @@
 //! Claude transport against real fixtures: a fake `claude agents --json`, session metadata in
 //! a fake HOME, and a Unix listener standing in for the messaging socket.
+//! Built where the Codex and Claude Code adapters are; `build.rs` says where.
+#![cfg(native_clients)]
 use harness_talk::model::NativePeer as Peer;
 use harness_talk::{adapters::claude, error::Error, model::*};
 use serde_json::{Value, json};

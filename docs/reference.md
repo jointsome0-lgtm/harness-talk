@@ -147,6 +147,7 @@ A failed command answers `"state":"error"` with one of these codes as `error`. T
 | `seq_cursor_must_be_a_positive_integer` | The page cursor is not a whole number of 1 or more. | Use the cursor a previous page returned. |
 | `unsupported_delivery` | The delivery mode is not `native` or `pull`. | Use `--delivery native` or `--delivery pull`. |
 | `unsupported_harness` | The harness has no native adapter. The adapters are `codex`, `claude` and `opencode`. | Name one of the three, or register with `--delivery pull`. |
+| `unsupported_on_this_platform` | This part of htalk is not ported to the operating system it runs on: native delivery to Codex or Claude Code, `receive`, `mcp` or the catalogue. | Register with `--delivery pull` and poll `inbox`; a pull peer works on every system. |
 | `url_is_only_for_opencode` | `--url` was given for a Claude Code or Codex peer. | Leave out `--url`. |
 | `wait_seconds_must_be_between_0_and_45` | The wait time is not a number from 0 to 45. | Give a number of seconds from 0 to 45. |
 | `workspace_must_be_a_directory` | The `--workspace` path is not a directory. | Give the directory the session runs in. |

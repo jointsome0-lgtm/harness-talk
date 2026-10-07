@@ -190,10 +190,10 @@ fn backup(path: &Path, previous: i64) -> Result<(), Error> {
             "schema-{previous}-before-{SCHEMA_VERSION}-{id}.sqlite3"
         )),
     )?;
-    fs::File::open(&directory)?.sync_all()?;
+    os::sync_directory(&directory)?;
     // Persist a newly created backup directory before the source can change.
     if let Some(parent) = directory.parent() {
-        fs::File::open(parent)?.sync_all()?;
+        os::sync_directory(parent)?;
     }
     Ok(())
 }

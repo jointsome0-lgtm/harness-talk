@@ -208,6 +208,10 @@ pub(crate) fn output(value: &Value) -> io::Result<()> {
 }
 
 fn mcp(options: commands::Mcp, db: Option<String>, actor: Option<String>) -> i32 {
+    if cfg!(not(mcp_server)) {
+        eprintln!("htalk mcp: {}", Error::not_ported());
+        return 2;
+    }
     let plain = if options.connect {
         if db.is_some() || actor.is_some() {
             eprintln!(
@@ -233,9 +237,9 @@ fn mcp(options: commands::Mcp, db: Option<String>, actor: Option<String>) -> i32
         Plain::Local { db, peer }
     };
     // The catalogue may bind the endpoint to what it published.
-    #[cfg(feature = "catalog")]
+    #[cfg(catalog)]
     let result = crate::catalog::serve(plain, &options);
-    #[cfg(not(feature = "catalog"))]
+    #[cfg(not(catalog))]
     let result = plain.serve();
     match result {
         Ok(()) => 0,
@@ -269,9 +273,14 @@ pub fn main() -> i32 {
         }
     };
     let command = match command {
-        #[cfg(feature = "catalog")]
+        #[cfg(catalog)]
         Command::Catalog(action) => {
             return crate::catalog::main(&action, db.as_deref(), actor.as_deref());
+        }
+        #[cfg(all(feature = "catalog", not(catalog)))]
+        Command::Catalog { .. } => {
+            let _ = output(&guidance::not_ported());
+            return 2;
         }
         Command::Receive(receive) => {
             if db.is_some() || actor.is_some() {

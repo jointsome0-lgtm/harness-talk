@@ -13,7 +13,7 @@ also works in userspace networking mode. It does not pair Bluetooth devices,
 activate PAN, configure an internet endpoint, start agents, synchronize mailboxes or automatically switch a call
 between transports.
 
-The catalogue is the Cargo feature `catalog`, on by default; `cargo build --no-default-features` builds htalk without the `catalog` command and the catalogue options of `mcp`.
+The catalogue is built on Linux only; on another system `htalk catalog` answers `unsupported_on_this_platform`. It is the Cargo feature `catalog`, on by default; `cargo build --no-default-features` builds htalk without the `catalog` command and the catalogue options of `mcp`.
 
 ## Publish existing peers
 
