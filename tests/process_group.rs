@@ -13,7 +13,7 @@ fn runtime() -> tokio::runtime::Runtime {
 #[test]
 fn retained_tokio_wrapper_is_not_reaped_by_the_signal_driver() {
     runtime().block_on(async {
-        let mut child = tokio::process::Command::new("/bin/true")
+        let mut child = tokio::process::Command::new("true")
             .process_group(0)
             .spawn()
             .unwrap();
@@ -60,7 +60,7 @@ fn a_member_that_outlives_the_wrapper_is_stopped_and_a_group_already_gone_is_own
         assert!(child.wait().await.unwrap().success());
 
         // A wrapper that has exited before anyone asks is owned all the same.
-        let mut child = tokio::process::Command::new("/bin/true")
+        let mut child = tokio::process::Command::new("true")
             .process_group(0)
             .spawn()
             .unwrap();
