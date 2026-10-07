@@ -7,13 +7,14 @@ fn main() {
     for part in ["native_clients", "mcp_server", "catalog"] {
         println!("cargo::rustc-check-cfg=cfg({part})");
     }
-    let linux = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux");
+    let system = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let linux = system == "linux";
     // Notices into Codex and Claude Code, and `receive`.
     if linux {
         println!("cargo::rustc-cfg=native_clients");
     }
     // `htalk mcp`: the server runs every call as a child whose process group it owns.
-    if linux {
+    if linux || system == "macos" {
         println!("cargo::rustc-cfg=mcp_server");
     }
     // The catalogue of profiles, where the `catalog` feature asks for it.

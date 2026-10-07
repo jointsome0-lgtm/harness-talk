@@ -36,12 +36,19 @@ pub mod errno {
     };
 }
 
+#[cfg(not(target_os = "macos"))]
 pub const DB_HELP: &str = "Shared SQLite file. Default: HTALK_DB, then $XDG_DATA_HOME/harness-talk/mail.sqlite3, then ~/.local/share/harness-talk/mail.sqlite3. Only peer add creates a missing file.";
+#[cfg(target_os = "macos")]
+pub const DB_HELP: &str = "Shared SQLite file. Default: HTALK_DB, then $XDG_DATA_HOME/harness-talk/mail.sqlite3, then ~/Library/Application Support/harness-talk/mail.sqlite3. Only peer add creates a missing file.";
 
 /// The mailbox when `--db` names none, as `DB_HELP` says.
 pub fn default_db() -> PathBuf {
     if let Some(db) = env::var_os("HTALK_DB").filter(|v| !v.is_empty()) {
         return db.into();
+    }
+    #[cfg(target_os = "macos")]
+    if env::var_os("XDG_DATA_HOME").is_none_or(|v| v.is_empty()) {
+        return super::home().join("Library/Application Support/harness-talk/mail.sqlite3");
     }
     data_home().join("harness-talk/mail.sqlite3")
 }
@@ -242,6 +249,18 @@ pub fn hung_up(io: &impl AsRawFd) -> bool {
         events: 0,
         revents: 0,
     };
+    // macOS reports only on what it is asked for, and a hang-up is a thing of a pipe or a
+    // socket: a device may read as an invalid descriptor there while it is open.
+    #[cfg(target_os = "macos")]
+    {
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        let known = unsafe { libc::fstat(sink.fd, &mut stat) } == 0;
+        let kind = stat.st_mode & libc::S_IFMT;
+        if known && kind != libc::S_IFIFO && kind != libc::S_IFSOCK {
+            return false;
+        }
+        sink.events = libc::POLLOUT;
+    }
     let seen = unsafe { libc::poll(&mut sink, 1, 0) };
     seen > 0 && sink.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0
 }

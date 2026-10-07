@@ -1,6 +1,5 @@
 """Public stdio interface: mailbox semantics and cleanup across client loss."""
 import json
-from pathlib import Path
 import queue
 import signal
 import subprocess
@@ -9,7 +8,7 @@ import threading
 import unittest
 import uuid
 
-from compat_support import HtalkCase, wait_for
+from compat_support import HtalkCase, children, gone, wait_for
 
 
 class McpClient:
@@ -191,12 +190,9 @@ for line in sys.stdin:
                 client.send("tools/call", {"name": "htalk", "arguments": {"args": [
                     "send", "bob", "--id", request_id, "--message", stop, "--wait", "45"]}}, 100)
                 wait_for(lambda: self.sql("SELECT id FROM messages WHERE id=?", (request_id,)))
-                children_file = Path(f"/proc/{client.process.pid}/task/{client.process.pid}/children")
-                children = wait_for(lambda: children_file.read_text().split())
+                started = wait_for(lambda: children(client.process.pid))
                 if remote:
-                    endpoint = children[0]
-                    nested = Path(f"/proc/{endpoint}/task/{endpoint}/children")
-                    children += wait_for(lambda: nested.read_text().split())
+                    started += wait_for(lambda: children(started[0]))
                 self.assertIn("result", client.request("ping"))
                 if stop == "cancel":
                     client.process.send_signal(signal.SIGINT)
@@ -208,7 +204,7 @@ for line in sys.stdin:
                     client.process.send_signal(signal.SIGTERM)
                     client.process.wait(timeout=15)  # stdin remains open
                     self.assertEqual(0, client.process.returncode)
-                wait_for(lambda: all(not Path(f"/proc/{pid}").exists() for pid in children))
+                wait_for(lambda: all(gone(pid) for pid in started))
                 if stop == "cancel":
                     retry = client.call("send", "bob", "--id", request_id, "--message", stop)
                     self.assertEqual(request_id, retry["structuredContent"]["result"]["id"])

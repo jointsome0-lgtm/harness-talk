@@ -1,10 +1,13 @@
 //! What the program asks of the operating system. Nothing outside this directory names a
 //! system or one of its facilities. `unix` holds what Linux and macOS share: signals, sockets,
 //! file locks, file ownership and descriptors. `linux` holds owned process groups, `/proc` and
-//! the lock table. `windows` holds what the mailbox needs there. `unported` stands where a
-//! system has no port of a part yet; `build.rs` says which parts a system has.
+//! the lock table. `macos` holds its own owned process groups. `windows` holds what the mailbox
+//! needs there. `unported` stands where a system has no port of a part yet; `build.rs` says
+//! which parts a system has.
 #[cfg(target_os = "linux")]
 mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
 #[cfg(unix)]
 mod unix;
 #[cfg(not(target_os = "linux"))]
@@ -17,6 +20,8 @@ pub use linux::{
     LOCK_TABLE, OwnedGroup, PROC, connect_unix, lock_key, member_disappeared, parse_identity,
     process_exe, process_stat, run_command,
 };
+#[cfg(target_os = "macos")]
+pub use macos::OwnedGroup;
 #[cfg(unix)]
 pub use unix::{
     DB_HELP, Descriptor, Grouped, Open, SSH, Socket, Stop, changed, create_private_dir, default_db,
@@ -26,11 +31,12 @@ pub use unix::{
     sync_directory, try_lock,
 };
 #[cfg(not(target_os = "linux"))]
-pub use unported::{OwnedGroup, PROC, process_exe, process_stat};
+pub use unported::{PROC, process_exe, process_stat};
 #[cfg(windows)]
 pub use windows::{
-    DB_HELP, Grouped, Open, create_private_dir, default_db, hung_up, install_interrupt_handler,
-    interrupted, lock, open_directory, private_umask, stop_requests, sync_directory,
+    DB_HELP, Grouped, Open, OwnedGroup, create_private_dir, default_db, hung_up,
+    install_interrupt_handler, interrupted, lock, open_directory, private_umask, stop_requests,
+    sync_directory,
 };
 
 use std::{

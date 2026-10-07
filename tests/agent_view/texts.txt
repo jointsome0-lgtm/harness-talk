@@ -61,6 +61,7 @@
 "Remote call failed; inspect saved state before repeating a write."
 "Remote mailbox call outcome is unknown. A write may be saved. Inspect sent/show with the saved ID before repeating a write or any task. This call was not retried."
 "Remote watch peer differs from the fixed receiver binding"
+"Shared SQLite file. Default: HTALK_DB, then $XDG_DATA_HOME/harness-talk/mail.sqlite3, then ~/Library/Application Support/harness-talk/mail.sqlite3. Only peer add creates a missing file."
 "Shared SQLite file. Default: HTALK_DB, then %LOCALAPPDATA%\\harness-talk\\mail.sqlite3. Only peer add creates a missing file."
 "Snapshot from the explicitly selected Tailscale daemon. Only locally pinned peer IDs are fetched. Reachability is not agent liveness."
 "Snapshot of advertised devices on the selected interface. Unavailable sources do not prove absence; channel reachability is not agent liveness."

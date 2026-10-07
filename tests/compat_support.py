@@ -68,10 +68,50 @@ def htalk_command():
     raise CommandUnavailable("No htalk under test: set HTALK_TEST_COMMAND or build %s" % local)
 
 
+NOT_PORTED = "unsupported_on_this_platform"
+_native_clients = None
+
+
+def native_clients():
+    """Whether the htalk under test delivers to Codex and Claude Code on this system. It is asked once."""
+    global _native_clients
+    if _native_clients is None:
+        with tempfile.TemporaryDirectory(prefix="htp") as directory:
+            asked = subprocess.run([*htalk_command(), "--db", os.path.join(directory, "probe.sqlite3"), "peer", "add",
+                                    "probe", "--harness", "claude", "--session", str(uuid.uuid4()),
+                                    "--workspace", directory], capture_output=True, text=True, timeout=TIMEOUT,
+                                   env={"PATH": os.defpath, "HOME": directory})
+        _native_clients = NOT_PORTED not in asked.stdout
+    return _native_clients
+
+
+def any_peer(native, pull):
+    """What a test expects of the peer `add_peer(name)` registers: `native` where it is a Claude peer, `pull` elsewhere."""
+    return native if native_clients() else pull
+
+
 def process_start(pid):
     """The start time field of /proc/PID/stat, as Claude Code records it."""
     text = Path("/proc/%d/stat" % pid).read_text()
     return text.rpartition(")")[2].split()[19]
+
+
+def children(pid):
+    """The process ids of a process's children, as text."""
+    if sys.platform == "linux":
+        return Path("/proc/%s/task/%s/children" % (pid, pid)).read_text().split()
+    return subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True).stdout.split()
+
+
+def gone(pid):
+    """Whether a process has exited and been reaped."""
+    if sys.platform == "linux":
+        return not Path("/proc/%s" % pid).exists()
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return True
+    return False
 
 
 def wait_for(predicate, timeout=15, message="condition"):
@@ -318,6 +358,11 @@ class HtalkCase(unittest.TestCase):
         self.db = self.tmp / "data" / "mail.sqlite3"
         self.addCleanup(self.stop_leftovers)
 
+    def default_db(self):
+        """The mailbox when neither --db, HTALK_DB nor XDG_DATA_HOME names one."""
+        data = "Library/Application Support" if sys.platform == "darwin" else ".local/share"
+        return self.home / data / "harness-talk/mail.sqlite3"
+
     # Environment and invocation
 
     def environment(self, extra=None):
@@ -422,10 +467,26 @@ class HtalkCase(unittest.TestCase):
 
     # Registration
 
-    def add_peer(self, name, harness="claude", session=None, workspace=None, *options, code=0):
+    def need_native(self):
+        """Ends a test of Codex or Claude Code delivery on a system that has no port of it."""
+        if not native_clients():
+            self.skipTest("native delivery to Codex and Claude Code is not ported to this system")
+
+    def peer_words(self, name, harness=None, session=None, workspace=None, *options):
+        """The words that register a peer. Without a harness it is any peer the system can register: a Claude
+        peer that no live session backs, or a pull peer where Claude Code delivery is not ported. `any_peer`
+        names what differs between the two."""
+        if harness is None and not (native_clients() or session or workspace or options):
+            return ["peer", "add", name, "--harness", "claude", "--delivery", "pull"]
+        harness = harness or "claude"
+        if harness != "opencode":
+            self.need_native()
         session = session or ("ses_" + uuid.uuid4().hex if harness == "opencode" else str(uuid.uuid4()))
-        return self.htalk("peer", "add", name, "--harness", harness, "--session", session,
-                          "--workspace", str(workspace or self.work), *options, code=code)
+        return ["peer", "add", name, "--harness", harness, "--session", session,
+                "--workspace", str(workspace or self.work), *options]
+
+    def add_peer(self, name, harness=None, session=None, workspace=None, *options, **run):
+        return self.htalk(*self.peer_words(name, harness, session, workspace, *options), **run)
 
     def claude_recipient(self, name, workspace=None):
         """A registered Claude peer that the fake `claude agents --json` reports as live."""
@@ -451,6 +512,7 @@ class HtalkCase(unittest.TestCase):
 
     def native_claude(self, session_id, workspace=None, **metadata):
         """Environment for an htalk command run directly by this test process acting as Claude Code."""
+        self.need_native()
         pid = os.getpid()
         saved = {"pid": pid, "sessionId": session_id, "procStart": process_start(pid),
                  "cwd": str(workspace or self.work), "messagingSocketPath": str(self.tmp / "unused.sock"), **metadata}
