@@ -84,9 +84,11 @@ def measure(box, kind, senders, rounds):
                 again = box.run_raw(*words)
                 code, answer, repeats = again.code, again.json, repeats + 1
             created += code == 0 and answer["created"] is True
-        rows = [row[0] for row in box.sql("SELECT id FROM messages") if row[0] in set(ids)]
-        lost += len(set(ids) - set(rows))
-        doubled += len(rows) - len(set(rows)) + max(0, created - len(set(ids)))
+        # Counted by body, so a second copy saved under another id is seen too.
+        wanted = {"Message " + chosen for chosen in ids}
+        saved = [row[0] for row in box.sql("SELECT body FROM messages") if row[0] in wanted]
+        lost += len(wanted - set(saved))
+        doubled += len(saved) - len(set(saved)) + max(0, created - len(wanted))
     codes = sorted({code for code, _, _ in first})
     seconds = [taken for _, taken, _ in first]
     return (kind, senders, len(first), " ".join("%d×%d" % (code, sum(c == code for c, _, _ in first)) for code in codes),
