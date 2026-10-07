@@ -3,7 +3,7 @@
 use super::{rpc::Rpc, state};
 use crate::{
     discovery::{address, lossy, source},
-    error::Failure,
+    error::Error,
     model::Found,
     os, validate,
 };
@@ -31,7 +31,7 @@ pub(super) fn discover(sockets: Option<&[String]>) -> Found {
 }
 
 /// One JSON RPC call on a connected Codex app-server.
-pub type Call<'a> = Box<dyn FnMut(&str, Value) -> Result<Value, Failure> + 'a>;
+pub type Call<'a> = Box<dyn FnMut(&str, Value) -> Result<Value, Error> + 'a>;
 
 const PAGE_LIMIT: u64 = 100;
 const MAX_IDS: usize = 200;
@@ -42,22 +42,22 @@ pub fn default_socket() -> PathBuf {
     state::codex_home().join("app-server-control/app-server-control.sock")
 }
 
-fn invalid_table() -> Failure {
-    Failure::coded("invalid_lock_table")
+fn invalid_table() -> Error {
+    Error::code("invalid_lock_table")
 }
 
-fn int(text: &str, radix: u32) -> Result<i64, Failure> {
+fn int(text: &str, radix: u32) -> Result<i64, Error> {
     i64::from_str_radix(text, radix).map_err(|_| invalid_table())
 }
 
 /// Undecodable text aborts the query.
-fn column(value: ValueRef<'_>) -> Result<Value, Failure> {
+fn column(value: ValueRef<'_>) -> Result<Value, Error> {
     Ok(match value {
         ValueRef::Null => Value::Null,
         ValueRef::Integer(i) => json!(i),
         ValueRef::Real(f) => json!(f),
         ValueRef::Text(t) => {
-            json!(std::str::from_utf8(t).map_err(|_| Failure::INVALID_UTF8)?)
+            json!(std::str::from_utf8(t).map_err(|_| Error::invalid_utf8())?)
         }
         ValueRef::Blob(_) => json!({"blob": true}),
     })
@@ -68,7 +68,7 @@ fn column(value: ValueRef<'_>) -> Result<Value, Failure> {
 pub fn writers(
     directory: &Path,
     lock_table: &Path,
-    state_path: impl FnOnce() -> Result<PathBuf, Failure>,
+    state_path: impl FnOnce() -> Result<PathBuf, Error>,
 ) -> Found {
     let mut src = source(
         json!({"harness": "codex", "source": "codex_writer_locks", "status": "ok",
@@ -84,7 +84,7 @@ pub fn writers(
                 "partial"
             }),
         );
-        src.insert("detail".into(), json!(failure.code()));
+        src.insert("detail".into(), json!(failure.client().fixed()));
     }
     Found {
         sessions,
@@ -95,10 +95,10 @@ pub fn writers(
 fn scan_writers(
     directory: &Path,
     lock_table: &Path,
-    state_path: impl FnOnce() -> Result<PathBuf, Failure>,
+    state_path: impl FnOnce() -> Result<PathBuf, Error>,
     src: &mut Map<String, Value>,
     sessions: &mut Vec<Value>,
-) -> Result<(), Failure> {
+) -> Result<(), Error> {
     let mut files: HashMap<(u64, u64, u64), String> = HashMap::new();
     for entry in std::fs::read_dir(directory)? {
         let path = entry?.path();
@@ -157,7 +157,7 @@ fn scan_writers(
     }
     let metadata = state_path()?;
     if !metadata.is_absolute() {
-        return Err(Failure::INVALID_DATA);
+        return Err(Error::invalid_data());
     }
     let db = rusqlite::Connection::open_with_flags(
         &metadata,
@@ -177,7 +177,7 @@ fn scan_writers(
         };
         let values = (0..4)
             .map(|i| column(row.get_ref(i)?))
-            .collect::<Result<Vec<_>, Failure>>()?;
+            .collect::<Result<Vec<_>, Error>>()?;
         let unarchived = values[2].as_f64().is_some_and(|a| a == 0.0);
         if !unarchived || values[3] != "cli" {
             continue;
@@ -203,25 +203,23 @@ fn scan_writers(
 
 /// Whether a failure is one bad record, where a failed transport, a timeout or a scan limit
 /// ends the whole source.
-fn per_record(failure: &Failure) -> bool {
-    match failure {
-        Failure::Coded(code) => !matches!(
-            code.as_ref(),
+fn per_record(failure: &Error) -> bool {
+    !failure.system()
+        && !matches!(
+            failure.fixed(),
             "codex_websocket_failure"
                 | "codex_rpc_timeout"
                 | "codex_rpc_closed"
                 | "codex_discovery_limit"
                 | "codex_discovery_time_limit"
-        ),
-        Failure::System(_) => false,
-    }
+        )
 }
 
-fn reject() -> Failure {
-    Failure::INVALID_DATA
+fn reject() -> Error {
+    Error::invalid_data()
 }
 
-fn connect(path: &Path) -> Result<Call<'static>, Failure> {
+fn connect(path: &Path) -> Result<Call<'static>, Error> {
     os::owned_socket(path)?;
     let mut rpc = Rpc::connect_unix(path)?;
     Ok(Box::new(move |method, params| rpc.call(method, params)))
@@ -230,7 +228,7 @@ fn connect(path: &Path) -> Result<Call<'static>, Failure> {
 /// Page `thread/loaded/list` on each distinct app-server socket; `connect` is the transport.
 pub fn app_servers(
     paths: &[String],
-    connect: &dyn Fn(&Path) -> Result<Call<'static>, Failure>,
+    connect: &dyn Fn(&Path) -> Result<Call<'static>, Error>,
 ) -> Found {
     let mut found = Found::default();
     let mut unique: Vec<String> = Vec::new();
@@ -280,14 +278,14 @@ fn scan_loaded(
     socket: &str,
     sessions: &mut Vec<Value>,
     count: &mut usize,
-) -> Result<usize, Failure> {
+) -> Result<usize, Error> {
     let deadline = Instant::now() + SCAN_BUDGET;
     let (mut cursor, mut seen_cursors, mut seen_ids) =
         (Value::Null, HashSet::new(), HashSet::new());
     let mut rejected = 0;
     loop {
         if Instant::now() >= deadline {
-            return Err(Failure::coded("codex_discovery_time_limit"));
+            return Err(Error::code("codex_discovery_time_limit"));
         }
         let page = call(
             "thread/loaded/list",
@@ -298,11 +296,11 @@ fn scan_loaded(
             .and_then(Value::as_array)
             .filter(|_| page.is_object())
         else {
-            return Err(Failure::coded("invalid_loaded_threads_response"));
+            return Err(Error::code("invalid_loaded_threads_response"));
         };
         for item in data {
             if seen_ids.len() >= MAX_IDS || Instant::now() >= deadline {
-                return Err(Failure::coded("codex_discovery_limit"));
+                return Err(Error::code("codex_discovery_limit"));
             }
             let Some(ident) = item.as_str().and_then(|s| validate::uuid(s).ok()) else {
                 rejected += 1;
@@ -325,18 +323,18 @@ fn scan_loaded(
             None | Some(Value::Null) => break,
             Some(Value::String(next)) if !seen_cursors.contains(next) => {
                 if seen_cursors.len() >= MAX_CURSORS {
-                    return Err(Failure::coded("codex_discovery_limit"));
+                    return Err(Error::code("codex_discovery_limit"));
                 }
                 seen_cursors.insert(next.clone());
                 cursor = json!(next);
             }
-            Some(_) => return Err(Failure::coded("invalid_discovery_cursor")),
+            Some(_) => return Err(Error::code("invalid_discovery_cursor")),
         }
     }
     Ok(rejected)
 }
 
-fn loaded_thread(call: &mut Call<'_>, ident: &str, socket: &str) -> Result<Option<Value>, Failure> {
+fn loaded_thread(call: &mut Call<'_>, ident: &str, socket: &str) -> Result<Option<Value>, Error> {
     let result = call(
         "thread/read",
         json!({"threadId": ident, "includeTurns": false}),

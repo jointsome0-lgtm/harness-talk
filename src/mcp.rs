@@ -192,7 +192,12 @@ impl Server {
     }
 }
 
-const OUTSIDE: &str = "Use mailbox commands or peer list/check. Identity, database, registration, files and receivers are configured outside this tool. For a recovery command, omit htalk --db PATH --as NAME and pass only the command and its arguments.";
+/// What the MCP tool answers to a call outside its scope. `what` names the part it refuses.
+fn refused(what: &str) -> String {
+    format!(
+        "{what} is not available through this tool. Use mailbox commands or peer list/check. Identity, database, registration, files and receivers are configured outside this tool. For a recovery command, omit htalk --db PATH --as NAME and pass only the command and its arguments."
+    )
+}
 
 pub(crate) fn error(message: impl Into<String>) -> CallToolResult {
     CallToolResult::error(vec![ContentBlock::text(message.into())])
@@ -231,17 +236,17 @@ impl Server {
         };
         // The command table says which commands this tool runs.
         let command = match cli {
+            Cli { db: Some(_), .. } => return error(refused("--db")),
+            Cli { actor: Some(_), .. } => return error(refused("--as")),
             Cli {
-                db: None,
-                actor: None,
                 command: Table::Mailbox(command),
                 ..
             } => command,
-            _ => return error(OUTSIDE),
+            _ => return error(refused("mcp, receive or catalog")),
         };
         match command.over_mcp() {
             OverMcp::Run => {}
-            OverMcp::Refuse => return error(OUTSIDE),
+            OverMcp::Refuse(what) => return error(refused(what)),
             OverMcp::NeedsId => {
                 return error(
                     "send requires --id YOUR_NEW_UUID. Keep it and reuse the same ID/body after cancellation or disconnect; inspect sent/show before repeating work.",

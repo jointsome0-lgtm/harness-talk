@@ -1,6 +1,6 @@
 use crate::{
     adapters::{Adapter, adapter},
-    error::Failure,
+    error::Error,
     model::*,
     os, validate,
 };
@@ -49,7 +49,7 @@ pub fn dismiss(peer: &Peer, message: &Message) -> Cleanup {
     }
     adapter.dismiss(&peer, message)
 }
-pub fn probe(peer: &Peer) -> Result<Value, Failure> {
+pub fn probe(peer: &Peer) -> Result<Value, Error> {
     if peer.delivery == Delivery::Pull {
         return Ok(
             json!({"name":peer.name, "harness":peer.harness, "delivery":"pull",
@@ -57,28 +57,29 @@ pub fn probe(peer: &Peer) -> Result<Value, Failure> {
         );
     }
     let (adapter, peer) = native_address(peer)?;
-    adapter.probe(&peer)
+    // Below a client only the fixed code is told, not the system's sentence.
+    adapter.probe(&peer).map_err(|e| Error::code(e.to_string()))
 }
 
 /// The mailbox can read any harness ID; only native delivery needs a known adapter.
-fn native_address(peer: &Peer) -> Result<(&'static dyn Adapter, NativePeer), Failure> {
+fn native_address(peer: &Peer) -> Result<(&'static dyn Adapter, NativePeer), Error> {
     if peer.delivery == Delivery::Pull {
-        return Err(Failure::coded("pull_only"));
+        return Err(Error::code("pull_only"));
     }
     let harness = peer
         .harness
         .parse()
-        .map_err(|_| Failure::coded("adapter_unavailable"))?;
+        .map_err(|_| Error::code("adapter_unavailable"))?;
     let address = NativePeer {
         name: peer.name.clone(),
         session_id: peer
             .session_id
             .clone()
-            .ok_or_else(|| Failure::coded("invalid_native_address"))?,
+            .ok_or_else(|| Error::code("invalid_native_address"))?,
         workspace: peer
             .workspace
             .clone()
-            .ok_or_else(|| Failure::coded("invalid_native_address"))?,
+            .ok_or_else(|| Error::code("invalid_native_address"))?,
         socket: peer.socket.clone(),
         url: peer.url.clone(),
         retired_at: peer.retired_at,

@@ -1,6 +1,6 @@
 //! Bounded JSON RPC to a Codex app-server over its Unix WebSocket or a temporary stdio process.
 use crate::{
-    error::Failure,
+    error::Error,
     os::{self, Grouped, OwnedGroup, connect_unix, owned_socket},
 };
 use serde::{Deserialize, Serialize};
@@ -30,7 +30,7 @@ pub(crate) struct BoundSocket {
 }
 
 impl BoundSocket {
-    pub(crate) fn capture(path: PathBuf) -> Result<Self, Failure> {
+    pub(crate) fn capture(path: PathBuf) -> Result<Self, Error> {
         let path = owned_socket(&path)?;
         let meta = std::fs::metadata(&path)?;
         let ((device, inode), (changed_seconds, changed_nanos)) =
@@ -44,9 +44,9 @@ impl BoundSocket {
         })
     }
 
-    pub(crate) fn check(&self) -> Result<(), Failure> {
+    pub(crate) fn check(&self) -> Result<(), Error> {
         if Self::capture(self.path.clone())? != *self {
-            return Err(Failure::coded("codex_server_socket_changed"));
+            return Err(Error::code("codex_server_socket_changed"));
         }
         Ok(())
     }
@@ -74,20 +74,20 @@ struct StdioProcess {
     buffer: Vec<u8>,
 }
 
-fn websocket_failure() -> Failure {
-    Failure::coded("codex_websocket_failure")
+fn websocket_failure() -> Error {
+    Error::code("codex_websocket_failure")
 }
 
-fn timeout() -> Failure {
-    Failure::coded("codex_rpc_timeout")
+fn timeout() -> Error {
+    Error::code("codex_rpc_timeout")
 }
 
-fn invalid_response() -> Failure {
-    Failure::coded("codex_rpc_invalid_response")
+fn invalid_response() -> Error {
+    Error::code("codex_rpc_invalid_response")
 }
 
 /// A failure of the stream under a call: an expired deadline is the call's timeout.
-fn stream_failure(error: std::io::Error) -> Failure {
+fn stream_failure(error: std::io::Error) -> Error {
     match error.kind() {
         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => timeout(),
         _ => error.into(),
@@ -96,15 +96,15 @@ fn stream_failure(error: std::io::Error) -> Failure {
 
 impl Rpc {
     /// Connect to an owned Unix socket without compression and initialize the protocol.
-    pub fn connect_unix(path: &Path) -> Result<Self, Failure> {
+    pub fn connect_unix(path: &Path) -> Result<Self, Error> {
         Self::connect_unix_checked(path, None)
     }
 
-    pub(crate) fn connect_bound(socket: &BoundSocket) -> Result<Self, Failure> {
+    pub(crate) fn connect_bound(socket: &BoundSocket) -> Result<Self, Error> {
         Self::connect_unix_checked(&socket.path, Some(socket))
     }
 
-    fn connect_unix_checked(path: &Path, bound: Option<&BoundSocket>) -> Result<Self, Failure> {
+    fn connect_unix_checked(path: &Path, bound: Option<&BoundSocket>) -> Result<Self, Error> {
         let path = owned_socket(path)?;
         if let Some(bound) = bound {
             bound.check()?;
@@ -136,7 +136,7 @@ impl Rpc {
 
     /// Start `codex app-server --stdio` with the user's normal configuration and initialize it.
     /// No thread is started or resumed.
-    pub fn spawn_stdio() -> Result<Self, Failure> {
+    pub fn spawn_stdio() -> Result<Self, Error> {
         let mut child = Command::new("codex")
             .args(["app-server", "--stdio"])
             .stdin(Pipe::piped())
@@ -154,7 +154,7 @@ impl Rpc {
                 while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
                     thread::sleep(Duration::from_millis(10));
                 }
-                return Err(Failure::coded("codex_stdio_cleanup_ownership_unavailable"));
+                return Err(Error::code("codex_stdio_cleanup_ownership_unavailable"));
             }
         };
         let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) else {
@@ -163,7 +163,7 @@ impl Rpc {
             } else {
                 let _ = group.kill_leader();
             }
-            return Err(Failure::coded("codex_stdio_cleanup_unconfirmed"));
+            return Err(Error::code("codex_stdio_cleanup_unconfirmed"));
         };
         let mut rpc = Self {
             connection: Connection::Stdio(StdioProcess {
@@ -187,7 +187,7 @@ impl Rpc {
     /// keeps only an integer RPC code, never the server's message. One ten-second
     /// deadline covers request writing and response reading. A failed write may be partial;
     /// callers must preserve submission uncertainty and must not replay it.
-    pub fn call(&mut self, method: &str, params: Value) -> Result<Value, Failure> {
+    pub fn call(&mut self, method: &str, params: Value) -> Result<Value, Error> {
         self.call_until(method, params, Instant::now() + CALL_TIMEOUT)
     }
 
@@ -196,9 +196,9 @@ impl Rpc {
         method: &str,
         params: Value,
         deadline: Instant,
-    ) -> Result<Value, Failure> {
+    ) -> Result<Value, Error> {
         if self.closing {
-            return Err(Failure::coded("codex_rpc_closed"));
+            return Err(Error::code("codex_rpc_closed"));
         }
         self.counter += 1;
         self.write(
@@ -222,7 +222,7 @@ impl Rpc {
                             Value::Number(n) if n.is_i64() || n.is_u64() => Some(n.to_string()),
                             _ => None,
                         });
-                return Err(Failure::coded(match code {
+                return Err(Error::code(match code {
                     Some(code) => format!("codex_rpc_rejected:{code}"),
                     None => "codex_rpc_rejected".to_string(),
                 }));
@@ -242,7 +242,7 @@ impl Rpc {
     /// required; descendants that leave the private group are outside this contract.
     /// Socket cleanup closes the local stream after at most one second of close I/O;
     /// it does not confirm remote consumption of any request.
-    pub fn close(&mut self) -> Result<(), Failure> {
+    pub fn close(&mut self) -> Result<(), Error> {
         let first_attempt = !self.closing;
         self.closing = true;
         match &mut self.connection {
@@ -261,7 +261,7 @@ impl Rpc {
         Ok(())
     }
 
-    fn initialize(&mut self) -> Result<(), Failure> {
+    fn initialize(&mut self) -> Result<(), Error> {
         self.call(
             "initialize",
             json!({"clientInfo": {"name": "harness-talk", "version": env!("CARGO_PKG_VERSION")},
@@ -273,10 +273,10 @@ impl Rpc {
         )
     }
 
-    fn write(&mut self, frame: &Value, deadline: Instant) -> Result<(), Failure> {
+    fn write(&mut self, frame: &Value, deadline: Instant) -> Result<(), Error> {
         let text = frame.to_string();
         match &mut self.connection {
-            Connection::Closed => Err(Failure::coded("codex_rpc_closed")),
+            Connection::Closed => Err(Error::code("codex_rpc_closed")),
             Connection::Socket(socket) => {
                 socket.get_mut().deadline = deadline;
                 socket
@@ -297,9 +297,9 @@ impl Rpc {
         }
     }
 
-    fn recv(&mut self, deadline: Instant) -> Result<String, Failure> {
+    fn recv(&mut self, deadline: Instant) -> Result<String, Error> {
         match &mut self.connection {
-            Connection::Closed => Err(Failure::coded("codex_rpc_closed")),
+            Connection::Closed => Err(Error::code("codex_rpc_closed")),
             Connection::Socket(socket) => {
                 socket.get_mut().deadline = deadline;
                 loop {
@@ -387,8 +387,8 @@ fn poll_until(io: &impl os::Descriptor, writable: bool, deadline: Instant) -> st
 }
 
 impl StdioProcess {
-    fn write(&mut self, mut bytes: &[u8], deadline: Instant) -> Result<(), Failure> {
-        let closed = || Failure::coded("codex_rpc_closed");
+    fn write(&mut self, mut bytes: &[u8], deadline: Instant) -> Result<(), Error> {
+        let closed = || Error::code("codex_rpc_closed");
         let stdin = self.stdin.as_mut().ok_or_else(closed)?;
         while !bytes.is_empty() {
             remaining(deadline).ok_or_else(timeout)?;
@@ -406,11 +406,11 @@ impl StdioProcess {
     }
 
     /// Bounded newline framing for the local app-server process.
-    fn recv(&mut self, deadline: Instant) -> Result<String, Failure> {
+    fn recv(&mut self, deadline: Instant) -> Result<String, Error> {
         remaining(deadline).ok_or_else(timeout)?;
         while !self.buffer.contains(&b'\n') {
             if self.buffer.len() >= FRAME_LIMIT {
-                return Err(Failure::coded("codex_rpc_frame_too_large"));
+                return Err(Error::code("codex_rpc_frame_too_large"));
             }
             poll_until(&self.stdout, false, deadline).map_err(stream_failure)?;
             let mut chunk = vec![0; 65536];
@@ -420,22 +420,22 @@ impl StdioProcess {
                 Err(error) => return Err(error.into()),
             };
             if count == 0 {
-                return Err(Failure::coded("codex_rpc_closed"));
+                return Err(Error::code("codex_rpc_closed"));
             }
             self.buffer.extend_from_slice(&chunk[..count]);
         }
         let Some(end) = self.buffer.iter().position(|b| *b == b'\n') else {
-            return Err(Failure::OS_ERROR);
+            return Err(Error::System("os_error"));
         };
         let mut line: Vec<u8> = self.buffer.drain(..=end).collect();
         line.pop();
         if line.len() > FRAME_LIMIT {
-            return Err(Failure::coded("codex_rpc_frame_too_large"));
+            return Err(Error::code("codex_rpc_frame_too_large"));
         }
         String::from_utf8(line).map_err(|_| invalid_response())
     }
 
-    fn close(&mut self, grace: bool) -> Result<(), Failure> {
+    fn close(&mut self, grace: bool) -> Result<(), Error> {
         drop(self.stdin.take());
         let cleanup = (|| -> std::io::Result<()> {
             if grace {
@@ -453,7 +453,7 @@ impl StdioProcess {
             self.child.wait()?;
             Ok(())
         })();
-        cleanup.map_err(|_| Failure::coded("codex_stdio_cleanup_unconfirmed"))
+        cleanup.map_err(|_| Error::code("codex_stdio_cleanup_unconfirmed"))
     }
 }
 

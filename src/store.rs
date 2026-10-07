@@ -1,6 +1,6 @@
 //! One shared database. Reading never acknowledges or sends anything.
 use crate::{
-    error::{Error, Failure},
+    error::Error,
     model::*,
     os::{self, Open},
     validate,
@@ -33,7 +33,7 @@ pub struct Store {
     create: bool,
 }
 
-fn code(c: &str) -> Error {
+fn code(c: &'static str) -> Error {
     Error::code(c)
 }
 
@@ -726,10 +726,10 @@ impl Store {
 
 /// Only fixed codes leave the store with a notification: its own, or that its state could
 /// not be read.
-fn fixed(e: Error) -> Failure {
+fn fixed(e: Error) -> Error {
     match e {
-        Error::Code(code) => Failure::coded(code),
-        _ => Failure::coded("notification_state_unavailable"),
+        Error::Code(_) => e,
+        _ => Error::code("notification_state_unavailable"),
     }
 }
 
@@ -739,7 +739,7 @@ pub fn skip_reason_readonly(
     db: &Path,
     message_id: &str,
     recipient: &str,
-) -> Result<Option<SkipReason>, Failure> {
+) -> Result<Option<SkipReason>, Error> {
     let conn = Connection::open_with_flags(
         os::resolve(db),
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,

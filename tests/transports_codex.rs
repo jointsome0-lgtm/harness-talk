@@ -3,7 +3,7 @@
 use harness_talk::model::NativePeer as Peer;
 use harness_talk::{
     adapters::codex::{self, rpc::Rpc, state},
-    error::Failure,
+    error::Error,
     model::*,
 };
 use serde_json::{Value, json};
@@ -135,16 +135,16 @@ fn mark(db: &Path, id: &str, column: &str) {
         .unwrap();
 }
 
-fn read_skip(db: &Path, id: &str) -> Result<Option<SkipReason>, Failure> {
+fn read_skip(db: &Path, id: &str) -> Result<Option<SkipReason>, Error> {
     let db = rusqlite::Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|_| Failure::coded("notification_state_unavailable"))?;
+        .map_err(|_| Error::code("notification_state_unavailable"))?;
     let (ack, returned): (i64, i64) = db
         .query_row(
             "SELECT ack, returned FROM messages WHERE id=?1",
             [id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
-        .map_err(|_| Failure::coded("notification_state_unavailable"))?;
+        .map_err(|_| Error::code("notification_state_unavailable"))?;
     Ok(if ack != 0 {
         Some(SkipReason::AcknowledgedBeforeNotification)
     } else if returned != 0 {
@@ -1074,12 +1074,12 @@ fn saved_identity_follows_configuration_precedence() {
     );
     fs::write(home.join("config.toml"), "sqlite_home = 5\n").unwrap();
     assert_eq!(
-        Failure::coded("invalid_codex_config"),
+        Error::code("invalid_codex_config"),
         state::state_path().unwrap_err()
     );
     fs::write(home.join("config.toml"), "sqlite_home = [\n").unwrap();
     assert_eq!(
-        Failure::coded("invalid_codex_config"),
+        Error::code("invalid_codex_config"),
         state::state_path().unwrap_err()
     );
 
@@ -1124,7 +1124,7 @@ fn saved_identity_follows_configuration_precedence() {
     fs::remove_file(&alias).unwrap();
     std::os::unix::fs::symlink(&configured, &alias).unwrap();
     assert_eq!(
-        Failure::coded("recipient_identity_changed"),
+        Error::code("recipient_identity_changed"),
         codex::probe(&peer).unwrap_err()
     );
 }
@@ -1241,7 +1241,7 @@ fn public_stdio_call_deadline_includes_a_backpressured_write() {
     let started = Instant::now();
     assert_eq!(
         rpc.call("owned/backpressure", params).unwrap_err(),
-        Failure::coded("codex_rpc_timeout")
+        Error::code("codex_rpc_timeout")
     );
     let elapsed = started.elapsed();
     assert!(elapsed >= Duration::from_secs(9));
@@ -1346,7 +1346,7 @@ fn check_stdio_descendant_cleanup(explicit_close: bool) {
             rpc.close().unwrap();
             assert_eq!(
                 rpc.call("owned/after-close", json!({})).unwrap_err(),
-                Failure::coded("codex_rpc_closed")
+                Error::code("codex_rpc_closed")
             );
             rpc.close().unwrap();
         }

@@ -1,6 +1,6 @@
 //! The installed Codex CLI's saved thread addresses, read without starting a client.
 use crate::{
-    error::Failure,
+    error::Error,
     os::{self, errno},
 };
 use rusqlite::{Connection, OpenFlags, types::ValueRef};
@@ -21,7 +21,7 @@ pub fn codex_home() -> PathBuf {
 }
 
 /// `state_5.sqlite` under the user-level `sqlite_home` setting, then `CODEX_SQLITE_HOME`, then `$CODEX_HOME`.
-pub fn state_path() -> Result<PathBuf, Failure> {
+pub fn state_path() -> Result<PathBuf, Error> {
     let home = codex_home();
     let configured = match read_config(&home.join("config.toml"))? {
         Some(config) => match config.get("sqlite_home") {
@@ -60,14 +60,18 @@ pub fn state_path() -> Result<PathBuf, Failure> {
 ///
 /// A non-text `id` becomes an empty string and a BLOB `cwd` or `source` becomes null, so
 /// neither can match a registered address. A non-integer `archived` is 0 only for a zero REAL.
-pub fn saved_thread(id: &str) -> Result<Option<(String, Value, i64, Value)>, Failure> {
+pub fn saved_thread(id: &str) -> Result<Option<(String, Value, i64, Value)>, Error> {
     saved_thread_at(&state_path()?, id)
 }
 
 pub(crate) fn saved_thread_at(
     path: &Path,
     id: &str,
-) -> Result<Option<(String, Value, i64, Value)>, Failure> {
+) -> Result<Option<(String, Value, i64, Value)>, Error> {
+    read_thread(path, id).map_err(Error::client)
+}
+
+fn read_thread(path: &Path, id: &str) -> Result<Option<(String, Value, i64, Value)>, Error> {
     let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX;
     let db = Connection::open_with_flags(path, flags)?;
     db.busy_timeout(Duration::from_secs(3))?;
@@ -76,13 +80,13 @@ pub(crate) fn saved_thread_at(
     let Some(row) = rows.next()? else {
         return Ok(None);
     };
-    let text = |i: usize| -> Result<Value, Failure> {
+    let text = |i: usize| -> Result<Value, Error> {
         Ok(match row.get_ref(i)? {
             ValueRef::Null | ValueRef::Blob(_) => Value::Null,
             ValueRef::Integer(n) => Value::from(n),
             ValueRef::Real(f) => serde_json::Number::from_f64(f).map_or(Value::Null, Value::Number),
             ValueRef::Text(bytes) => {
-                Value::String(String::from_utf8(bytes.to_vec()).map_err(|_| Failure::INVALID_UTF8)?)
+                Value::String(String::from_utf8(bytes.to_vec()).map_err(|_| Error::invalid_utf8())?)
             }
         })
     };
@@ -98,7 +102,7 @@ pub(crate) fn saved_thread_at(
     Ok(Some((ident, text(1)?, archived, text(3)?)))
 }
 
-fn read_config(path: &Path) -> Result<Option<toml::Table>, Failure> {
+fn read_config(path: &Path) -> Result<Option<toml::Table>, Error> {
     // Like Path.exists(): a missing entry or a non-directory parent means no configuration.
     if let Err(error) = fs::metadata(path) {
         return match error.raw_os_error() {
@@ -111,8 +115,8 @@ fn read_config(path: &Path) -> Result<Option<toml::Table>, Failure> {
     text.parse().map(Some).map_err(|_| invalid_config())
 }
 
-fn invalid_config() -> Failure {
-    Failure::coded("invalid_codex_config")
+fn invalid_config() -> Error {
+    Error::code("invalid_codex_config")
 }
 
 fn truthy(value: &toml::Value) -> bool {

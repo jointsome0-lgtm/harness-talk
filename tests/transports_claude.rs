@@ -1,7 +1,7 @@
 //! Claude transport against real fixtures: a fake `claude agents --json`, session metadata in
 //! a fake HOME, and a Unix listener standing in for the messaging socket.
 use harness_talk::model::NativePeer as Peer;
-use harness_talk::{adapters::claude, error::Failure, model::*};
+use harness_talk::{adapters::claude, error::Error, model::*};
 use serde_json::{Value, json};
 use std::{
     ffi::OsString,
@@ -318,7 +318,7 @@ fn symlinked_workspace_matches_only_its_registered_target() {
     fs::remove_file(&alias).unwrap();
     std::os::unix::fs::symlink(&fixture.dir, &alias).unwrap();
     assert_eq!(
-        Failure::coded("recipient_unavailable"),
+        Error::code("recipient_unavailable"),
         claude::live_socket(&fixture.peer()).unwrap_err()
     );
 }

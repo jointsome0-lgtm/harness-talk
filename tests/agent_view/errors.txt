@@ -1,18 +1,18 @@
 # Fixed codes, read from the source text, and what a failed command returns.
 #
-# The lists hold every string literal inside a call that raises an error code
-# (Error::code) or that carries a detail (a Failure, a notification outcome, a cleanup
-# detail). Values the source spells another way, such as a skipped notice's reason,
-# appear in the entries below and in results.txt, not in the lists.
+# The list holds every string literal inside a call that carries a code (Error::code,
+# Error::System, a notification outcome, a cleanup detail) and the codes src/error.rs
+# gives to a failure of the system. Values the source spells another way, such as a
+# skipped notice's reason, appear in the entries below and in results.txt.
 #
 # A code appears as error in a command's error result, or as a detail:
 # notification_detail, notification_cleanup.detail, a discovery source's detail.
-# A failed check returns its detail code as error. Every detail is a fixed code.
+# docs/reference.md has a row for each code, and test_error_table keeps the two equal.
 
-## error codes
+## codes
 actor_conflicts_with_CLAUDE_CODE_SESSION_ID
 actor_conflicts_with_CODEX_THREAD_ID
-badly formed hexadecimal UUID string
+adapter_unavailable
 catalog_ambiguous_profile
 catalog_binding_fixed_omit_db_and_as
 catalog_config_must_be_private_owned_file
@@ -54,6 +54,7 @@ catalog_route_interface_changed
 catalog_sender_binding_changed
 catalog_ssh_not_bound
 catalog_ssh_omit_interface
+catalog_ssh_port_mismatch
 catalog_tailscale_binding_changed
 catalog_tailscale_invalid_binary
 catalog_tailscale_invalid_socket
@@ -67,54 +68,8 @@ catalog_too_many_profiles
 catalog_unknown_profile
 catalog_unreachable
 catalog_writer_active
-claude_socket_is_discovered_from_live_identity
-codex_socket_requires_codex_discovery
-database_backup_failed
-database_foreign_key_violation
-database_integrity_check_failed
-database_not_found
-invalid_arguments
-invalid_database_schema
-invalid_harness_id
-invalid_json
-invalid_notification_result
-invalid_opencode_session_id
-invalid_opencode_url
-invalid_peer_name
-limit_must_be_between_1_and_500
-message_id_conflict
-message_must_be_1_to_32000_bytes
-message_not_addressed_to_peer
-notification_message_not_found
-only_recipient_can_ack
-opencode_url_must_be_loopback
-opencode_url_requires_opencode_discovery
-opencode_uses_a_server_url_not_a_socket
-peer_already_has_a_different_address
-peer_required_use_as_or_HTALK_PEER
-peer_retired
-pull_peer_has_no_native_address
-reply_address_mismatch
-reply_conflict_existing_answer_preserved
-reply_requires_a_request
-sender_and_recipient_must_differ
-seq_cursor_must_be_a_positive_integer
-session_already_has_a_peer_name
-unknown_message
-unknown_peer
-unknown_request
-unsupported_database_version
-unsupported_delivery
-unsupported_harness
-unsupported_unversioned_database
-url_is_only_for_opencode
-wait_requires_own_request
-wait_seconds_must_be_between_0_and_45
-workspace_must_be_a_directory
-
-## detail codes
-adapter_unavailable
 claude_socket_bytes_written
+claude_socket_is_discovered_from_live_identity
 client_database_corrupt
 client_database_unavailable
 client_has_no_notification_removal
@@ -130,6 +85,7 @@ codex_rpc_invalid_response
 codex_rpc_rejected
 codex_rpc_timeout
 codex_server_socket_changed
+codex_socket_requires_codex_discovery
 codex_stdio_cleanup_ownership_unavailable
 codex_stdio_cleanup_unconfirmed
 codex_store_changed
@@ -140,32 +96,61 @@ command_failed
 command_timed_out
 connection_closed
 connection_refused
+database_backup_failed
+database_corrupt
+database_foreign_key_violation
+database_integrity_check_failed
+database_not_found
+database_unavailable
 file_not_found
 interrupted
+invalid_arguments
 invalid_claude_agents_response
 invalid_client_data
 invalid_codex_config
+invalid_database_schema
 invalid_discovery_cursor
+invalid_harness_id
 invalid_json
 invalid_loaded_threads_response
 invalid_lock_table
 invalid_native_address
+invalid_notification_result
 invalid_opencode_credentials
+invalid_opencode_session_id
 invalid_opencode_url
+invalid_peer_name
 invalid_utf8
+invalid_uuid
+limit_must_be_between_1_and_500
+message_id_conflict
+message_must_be_1_to_32000_bytes
 message_not_acknowledged_by_recipient
+message_not_addressed_to_peer
 no_confirmed_queue_receipt
+notification_message_not_found
 notification_state_unavailable
 notification_submission_has_no_completion_receipt
+only_recipient_can_ack
 opencode_invalid_response
+opencode_invalid_saved_metadata
+opencode_invalid_session_records
 opencode_prompt_async_accepted
 opencode_response_too_large
+opencode_saved_metadata_missing
+opencode_saved_session_limit_reached
 opencode_unauthorized
 opencode_unreachable
 opencode_url_must_be_loopback
+opencode_url_requires_opencode_discovery
+opencode_uses_a_server_url_not_a_socket
 os_error
+peer_already_has_a_different_address
+peer_required_use_as_or_HTALK_PEER
+peer_retired
 permission_denied
 pull_only
+pull_peer_has_no_native_address
 recipient_identity_changed
 recipient_is_not_an_unarchived_codex_cli_session
 recipient_not_in_codex_state
@@ -174,7 +159,24 @@ recipient_not_loaded
 recipient_session_archived
 recipient_socket_unavailable
 recipient_unavailable
+reply_address_mismatch
+reply_conflict_existing_answer_preserved
+reply_requires_a_request
+sender_and_recipient_must_differ
+seq_cursor_must_be_a_positive_integer
+session_already_has_a_peer_name
 timed_out
+unknown_message
+unknown_peer
+unknown_request
+unsupported_database_version
+unsupported_delivery
+unsupported_harness
+unsupported_unversioned_database
+url_is_only_for_opencode
+wait_requires_own_request
+wait_seconds_must_be_between_0_and_45
+workspace_must_be_a_directory
 
 ## codes built at run time, {} is the variable part
 codex_cli_queued:{}
@@ -184,8 +186,8 @@ opencode_http_{}
 opencode_saved_{}
 opencode_{}
 
-## error codes with guidance of their own
-# The source names each of them outside the call that raises it.
+## codes with guidance of their own
+# src/guidance.rs names each of them.
 # Every other error code gets one of the two default texts below:
 # 'error, no peer selected' or 'error, peer selected'.
 actor_conflicts_with_CLAUDE_CODE_SESSION_ID
@@ -194,10 +196,12 @@ database_backup_failed
 database_foreign_key_violation
 database_integrity_check_failed
 database_not_found
+interrupted    (no entry below)
 message_id_conflict
 peer_already_has_a_different_address
 peer_required_use_as_or_HTALK_PEER
 peer_retired
+pull_only    (no entry below)
 reply_conflict_existing_answer_preserved
 session_already_has_a_peer_name
 unsupported_harness
@@ -229,7 +233,7 @@ state = "error"
 $ htalk --db DATABASE peer add alice --harness claude --session not-a-uuid --workspace WORKSPACE
 exit 2
 keys: error, next_action, recovery{peers}, state
-error = "badly formed hexadecimal UUID string"
+error = "invalid_uuid"
 next_action = "Check the error and inspect registered addresses with recovery.peers."
 recovery.peers = "htalk --db DATABASE peer list"
 state = "error"
@@ -511,29 +515,33 @@ state = "error"
 ## catalog_publish_requires_db_and_as
 $ htalk catalog publish --config CATALOG eve --name Reviewer --role 'Check requested work'
 exit 2
-keys: error, state
+keys: error, next_action, state
 error = "catalog_publish_requires_db_and_as"
+next_action = "Correct what the error code names and run the command again. htalk catalog --help lists the commands."
 state = "error"
 
 ## a file error
 $ htalk catalog export --config CATALOG
 exit 2
-keys: error, state
-error = "No such file or directory (os error 2)"
+keys: error, next_action, state
+error = "file_not_found"
+next_action = "Correct what the error code names and run the command again. htalk catalog --help lists the commands."
 state = "error"
 
 ## catalog_unknown_profile
 $ htalk catalog unpublish --config CATALOG UNKNOWN_ID
 exit 2
-keys: error, state
+keys: error, next_action, state
 error = "catalog_unknown_profile"
+next_action = "Correct what the error code names and run the command again. htalk catalog --help lists the commands."
 state = "error"
 
 ## catalog_interface_not_found
 $ htalk catalog discover --trust TRUST --interface htalk-missing0 --seconds 1
 exit 2
-keys: error, state
+keys: error, next_action, state
 error = "catalog_interface_not_found"
+next_action = "Correct what the error code names and run the command again. htalk catalog --help lists the commands."
 state = "error"
 
 # Answers on stderr. Nothing is printed on stdout.
@@ -577,7 +585,7 @@ stderr:
 $ htalk --db DATABASE mcp
 exit 2
 stderr:
-  htalk mcp requires --as NAME or HTALK_PEER: invalid_peer_name
+  htalk mcp requires --as NAME or HTALK_PEER: peer_required_use_as_or_HTALK_PEER
 
 ## mcp --connect with a local mailbox
 $ htalk --db DATABASE mcp --connect -- true

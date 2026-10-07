@@ -5,7 +5,7 @@ mod fixture;
 
 use fixture::{Fake, session};
 use harness_talk::model::NativePeer as Peer;
-use harness_talk::{adapters::opencode, error::Failure, model::*};
+use harness_talk::{adapters::opencode, error::Error, model::*};
 use serde_json::json;
 use std::{
     io::{BufRead, BufReader, Read},
@@ -77,7 +77,7 @@ fn set(name: &str, value: impl AsRef<std::ffi::OsStr>) {
 fn unset(name: &str) {
     unsafe { std::env::remove_var(name) }
 }
-fn no_skip() -> Result<Option<SkipReason>, Failure> {
+fn no_skip() -> Result<Option<SkipReason>, Error> {
     Ok(None)
 }
 

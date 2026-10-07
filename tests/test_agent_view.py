@@ -47,9 +47,11 @@ TOKEN = re.compile(r"""//[^\n]*|/\*.*?\*/|(?<!\w)b?r(#*)"(.*?)"\1|b?"((?:[^"\\]|
 ESCAPE = re.compile(r"\\(?:\n\s*|x([0-9a-fA-F]{2})|u\{([0-9a-fA-F_]+)\}|(.))", re.S)
 UNESCAPED = {"n": "\n", "t": "\t", "r": "\r", "0": "\0"}
 TEST_ONLY = re.compile(r"#\[cfg\((?:test|all\((?![^\]]*\bnot\(\s*test\b)[^\]]*\btest\b[^\]]*\))\)\]")
-# Error::code(...), Self::code(...) and a module's own code(...); then the calls that carry a detail.
-RAISED = re.compile(r"(?<![.\w])(?:\w+::)*code\(")
-DETAILED = re.compile(r"(?<![.\w])(?:\w+::)*coded\(|\b(?:Self|Failure)::(?:Coded|System)\(|\bOutcome::\w+\(|\.detail\(")
+# Error::code(...), Self::code(...) and a module's own code(...); then the other calls that carry a code.
+CODED = re.compile(r"(?<![.\w])(?:\w+::)*code\(|\b(?:Self|Error)::System\(|\bOutcome::\w+\(|\.detail\(|\breject\(")
+# What stands between the key of a JSON answer and a value written in place.
+KEYED = ("]=json!(", ":")
+CODE = re.compile(r"[a-z][a-z0-9_]*")
 RUNTIME_CODE = re.compile(r"[a-z]+_[a-z_]*:?\{[^}]*\}")
 # A text is a literal of two or more words, one of them a plain word, that is not SQL (a statement, a
 # clause or a ? placeholder), a panic message or a pattern.
@@ -365,30 +367,36 @@ class AgentView(HtalkCase):
         entries, scanned = self.lines, self.scan_codes()
         text = ["# Fixed codes, read from the source text, and what a failed command returns.",
                 "#",
-                "# The lists hold every string literal inside a call that raises an error code",
-                "# (Error::code) or that carries a detail (a Failure, a notification outcome, a cleanup",
-                "# detail). Values the source spells another way, such as a skipped notice's reason,",
-                "# appear in the entries below and in results.txt, not in the lists.",
+                "# The list holds every string literal inside a call that carries a code (Error::code,",
+                "# Error::System, a notification outcome, a cleanup detail) and the codes src/error.rs",
+                "# gives to a failure of the system. Values the source spells another way, such as a",
+                "# skipped notice's reason, appear in the entries below and in results.txt.",
                 "#",
                 "# A code appears as error in a command's error result, or as a detail:",
                 "# notification_detail, notification_cleanup.detail, a discovery source's detail.",
-                "# A failed check returns its detail code as error. Every detail is a fixed code."]
-        for title, key in (("error codes", "error"), ("detail codes", "detail"),
-                           ("codes built at run time, {} is the variable part", "runtime")):
-            text += ["", "## " + title, *scanned[key]]
-        text += ["", "## error codes with guidance of their own", "# The source names each of them outside the call that raises it.",
+                "# docs/reference.md has a row for each code, and test_error_table keeps the two equal."]
+        text += ["", "## codes", *scanned["codes"]]
+        text += ["", "## codes built at run time, {} is the variable part", *scanned["runtime"]]
+        text += ["", "## codes with guidance of their own", "# src/guidance.rs names each of them.",
                  "# Every other error code gets one of the two default texts below:",
                  "# 'error, no peer selected' or 'error, peer selected'.",
                  *(code if code in self.failed else code + "    (no entry below)" for code in scanned["own"])]
         text += ["", "# What each failure returns."]
         self.check("errors.txt", self.plain("\n".join(text + entries)))
 
+    def test_error_table(self):
+        """docs/reference.md has one row for every code, and no row for anything else."""
+        scanned = self.scan_codes()
+        section = (REPO / "docs/reference.md").read_text(encoding="utf-8").split("\n## Error codes\n")[1].split("\n## ")[0]
+        rows = re.findall(r"^\| `([^`|]+)` \|", section, re.M)
+        self.assertEqual(sorted(scanned["codes"] + scanned["runtime"]), sorted(rows))
+
     def test_texts(self):
         """Compares against the other files, so --update writes this one last: unittest runs tests by name."""
         shown = squeezed(" ".join((SNAPSHOT / name).read_text(encoding="utf-8")
                                   for name in ("errors.txt", "help.txt", "mcp.txt", "notification.txt", "results.txt")))
         texts = set()
-        for skeleton, literals in self.rust_source():
+        for skeleton, literals in self.rust_source().values():
             excluded = list(arguments(skeleton, NOT_AN_ANSWER))
             for offset, text in literals.items():
                 words = text.split()
@@ -440,29 +448,30 @@ class AgentView(HtalkCase):
     # The source text
 
     def rust_source(self):
-        """What lex() makes of every source file."""
+        """What lex() makes of every source file, by its path under src/."""
         source = REPO / "src"
         self.assertTrue(source.is_dir(), "two lists are read from %s; run this test in a checkout" % source)
-        return [lex(path.read_text(encoding="utf-8")) for path in sorted(source.rglob("*.rs"))]
+        return {path.relative_to(source).as_posix(): lex(path.read_text(encoding="utf-8"))
+                for path in sorted(source.rglob("*.rs"))}
 
     def scan_codes(self):
-        found = {"error": set(), "detail": set(), "runtime": set()}
-        elsewhere = set()
-        for skeleton, literals in self.rust_source():
-            inside = set()
-            for key, call in (("error", RAISED), ("detail", DETAILED)):
-                for start, end in arguments(skeleton, call):
-                    within = {offset for offset in literals if start <= offset < end}
-                    inside |= within
-                    found[key] |= {literals[offset] for offset in within}
-            elsewhere |= {text for offset, text in literals.items() if offset not in inside}
-            found["runtime"] |= {text for text in literals.values() if RUNTIME_CODE.fullmatch(text)}
-        for key in ("error", "detail"):
-            found["runtime"] |= {code for code in found[key] if "{" in code}
-            found[key] = {code for code in found[key] if "{" not in code}
-        found["runtime"] = {re.sub(r"\{[^}]*\}", "{}", code) for code in found["runtime"]}
-        found["own"] = found["error"] & elsewhere
-        return {key: sorted(values) for key, values in found.items()}
+        found, runtime, named = set(), set(), set()
+        for path, (skeleton, literals) in self.rust_source().items():
+            for start, end in arguments(skeleton, CODED):
+                found |= {text for offset, text in literals.items() if start <= offset < end}
+            placed = sorted(literals.items())
+            keyed = {text for (key, name), (offset, text) in zip(placed, placed[1:])
+                     if name in ("error", "detail") and skeleton[key:offset].replace(" ", "") in KEYED}
+            if path == "error.rs":
+                keyed |= set(literals.values())
+            found |= {text for text in keyed if CODE.fullmatch(text)}
+            if path == "guidance.rs":
+                named |= set(literals.values())
+            runtime |= {text for text in literals.values() if RUNTIME_CODE.fullmatch(text)}
+        runtime |= {code for code in found if "{" in code}
+        codes = {code for code in found if "{" not in code}
+        return {"codes": sorted(codes), "runtime": sorted({re.sub(r"\{[^}]*\}", "{}", code) for code in runtime}),
+                "own": sorted(codes & named)}
 
     # Scenarios
 

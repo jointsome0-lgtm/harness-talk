@@ -5,7 +5,7 @@ pub fn uuid(value: &str) -> Result<String, Error> {
     let hex = hex.trim_matches(['{', '}']).replace('-', "");
     uuid::Uuid::parse_str(&hex)
         .map(|id| id.to_string())
-        .map_err(|_| Error::code("badly formed hexadecimal UUID string"))
+        .map_err(|_| Error::code("invalid_uuid"))
 }
 pub fn peer_name(value: &str) -> Result<(), Error> {
     let b = value.as_bytes();

@@ -33,13 +33,13 @@ input schema:
 
 refusals, returned as an error text before any command runs:
 ["watch"]
-  Use mailbox commands or peer list/check. Identity, database, registration, files and receivers are configured outside this tool. For a recovery command, omit htalk --db PATH --as NAME and pass only the command and its arguments.
+  watch is not available through this tool. Use mailbox commands or peer list/check. Identity, database, registration, files and receivers are configured outside this tool. For a recovery command, omit htalk --db PATH --as NAME and pass only the command and its arguments.
 ["peer", "retire", "bob"]
-  Use mailbox commands or peer list/check. Identity, database, registration, files and receivers are configured outside this tool. For a recovery command, omit htalk --db PATH --as NAME and pass only the command and its arguments.
+  peer retire is not available through this tool. Use mailbox commands or peer list/check. Identity, database, registration, files and receivers are configured outside this tool. For a recovery command, omit htalk --db PATH --as NAME and pass only the command and its arguments.
 ["--as", "bob", "inbox"]
-  Use mailbox commands or peer list/check. Identity, database, registration, files and receivers are configured outside this tool. For a recovery command, omit htalk --db PATH --as NAME and pass only the command and its arguments.
+  --as is not available through this tool. Use mailbox commands or peer list/check. Identity, database, registration, files and receivers are configured outside this tool. For a recovery command, omit htalk --db PATH --as NAME and pass only the command and its arguments.
 ["send", "bob", "--id", "UUID", "--message-file", "/dev/null"]
-  Use mailbox commands or peer list/check. Identity, database, registration, files and receivers are configured outside this tool. For a recovery command, omit htalk --db PATH --as NAME and pass only the command and its arguments.
+  --message-file is not available through this tool. Use mailbox commands or peer list/check. Identity, database, registration, files and receivers are configured outside this tool. For a recovery command, omit htalk --db PATH --as NAME and pass only the command and its arguments.
 ["send", "bob", "--message", "No retry identity"]
   send requires --id YOUR_NEW_UUID. Keep it and reuse the same ID/body after cancellation or disconnect; inspect sent/show before repeating work.
 

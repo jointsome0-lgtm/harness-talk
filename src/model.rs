@@ -1,5 +1,5 @@
 pub use crate::adapters::Harness;
-use crate::error::Failure;
+use crate::error::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -57,7 +57,7 @@ impl SkipReason {
         }
     }
 }
-pub type Skip<'a> = &'a dyn Fn() -> Result<Option<SkipReason>, Failure>;
+pub type Skip<'a> = &'a dyn Fn() -> Result<Option<SkipReason>, Error>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

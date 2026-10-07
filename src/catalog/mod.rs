@@ -20,7 +20,7 @@ pub(crate) use binding::Binding;
 use clap::{Args, Subcommand};
 pub(crate) use endpoint::{NO_SCOPE, serve};
 use serde::de::DeserializeOwned;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{
     fs::{File, OpenOptions},
     io::{Read, Write},
@@ -44,7 +44,7 @@ fn stopped() -> bool {
 fn ssh_port() -> u16 {
     22
 }
-fn code(s: &str) -> Error {
+fn code(s: &'static str) -> Error {
     Error::code(s)
 }
 fn uuid(s: &str) -> Result<(), Error> {
@@ -278,16 +278,14 @@ pub(crate) fn main(action: &Action, db: Option<&str>, actor: Option<&str>) -> i3
     match run(action, db, actor) {
         Ok(()) => 0,
         Err(error) => {
+            let (answer, code) = crate::guidance::catalog_failure(&error);
+            // The stdout of these two is an MCP stream, so they answer on stderr.
             if matches!(action, Action::Connect { .. } | Action::Serve { .. }) {
                 eprintln!("htalk catalog: {error}");
             } else {
-                let _ = emit(&json!({"state":"error","error":error.to_string()}));
+                let _ = emit(&answer);
             }
-            if matches!(error, Error::Interrupted) {
-                130
-            } else {
-                2
-            }
+            code
         }
     }
 }

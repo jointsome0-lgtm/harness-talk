@@ -1,6 +1,6 @@
 //! Unix: signals, sockets, who owns a file and what a descriptor is ready for.
 use super::home;
-use crate::error::Failure;
+use crate::error::Error;
 use std::{
     env,
     fs::{self, File, Metadata, OpenOptions},
@@ -228,10 +228,10 @@ pub fn hung_up(io: &impl AsRawFd) -> bool {
     seen > 0 && sink.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0
 }
 
-pub fn owned_socket(path: &Path) -> Result<PathBuf, Failure> {
+pub fn owned_socket(path: &Path) -> Result<PathBuf, Error> {
     let metadata = fs::metadata(path)?;
     if !is_socket(&metadata) || !is_mine(&metadata) {
-        return Err(Failure::coded("recipient_socket_unavailable"));
+        return Err(Error::code("recipient_socket_unavailable"));
     }
     Ok(path.to_path_buf())
 }

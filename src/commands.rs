@@ -509,7 +509,8 @@ pub(crate) enum OverMcp {
     Run,
     /// A `send` there must name its message, so a lost answer can be looked up.
     NeedsId,
-    Refuse,
+    /// Outside the tool, with the name of what the call asked for.
+    Refuse(&'static str),
 }
 
 impl Mailbox {
@@ -518,7 +519,7 @@ impl Mailbox {
     pub(crate) fn over_mcp(&self) -> OverMcp {
         match self {
             Self::Send { body, .. } | Self::Reply { body, .. } if body.message_file.is_some() => {
-                OverMcp::Refuse
+                OverMcp::Refuse("--message-file")
             }
             Self::Send { id: None, .. } => OverMcp::NeedsId,
             Self::Send { .. }
@@ -529,7 +530,12 @@ impl Mailbox {
             | Self::Inbox { .. }
             | Self::Sent { .. }
             | Self::Peer(PeerCommand::List { .. } | PeerCommand::Check { .. }) => OverMcp::Run,
-            Self::Peer(_) | Self::Migrate | Self::Watch => OverMcp::Refuse,
+            Self::Peer(PeerCommand::Add(_)) => OverMcp::Refuse("peer add"),
+            Self::Peer(PeerCommand::Discover { .. }) => OverMcp::Refuse("peer discover"),
+            Self::Peer(PeerCommand::Retire { .. }) => OverMcp::Refuse("peer retire"),
+            Self::Peer(PeerCommand::Restore { .. }) => OverMcp::Refuse("peer restore"),
+            Self::Migrate => OverMcp::Refuse("migrate"),
+            Self::Watch => OverMcp::Refuse("watch"),
         }
     }
 

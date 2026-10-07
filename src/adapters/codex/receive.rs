@@ -52,7 +52,7 @@ impl Binding {
         }
     }
 
-    fn probe(&self) -> std::result::Result<Value, crate::error::Failure> {
+    fn probe(&self) -> std::result::Result<Value, crate::error::Error> {
         match &self.codex_socket {
             Some(bound) => super::probe_bound(&self.target(), bound),
             None => super::probe(&self.target()),
