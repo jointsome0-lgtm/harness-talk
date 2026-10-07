@@ -1,7 +1,13 @@
 //! The catalogue's MCP endpoints. A published mailbox proves on every call that the
 //! catalogue still binds its database and sender, and stays inside the published
 //! conversations. A checked connection reaches only the endpoint it selected.
-use super::{Binding, META_KEY, Route, local_binding, read_binding};
+use super::{
+    META_KEY,
+    binding::{Binding, local_binding, read_binding},
+    code, emit,
+    link::{Given, Link},
+    profile::{directory, load},
+};
 use crate::{
     commands::{self, Arguments, Mailbox},
     mcp::{self, Backend, Checks, Plain, Reply, Server, answer, error},
@@ -25,7 +31,8 @@ pub(crate) fn serve(plain: Plain, options: &commands::Mcp) -> Result<(), Box<dyn
     match (plain, &options.catalog, &options.expect_catalog) {
         (Plain::Local { db, peer }, Some(path), _) => published(db, peer, path.into()),
         (Plain::Connect(connector), _, Some(path)) => {
-            checked(connector, read_binding(Path::new(path))?, None)
+            let binding = read_binding(Path::new(path))?;
+            checked(Arc::new(Given(connector)), binding)
         }
         (plain, ..) => plain.serve(),
     }
@@ -41,15 +48,21 @@ pub(super) fn published(db: PathBuf, peer: String, path: PathBuf) -> Result<(), 
     })
 }
 
-pub(super) fn checked(
-    connector: Vec<String>,
-    binding: Binding,
-    route: Option<Route>,
-) -> Result<(), Box<dyn Error>> {
-    mcp::serve(Checked {
-        connector,
-        expected: Arc::new(Expected { binding, route }),
-    })
+pub(super) fn checked(link: Arc<dyn Link>, binding: Binding) -> Result<(), Box<dyn Error>> {
+    mcp::serve(Checked(Arc::new(Expected { binding, link })))
+}
+
+/// `catalog serve`, the command an SSH key is fixed to: the two remote commands and no other.
+pub(super) fn ssh(path: &Path) -> Result<(), crate::error::Error> {
+    match std::env::var("SSH_ORIGINAL_COMMAND").as_deref() {
+        Ok("catalog") => emit(&serde_json::to_value(directory(path)?)?),
+        Ok("mcp") => {
+            let c = load(path)?;
+            published(c.database, c.sender.name, path.into())
+                .map_err(|_| code("catalog_mcp_failed"))
+        }
+        _ => Err(code("catalog_remote_command_refused")),
+    }
 }
 
 fn meta(binding: &Binding) -> Option<(&'static str, Value)> {
@@ -102,22 +115,19 @@ impl Backend for Published {
     }
 }
 
-struct Checked {
-    connector: Vec<String>,
-    expected: Arc<Expected>,
-}
+struct Checked(Arc<Expected>);
 
 impl Backend for Checked {
     fn instructions(&self) -> String {
         let selected = format!(
             " Selected profiles: {}.",
-            self.expected.binding.profile_names().join(", ")
+            self.0.binding.profile_names().join(", ")
         );
         format!("{}{selected}", mcp::REMOTE)
     }
 
     fn meta(&self) -> Option<(&'static str, Value)> {
-        meta(&self.expected.binding)
+        meta(&self.0.binding)
     }
 
     fn call(
@@ -128,21 +138,21 @@ impl Backend for Checked {
         cancel: CancellationToken,
     ) -> Reply {
         match arguments.unscoped() {
-            Ok(args) => server.remote(self.connector.clone(), args, cancel, self.expected.clone()),
+            Ok(args) => server.remote(self.0.link.command("mcp"), args, cancel, self.0.clone()),
             Err(refusal) => answer(error(refusal)),
         }
     }
 }
 
-/// What a checked connection holds the remote endpoint to.
+/// What a checked connection holds the remote endpoint to, and the link that reaches it.
 struct Expected {
     binding: Binding,
-    route: Option<Route>,
+    link: Arc<dyn Link>,
 }
 
 impl Checks for Expected {
     fn before(&self) -> Result<(), &'static str> {
-        if self.route.as_ref().is_some_and(|r| r.check().is_err()) {
+        if self.link.check().is_err() {
             return Err(
                 "The selected channel binding is unavailable or changed; no mailbox command was sent. Discover the profile again.",
             );

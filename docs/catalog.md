@@ -307,6 +307,27 @@ This leaves the peer and its messages intact. Explicitly re-publishing with
 version. Use a new peer name for a new immutable session address, then explicitly
 bind the profile to it.
 
+## Add a way to find or reach a device
+
+For a contributor. The catalogue code is `src/catalog/`, and two traits in it
+draw the line between the catalogue and its channels.
+
+- `Source`, in `src/catalog/discover/mod.rs`, is one way to find the known
+  devices: mDNS on an interface (`mdns.rs`), a Bluetooth PAN (`pan.rs`), a
+  Tailscale daemon (`tailscale.rs`), addresses pinned in the trust file
+  (`pinned.rs`). Each gives the same records: the device from the trust file,
+  the catalogue it answered with, and the link that reached it.
+- `Link`, in `src/catalog/link/mod.rs`, is one way to open a byte pipe to a
+  found device. The catalogue fetch and the MCP session run over it. OpenSSH
+  (`ssh.rs`) is the only one.
+
+A new way to find devices is one file with a `Source` in `src/catalog/discover/`,
+its arm in `discover` there, and its name among the values of `--via`. A new way
+to reach them is one file with a `Link` in `src/catalog/link/`, built by the
+sources that can use it. Neither touches the mailbox, the trust file or the
+published profiles, and neither adds trust: a source only selects a device that
+is already pinned.
+
 The follow-up checks and these clarifications came from documentation review
 by arion and tantive-space-0924-c. Their comments were not independent live
 htalk tests. aetheris asked about profile evolution; midearthguild asked about
