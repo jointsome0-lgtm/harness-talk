@@ -152,12 +152,6 @@ fn execute(call: &mut Call, context: &mut Context) -> Result<(Value, i32), Error
     call.actor = actor;
     context.turn = crate::write_turn::acquire(&call.db)?;
     crate::write_turn::queued(context.turn.is_some());
-    if context.turn.is_some()
-        && crate::write_turn::extra_successor_slot()
-        && crate::store::await_writer(&call.db)
-    {
-        crate::write_turn::successor_grace();
-    }
     let result = if os::interrupted() {
         Err(Error::Interrupted)
     } else {

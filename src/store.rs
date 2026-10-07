@@ -326,27 +326,6 @@ fn wait_for_lock(attempt: i32) -> bool {
     true
 }
 
-/// An empty transaction observes a writer's release without changing rows.
-/// It closes before any application transaction begins. In queued mode its
-/// callback requests at most 100 one-millisecond sleeps.
-pub(crate) fn await_writer(path: &Path) -> bool {
-    fn wait(attempt: i32) -> bool {
-        attempt < 100 && !os::interrupted() && wait_for_lock(attempt)
-    }
-    let probe = || -> rusqlite::Result<bool> {
-        let mut db = Connection::open_with_flags(
-            os::resolve(path),
-            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        )?;
-        db.busy_handler(Some(wait))?;
-        let before = crate::write_turn::heir_waits();
-        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        tx.rollback()?;
-        Ok(crate::write_turn::heir_waits() != before)
-    };
-    probe().unwrap_or(false)
-}
-
 impl Store {
     pub fn open(path: &Path, create: bool) -> Result<Self, Error> {
         let store = Self::prepare(path, create)?;
