@@ -1,6 +1,7 @@
 //! The command table. Every command is declared here once, with its arguments and help text;
 //! the parser, the dispatch in `cli.rs` and the MCP tool read this declaration.
 use clap::{ArgAction, Args, Parser, Subcommand};
+use rmcp::schemars;
 
 pub(crate) mod mail;
 pub(crate) mod peer;
@@ -50,6 +51,7 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
+    #[cfg(feature = "catalog")]
     #[command(
         subcommand,
         arg_required_else_help = false,
@@ -89,6 +91,7 @@ pub(crate) struct Mcp {
         help = "Owner-configured executable and arguments; executed directly, without a shell."
     )]
     pub connector: Vec<String>,
+    #[cfg(feature = "catalog")]
     #[arg(
         long,
         conflicts_with = "connect",
@@ -96,6 +99,7 @@ pub(crate) struct Mcp {
         help = "Expose the fixed published catalogue binding in the MCP handshake; local mode only."
     )]
     pub catalog: Option<String>,
+    #[cfg(feature = "catalog")]
     #[arg(
         long,
         requires = "connect",
@@ -470,6 +474,34 @@ pub(crate) struct PeerAdd {
         help = "OpenCode only: loopback server URL (default: http://127.0.0.1:4096)."
     )]
     pub url: Option<String>,
+}
+
+// What the MCP tool takes. A doc comment here would become part of its input schema.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Arguments {
+    /// CLI arguments, e.g. ["inbox"], ["show","ID"], ["reply","ID","--message","answer"].
+    pub args: Vec<String>,
+    // Gemini CLI forwards its client-side ordering hint after scheduling the call.
+    #[serde(default, rename = "wait_for_previous")]
+    #[schemars(skip)]
+    _wait_for_previous: bool,
+    // A published endpoint is narrowed to the profiles its caller selected.
+    #[cfg(feature = "catalog")]
+    #[serde(default, rename = "_catalog_binding")]
+    #[schemars(skip)]
+    pub scope: Option<crate::catalog::Binding>,
+}
+
+impl Arguments {
+    /// The arguments for an endpoint that takes no scope, or its refusal.
+    pub(crate) fn unscoped(self) -> Result<Vec<String>, &'static str> {
+        #[cfg(feature = "catalog")]
+        if self.scope.is_some() {
+            return Err(crate::catalog::NO_SCOPE);
+        }
+        Ok(self.args)
+    }
 }
 
 /// What the MCP tool does with a command.

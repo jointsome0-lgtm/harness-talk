@@ -1,4 +1,5 @@
 pub mod adapters;
+#[cfg(feature = "catalog")]
 mod catalog;
 pub mod cli;
 mod commands;

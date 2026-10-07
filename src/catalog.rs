@@ -1,12 +1,15 @@
 //! Published profiles on known devices. Discovery never registers or messages peers.
+mod endpoint;
+mod mailbox;
 mod transport;
 use crate::{
     commands::{Mailbox, PeerCommand},
     error::Error,
     model::Peer,
-    os, store, validate,
+    os, validate,
 };
 use clap::{Args, Subcommand};
+pub(crate) use endpoint::{NO_SCOPE, serve};
 use mdns_sd::{
     DaemonEvent, DaemonStatus, IfKind, ScopedIp, ServiceDaemon, ServiceEvent, ServiceInfo,
     UnregisterStatus,
@@ -32,11 +35,10 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-pub(crate) use transport::Route;
-use transport::{Pan, TailClient};
+use transport::{Pan, Route, TailClient};
 
 const SERVICE: &str = "_htalk._tcp.local.";
-pub(crate) const META_KEY: &str = "harness-talk/catalog";
+const META_KEY: &str = "harness-talk/catalog";
 const LIMIT: usize = 262_144;
 static STOP: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 fn stopped() -> bool {
@@ -169,7 +171,7 @@ impl Binding {
             | Mailbox::Ack { message_id }
             | Mailbox::Reply { message_id, .. }
             | Mailbox::Wait { message_id, .. } => {
-                let m = store::catalog_message(db, message_id, &self.sender)
+                let m = mailbox::message(db, message_id, &self.sender)
                     .map_err(|_| code("catalog_conversation_unavailable"))?;
                 let other = if m.row.sender == self.sender {
                     &m.row.recipient
@@ -224,7 +226,7 @@ impl Binding {
                     .map_err(|_| code("seq_cursor_must_be_a_positive_integer"))
             })
             .transpose()?;
-        let page = store::catalog_page(db, &self.sender, &names, sent, limit, cursor, bodies)?;
+        let page = mailbox::page(db, &self.sender, &names, sent, limit, cursor, bodies)?;
         let next = page.messages.last().filter(|_| page.omitted > 0).map(|m| {
             format!(
                 "htalk {} --limit {} --{} {}{}",
@@ -400,7 +402,7 @@ fn load(path: &Path) -> Result<Catalog, Error> {
 fn current(c: &Catalog) -> Result<Vec<Peer>, Error> {
     let mut names = vec![c.sender.name.clone()];
     names.extend(c.profiles.iter().map(|p| p.peer.name.clone()));
-    let rows = store::catalog_peers(&c.database, &names)?;
+    let rows = mailbox::peers(&c.database, &names)?;
     if rows[0] != c.sender || rows[0].retired_at.is_some() {
         return Err(code("catalog_sender_binding_changed"));
     }
@@ -444,7 +446,7 @@ fn directory(path: &Path) -> Result<Directory, Error> {
     })
 }
 
-pub(crate) fn local_binding(path: &Path, db: &Path, sender: &str) -> Result<Binding, Error> {
+fn local_binding(path: &Path, db: &Path, sender: &str) -> Result<Binding, Error> {
     let c = load(path)?;
     if c.database != os::resolve(db) || c.sender.name != sender {
         return Err(code("catalog_endpoint_binding_mismatch"));
@@ -469,7 +471,7 @@ pub(crate) fn local_binding(path: &Path, db: &Path, sender: &str) -> Result<Bind
     })
 }
 
-pub(crate) fn read_binding(path: &Path) -> Result<Binding, Error> {
+fn read_binding(path: &Path) -> Result<Binding, Error> {
     let b: Binding = read(path)?;
     b.validate()?;
     if b.profiles.is_empty() {
@@ -552,7 +554,7 @@ fn publish(options: &Publish, db: Option<&str>, actor: Option<&str>) -> Result<V
             db.ok_or_else(|| code("catalog_publish_requires_db_and_as"))?,
         ));
         let sender = actor.ok_or_else(|| code("catalog_publish_requires_db_and_as"))?;
-        let rows = store::catalog_peers(&database, &[sender.into()])?;
+        let rows = mailbox::peers(&database, &[sender.into()])?;
         if rows[0].retired_at.is_some() {
             return Err(code("peer_retired"));
         }
@@ -574,7 +576,7 @@ fn publish(options: &Publish, db: Option<&str>, actor: Option<&str>) -> Result<V
     {
         return Err(code("catalog_endpoint_binding_mismatch"));
     }
-    let row = store::catalog_peers(&c.database, &[name.into()])?.remove(0);
+    let row = mailbox::peers(&c.database, &[name.into()])?.remove(0);
     if row.retired_at.is_some() {
         return Err(code("peer_retired"));
     }
@@ -1441,7 +1443,7 @@ fn run(action: &Action, db: Option<&str>, actor: Option<&str>) -> Result<(), Err
                 Ok("catalog") => emit(&serde_json::to_value(directory(path)?)?),
                 Ok("mcp") => {
                     let c = load(path)?;
-                    crate::mcp::run_catalog(c.database, c.sender.name, path.into())
+                    endpoint::published(c.database, c.sender.name, path.into())
                         .map_err(|_| code("catalog_mcp_failed"))
                 }
                 _ => Err(code("catalog_remote_command_refused")),
@@ -1467,7 +1469,7 @@ fn run(action: &Action, db: Option<&str>, actor: Option<&str>) -> Result<(), Err
             };
             // The persistent MCP server owns signals after discovery finishes.
             drop(signals);
-            crate::mcp::connect_catalog(connector(&device, &route, "mcp"), expected, route)
+            endpoint::checked(connector(&device, &route, "mcp"), expected, Some(route))
                 .map_err(|_| code("catalog_mcp_failed"))
         }
     }

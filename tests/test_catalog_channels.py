@@ -604,6 +604,32 @@ class DirectSshCatalog(SshCatalogFixture):
         self.connect_error(trust, profile_id, 'catalog_profile_unavailable')
         self.assertEqual(0, self.sql('SELECT count(*) FROM messages')[0][0])
 
+    def test_one_profile_identity_on_two_devices_is_refused(self):
+        _, trust, directory, _, _ = self.ssh_fixture()
+        self.pin_address(trust)
+        profile_id = directory['profiles'][0]['profile_id']
+        # A second device on the same listener: its own catalogue, key and forced command.
+        config = self.tmp / 'second.json'
+        self.htalk('--as', 'alice', 'catalog', 'publish', '--config', config, 'bob',
+                   '--profile-id', profile_id, '--name', 'Reviewer', '--role', 'Review')
+        second = self.htalk('catalog', 'export', '--config', config, db=False)
+        key = self.tmp / 'second-identity'
+        subprocess.run([shutil.which('ssh-keygen'), '-q', '-t', 'ed25519', '-N', '', '-f', str(key)],
+                       check=True, capture_output=True)
+        endpoint = shlex.join(self.argv(['catalog', 'serve', '--config', str(config)], False))
+        with (self.tmp / 'authorized_keys').open('a') as authorized:
+            authorized.write('restrict,command="' + endpoint + '" ' + Path(str(key) + '.pub').read_text())
+        with self.known_hosts.open('a') as known:
+            known.write('htalk-' + second['device_id'] + ' ' + (self.tmp / 'host-key.pub').read_text())
+        value = json.loads(trust.read_text())
+        value['devices'].append({**value['devices'][0], 'identity_file': str(key),
+                                 **{key: second[key] for key in ('device_id', 'mailbox_id', 'generation', 'sender')}})
+        trust.write_text(json.dumps(value))
+        found = self.discover(trust)
+        self.assertEqual(['reachable', 'reachable'], [d['directory_state'] for d in found['devices']])
+        for selector in (profile_id, 'Reviewer'):
+            self.connect_error(trust, selector, 'catalog_ambiguous_profile')
+
     def test_wrong_host_key_and_deployment_block_discovery_before_write(self):
         _, trust, directory, wrong, _ = self.ssh_fixture()
         self.pin_address(trust)

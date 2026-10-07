@@ -24,6 +24,11 @@ jobs:
       - name: Select Rust
         run: |
           rustup toolchain install 1.98.1 --profile minimal --component rustfmt --component clippy
+      - name: Build the mailbox without the catalogue
+        if: matrix.python == '3.14'
+        run: |
+          cargo build --locked --no-default-features
+          cargo clippy --locked --no-default-features --all-targets -- -D warnings
       - name: Check and test Rust
         if: matrix.python == '3.14'
         run: |
