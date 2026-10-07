@@ -1,5 +1,5 @@
 //! The catalogue file: one mailbox and sender, and the peers published from it as profiles.
-use super::{LIMIT, Publish, code, mailbox, read, text, uuid};
+use super::{LIMIT, Publish, code, emit, mailbox, read, text, uuid};
 use crate::{
     error::Error,
     model::Peer,
@@ -294,7 +294,8 @@ pub(super) fn publish(
     )
 }
 
-pub(super) fn unpublish(path: &Path, profile_id: &str) -> Result<Value, Error> {
+// The answer is written under the lock, as `catalog unpublish` always did.
+pub(super) fn unpublish(path: &Path, profile_id: &str) -> Result<(), Error> {
     let _lock = lock(path)?;
     let mut c = load(path)?;
     uuid(profile_id)?;
@@ -304,5 +305,5 @@ pub(super) fn unpublish(path: &Path, profile_id: &str) -> Result<Value, Error> {
         return Err(code("catalog_unknown_profile"));
     }
     save(path, &c)?;
-    Ok(json!({"state":"unpublished","profile_id":profile_id}))
+    emit(&json!({"state":"unpublished","profile_id":profile_id}))
 }

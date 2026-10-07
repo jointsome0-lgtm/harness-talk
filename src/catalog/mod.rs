@@ -310,7 +310,7 @@ fn run(action: &Action, db: Option<&str>, actor: Option<&str>) -> Result<(), Err
     match action {
         Action::Publish(options) => emit(&profile::publish(options, db, actor)?),
         Action::Unpublish { config, profile_id } => {
-            emit(&profile::unpublish(Path::new(config), profile_id)?)
+            profile::unpublish(Path::new(config), profile_id)
         }
         Action::Export { config } => emit(&serde_json::to_value(profile::directory(Path::new(
             config,
