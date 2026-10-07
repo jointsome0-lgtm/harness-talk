@@ -3,9 +3,7 @@
 use crate::{
     error::Error,
     model::{Message, Page, Peer},
-    store::{
-        INBOX, INBOX_ACTION, SCHEMA_VERSION, SENT, load, peer_on, read_row, summarize, with_reply,
-    },
+    store::{INBOX, SCHEMA_VERSION, SENT, load, peer_on, read_row, summarize, with_reply},
     validate,
 };
 use rusqlite::{Connection, OpenFlags, params};
@@ -87,10 +85,5 @@ pub(super) fn page(
         messages,
         total,
         omitted,
-        next_action: if sent {
-            None
-        } else {
-            Some(INBOX_ACTION.into())
-        },
     })
 }

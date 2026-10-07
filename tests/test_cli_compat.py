@@ -24,8 +24,8 @@ import urllib.parse
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from compat_support import (MESSAGE_KEYS, OPENCODE_CA, PEER_KEYS, ROW_KEYS, TIMEOUT, HtalkCase,  # noqa: E402
-                            process_start, wait_for)
+from compat_support import (KEPT, MESSAGE_KEYS, OPENCODE_CA, PEER_KEYS, ROW_KEYS, TIMEOUT, UNSETTLED,  # noqa: E402
+                            HtalkCase, process_start, wait_for)
 
 LEGACY_V1 = """
 CREATE TABLE peers (name TEXT PRIMARY KEY, harness TEXT NOT NULL, session_id TEXT NOT NULL,
@@ -148,7 +148,7 @@ class SchemaCompatibility(HtalkCase):
     def assert_current_schema(self, path=None):
         self.assertEqual(3, self.user_version(path))
         self.assertEqual(PEER_COLUMNS, self.columns("peers", path))
-        self.assertEqual(ROW_KEYS, set(self.columns("messages", path)))
+        self.assertEqual(ROW_KEYS | set(KEPT), set(self.columns("messages", path)))
         self.assertEqual(["token", "message_id", "actor", "until"], self.columns("waits", path))
         self.assertEqual(["name", "retired_at"], self.columns("retired_peers", path))
 
@@ -179,7 +179,7 @@ class SchemaCompatibility(HtalkCase):
         self.assertEqual([ids["q1"], ids["q2"], ids["r3"]], [m["id"] for m in inbox["messages"]])
         shown = self.htalk("--as", "alice", "show", ids["q1"])
         self.assertEqual((100.0, "submitted", "claude_socket_bytes_written", None),
-                         (shown["ack_at"], shown["submission"], shown["notification_detail"], shown["wait_returned_at"]))
+                         (shown["ack_at"], shown["submission"], shown["notification_detail"], self.kept(shown["id"])["wait_returned_at"]))
         answered = self.htalk("--as", "bob", "show", ids["q3"])
         self.assertEqual(("reply_received", ids["r3"], "Old answer"), (answered["state"], answered["reply"]["id"], answered["reply"]["body"]))
         # An identical registration of a migrated peer is accepted unchanged.
@@ -194,7 +194,7 @@ class SchemaCompatibility(HtalkCase):
         backup, = self.backups()
         self.assertEqual(before, self.snapshot(backup))
         self.assert_current_schema()
-        self.assertIsNone(self.htalk("--as", "bob", "show", ids["q1"])["wait_returned_at"])
+        self.assertIsNone(self.kept(ids["q1"])["wait_returned_at"])
         self.htalk("peer", "retire", "bob")
         self.assertEqual(2, len(self.htalk("peer", "list")["peers"]))
 
@@ -376,7 +376,7 @@ class GenericPeers(HtalkCase):
         identity = {"CODEX_THREAD_ID": str(uuid.uuid4()), "CLAUDE_CODE_SESSION_ID": str(uuid.uuid4())}
         request = self.htalk("--as", "alice", "send", "bob", "--id", str(uuid.uuid4()), "--message", "Question", env=identity)
         self.assertEqual(("not_submitted", "pull_only", None, None),
-            tuple(request[k] for k in ("submission", "notification_detail", "notification_started_at", "notification_finished_at")))
+                         (request["submission"], request["notification_detail"], *list(self.kept(request["id"]).values())[:2]))
         self.assertIsNone(self.htalk("--as", "bob", "show", request["id"])["ack_at"])
         self.htalk("--as", "bob", "ack", request["id"])
         self.assertEqual(1, self.htalk("--as", "bob", "inbox")["total"])
@@ -407,7 +407,7 @@ class GenericPeers(HtalkCase):
         back = self.htalk("--as", "alice", "reply", reverse["id"], "--message", "Done")
         self.assertEqual(("alice", "bob", reverse["id"]), (back["sender"], back["recipient"], back["in_reply_to"]))
         self.assertEqual("pull_only", back["notification_detail"])
-        self.assertIsNone(back["notification_started_at"])
+        self.assertIsNone(self.kept(back["id"])["notification_started_at"])
         cleanup = self.htalk("--as", "bob", "ack", back["id"])["notification_cleanup"]
         self.assertEqual("skipped", cleanup["status"])
         self.error("--as", "alice", "send", "bob", "--message", "Retired", error="peer_retired")
@@ -433,11 +433,12 @@ class GenericPeers(HtalkCase):
         request = self.htalk("--as", "alice", "send", "bob", "--message", "Question", "--id", message_id, code=2)
         self.assertEqual("adapter_unavailable", request["notification_detail"])
         self.assertEqual("not_submitted", request["submission"])
+        attempt = self.kept(message_id)
         self.assertEqual(1, self.htalk("--as", "bob", "inbox")["total"])
         self.assertEqual("Question", self.htalk("--as", "bob", "show", message_id)["body"])
         retry = self.htalk("--as", "alice", "send", "bob", "--message", "Question", "--id", message_id)
         self.assertFalse(retry["created"])
-        self.assertEqual(request["notification_started_at"], retry["notification_started_at"])
+        self.assertEqual(attempt, self.kept(message_id))
         self.htalk("--as", "bob", "ack", message_id)
         self.assertEqual([], self.calls())
 
@@ -575,14 +576,15 @@ class Conversation(HtalkCase):
                          (question["sender"], question["recipient"], question["in_reply_to"], question["body"],
                           question["state"], question["reply"], question["created"], question["actor_source"]))
         self.assertEqual(("not_submitted", None, None, None, None),
-                         (question["submission"], question["notification_started_at"], question["notification_detail"],
-                          question["ack_at"], question["wait_returned_at"]))
+                         (question["submission"], self.kept(question["id"])["notification_started_at"], question["notification_detail"],
+                          question["ack_at"], self.kept(question["id"])["wait_returned_at"]))
         self.assertEqual(str(uuid.UUID(question["id"])), question["id"])
         qid = question["id"]
         inbox = self.htalk("--as", "bob", "inbox")
         self.assertEqual(([qid], 1, 0), ([m["id"] for m in inbox["messages"]], inbox["total"], inbox["omitted"]))
         self.assertEqual("Which case?", inbox["messages"][0]["body"])
-        self.assertIn("ack", inbox["next_action"])
+        self.assertEqual(({"messages", "total", "omitted", "actor_source"}, MESSAGE_KEYS),
+                         (set(inbox), set(inbox["messages"][0])))
         self.error("--as", "eve", "show", qid, error="message_not_addressed_to_peer")
         self.error("--as", "alice", "show", str(uuid.uuid4()), error="unknown_message")
         for actor in ("alice", "eve"):
@@ -592,7 +594,7 @@ class Conversation(HtalkCase):
         read = self.htalk("--as", "bob", "ack", qid)
         self.assertIsNotNone(read["ack_at"])
         self.assertEqual(("saved", None), (read["state"], read["reply"]))
-        self.assertIn("open until you reply", read["next_action"])
+        self.assertEqual(MESSAGE_KEYS | {"notification_cleanup", "actor_source"}, set(read))
         self.assertEqual(read["ack_at"], self.htalk("--as", "bob", "ack", qid)["ack_at"])
         self.assertEqual([qid], [m["id"] for m in self.htalk("--as", "bob", "inbox")["messages"]])
         # Only the recipient answers, and only a request.
@@ -619,7 +621,7 @@ class Conversation(HtalkCase):
         self.error("--as", "alice", "wait", answer["id"], "--seconds", "0", error="wait_requires_own_request")
         waited = self.htalk("--as", "alice", "wait", qid, "--seconds", "0")
         self.assertEqual(answer["id"], waited["reply"]["id"])
-        self.assertIsNotNone(waited["reply"]["wait_returned_at"])
+        self.assertIsNotNone(self.kept(waited["reply"]["id"])["wait_returned_at"])
         self.assertIsNone(waited["reply"]["ack_at"])
         self.assertNotIn("wait_ended", waited)
         self.assertEqual([answer["id"]], [m["id"] for m in self.htalk("--as", "alice", "inbox")["messages"]])
@@ -651,14 +653,13 @@ class Conversation(HtalkCase):
         self.error("--as", "alice", "send", "zed", "--message", "Q", "--no-notify", error="unknown_peer")
         self.assertEqual(1, self.htalk("--as", "alice", "sent")["total"])
 
-    def test_wait_timeout_and_its_recovery(self):
+    def test_wait_timeout_leaves_the_request_saved(self):
         question = self.htalk("--as", "alice", "send", "bob", "--message", "Q", "--no-notify")
         for seconds in ("0", "0.2"):
             with self.subTest(seconds=seconds):
                 waited = self.htalk("--as", "alice", "wait", question["id"], "--seconds", seconds)
                 self.assertEqual(("timeout", "saved", None), (waited["wait_ended"], waited["state"], waited["reply"]))
-                self.assertEqual(["htalk", "--db", str(self.db), "--as", "alice", "wait", question["id"], "--seconds", "45"],
-                                 words_of(waited["recovery"]["wait"]))
+                self.assertEqual(set(), UNSETTLED & set(waited))
         self.assertEqual([], self.waits())
         timed = self.htalk("--as", "alice", "send", "bob", "--message", "Timed", "--no-notify", "--wait", "0.2")
         self.assertEqual(("timeout", True), (timed["wait_ended"], timed["created"]))
@@ -699,9 +700,9 @@ class Listings(HtalkCase):
 
     def follow(self, *words):
         pages = [self.htalk(*words)]
-        while "recovery" in pages[-1]:
-            self.assertIn("recovery.next_page", pages[-1]["next_action"])
-            pages.append(self.recover(pages[-1]["recovery"]["next_page"]))
+        while "next_page" in pages[-1]:
+            self.assertEqual(set(), UNSETTLED & set(pages[-1]))
+            pages.append(self.recover(pages[-1]["next_page"]))
         return pages
 
     def test_sent_pages_newest_first_without_gaps(self):
@@ -712,7 +713,7 @@ class Listings(HtalkCase):
         self.assertEqual(ids[::-1], [m["id"] for p in pages for m in p["messages"]])
         last = pages[0]["messages"][-1]["seq"]
         self.assertEqual(["htalk", "--db", str(self.db), "--as", "alice", "sent", "--limit", "10", "--before-seq", str(last)],
-                         words_of(pages[0]["recovery"]["next_page"]))
+                         words_of(pages[0]["next_page"]))
         seqs = [m["seq"] for p in pages for m in p["messages"]]
         self.assertEqual(sorted(seqs, reverse=True), seqs)
         default = self.htalk("--as", "alice", "sent")
@@ -720,7 +721,7 @@ class Listings(HtalkCase):
         older = self.htalk("--as", "alice", "sent", "--before-seq", str(seqs[-5]))
         self.assertEqual((ids[3::-1], 25, 0), ([m["id"] for m in older["messages"]], older["total"], older["omitted"]))
         bodies = self.follow("--as", "alice", "sent", "--limit", "20", "--bodies")
-        self.assertIn("--bodies", words_of(bodies[0]["recovery"]["next_page"]))
+        self.assertIn("--bodies", words_of(bodies[0]["next_page"]))
         self.assertEqual("Question 0", bodies[-1]["messages"][-1]["body"])
 
     def test_inbox_pages_oldest_first_and_keep_open_work(self):
@@ -734,8 +735,8 @@ class Listings(HtalkCase):
         self.assertEqual([(2, 5, 3), (2, 5, 1), (1, 5, 0)], [(len(p["messages"]), p["total"], p["omitted"]) for p in pages])
         self.assertEqual(open_ids, [m["id"] for p in pages for m in p["messages"]])
         self.assertEqual(["htalk", "--db", str(self.db), "--as", "bob", "inbox", "--limit", "2", "--after-seq",
-                          str(pages[0]["messages"][-1]["seq"])], words_of(pages[0]["recovery"]["next_page"]))
-        self.assertNotIn("recovery", pages[-1])
+                          str(pages[0]["messages"][-1]["seq"])], words_of(pages[0]["next_page"]))
+        self.assertNotIn("next_page", pages[-1])
         after = self.htalk("--as", "bob", "inbox", "--after-seq", str(pages[1]["messages"][-1]["seq"]))
         self.assertEqual(open_ids[4:], [m["id"] for m in after["messages"]])
         self.assertEqual((5, 0), (after["total"], after["omitted"]))
@@ -748,7 +749,8 @@ class Recovery(HtalkCase):
         self.db = self.tmp / "mail 'quoted' $draft" / "m.sqlite3"
         self.add_peer("builder")
         self.add_peer("reviewer")
-        question = self.htalk("--as", "builder", "send", "reviewer", "--message", "Question", "--no-notify")
+        # Nobody runs the reviewer's client, so the notice fails and the message is answered with advice.
+        question = self.htalk("--as", "builder", "send", "reviewer", "--message", "Question", code=2)
         prefix = ["htalk", "--db", str(self.db), "--as", "builder"]
         self.assertEqual(prefix + ["show", question["id"]], words_of(question["recovery"]["show"]))
         self.assertEqual({"show", "wait"}, set(question["recovery"]))
@@ -799,7 +801,7 @@ class Retirement(HtalkCase):
         # Saved requests are still answered; a notice to the retired recipient is skipped with exit 0.
         answer = self.htalk("--as", "alice", "reply", from_bob, "--message", "Answer")
         self.assertEqual(("not_submitted", "recipient_retired"), (answer["submission"], answer["notification_detail"]))
-        self.assertIn("recipient peer is retired", answer["next_action"])
+        self.assertEqual(set(), UNSETTLED & set(answer))
         self.assertEqual([], self.calls("claude"))
         self.assertTrue(self.htalk("--as", "bob", "reply", chosen, "--message", "Late", "--no-notify")["created"])
         self.assertEqual([answer["id"]], [m["id"] for m in self.htalk("--as", "bob", "inbox")["messages"]])
@@ -875,7 +877,8 @@ class ActorSelection(HtalkCase):
                          unregistered["native_session"])
         self.assertIn("peer add", unregistered["next_action"])
         self.add_peer("reviewer", "claude", session)
-        question = self.htalk("send", "builder", "--message", "Question", "--no-notify", env=native)
+        # Nobody runs the builder's client, so the notice fails and the message is answered with advice.
+        question = self.htalk("send", "builder", "--message", "Question", env=native, code=2)
         self.assertEqual(("reviewer", "native_session"), (question["sender"], question["actor_source"]))
         self.assertEqual(["--as", "reviewer", "show", question["id"]], words_of(question["recovery"]["show"])[3:])
         self.assertEqual("option", self.recover(question["recovery"]["show"], env=native)["actor_source"])
@@ -932,8 +935,8 @@ class Notifications(HtalkCase):
         sent = self.htalk("--as", "alice", "send", "bob", "--message", "Private body 42")
         self.assertEqual(("submitted", "claude_socket_bytes_written", True),
                          (sent["submission"], sent["notification_detail"], sent["created"]))
-        self.assertIsNotNone(sent["notification_started_at"])
-        self.assertIsNotNone(sent["notification_finished_at"])
+        self.assertIsNotNone(self.kept(sent["id"])["notification_started_at"])
+        self.assertIsNotNone(self.kept(sent["id"])["notification_finished_at"])
         frames = listener.frames()
         self.assertEqual(1, len(frames))
         frame = frames[0]
@@ -960,12 +963,12 @@ class Notifications(HtalkCase):
         failed = self.htalk("--as", "alice", "send", "bob", "--id", chosen, "--message", "Q", code=2)
         self.assertEqual(("not_submitted", "recipient_unavailable", True),
                          (failed["submission"], failed["notification_detail"], failed["created"]))
-        self.assertIsNotNone(failed["notification_started_at"])
+        attempt = self.kept(chosen)
+        self.assertIsNotNone(attempt["notification_started_at"])
         self.assertIn("Never repeat an uncertain notification", failed["next_action"])
         self.assertEqual(1, len(self.calls("claude", ["agents"])))
         retry = self.htalk("--as", "alice", "send", "bob", "--id", chosen, "--message", "Q")
-        self.assertEqual((False, "not_submitted", failed["notification_started_at"]),
-                         (retry["created"], retry["submission"], retry["notification_started_at"]))
+        self.assertEqual((False, "not_submitted", attempt), (retry["created"], retry["submission"], self.kept(chosen)))
         for words in (["--as", "bob", "show", chosen], ["--as", "alice", "wait", chosen, "--seconds", "0"],
                       ["--as", "alice", "sent"], ["--as", "bob", "ack", chosen]):
             self.htalk(*words)
@@ -1253,7 +1256,7 @@ class NotificationOrdering(HtalkCase):
                 self.release("claude_agents")
                 result = self.finish(sending, code=0)
                 self.assertEqual(("not_submitted", detail), (result["submission"], result["notification_detail"]))
-                self.assertIsNotNone(result["notification_finished_at"])
+                self.assertIsNotNone(self.kept(result["id"])["notification_finished_at"])
                 self.assertEqual([], listener.frames())
                 self.htalk("peer", "restore", "bob")
         # Acknowledgment does not answer the question.
@@ -1270,12 +1273,12 @@ class NotificationOrdering(HtalkCase):
         answer = self.htalk("--as", "bob", "reply", question, "--message", "Answer")
         self.assertEqual(("not_submitted", "returned_by_recipient_wait", None),
                          (answer["submission"], answer["notification_detail"], answer["ack_at"]))
-        self.assertIsNotNone(answer["wait_returned_at"])
-        self.assertIn("no client notice was sent", answer["next_action"])
+        self.assertIsNotNone(self.kept(answer["id"])["wait_returned_at"])
+        self.assertEqual(set(), UNSETTLED & set(answer))
         received = self.finish(waiting)
         self.assertEqual((answer["id"], "Answer"), (received["reply"]["id"], received["reply"]["body"]))
-        self.assertIsNotNone(received["reply"]["wait_returned_at"])
-        self.assertIn("ack_after_reading", received["recovery"])
+        self.assertIsNotNone(self.kept(received["reply"]["id"])["wait_returned_at"])
+        self.assertEqual(set(), UNSETTLED & set(received))
         # Registration cleanup is best effort; the reply writer may retain it.
         self.assertEqual([answer["id"]], [m["id"] for m in self.htalk("--as", "alice", "inbox")["messages"]])
 
@@ -1290,7 +1293,7 @@ class NotificationOrdering(HtalkCase):
         self.assertEqual((chosen, True, "not_submitted", "recipient_unavailable", "Answer"),
                          (result["id"], result["created"], result["submission"], result["notification_detail"],
                           result["reply"]["body"]))
-        self.assertIsNotNone(result["reply"]["wait_returned_at"])
+        self.assertIsNotNone(self.kept(result["reply"]["id"])["wait_returned_at"])
         self.assertEqual("option", result["actor_source"])
 
 
@@ -1313,8 +1316,8 @@ class Interrupts(HtalkCase):
         self.assertEqual((chosen, "saved", "option"), (result["message_id"], result["persistence"], result["actor_source"]))
         self.assertEqual({"peers", "sent", "inbox", "show"}, set(result["recovery"]))
         shown = self.recover(result["recovery"]["show"])
-        self.assertEqual(("submission_unknown", None), (shown["submission"], shown["notification_finished_at"]))
-        self.assertIsNotNone(shown["notification_started_at"])
+        self.assertEqual(("submission_unknown", None), (shown["submission"], self.kept(shown["id"])["notification_finished_at"]))
+        self.assertIsNotNone(self.kept(shown["id"])["notification_started_at"])
         self.assertEqual([chosen], [m["id"] for m in self.recover(result["recovery"]["sent"])["messages"]])
         self.configure(codex_queue={"mode": "ok", "queue_id": str(uuid.uuid4())})
         retry = self.htalk("--as", "alice", "send", "bob", "--id", chosen, "--message", "Q")
@@ -1404,20 +1407,20 @@ class ProcessRecovery(HtalkCase):
         self.started("codex_queue")
         before = self.htalk("--as", "alice", "show", chosen)
         self.assertEqual(("submission_unknown", None),
-                         (before["submission"], before["notification_finished_at"]))
-        self.assertIsNotNone(before["notification_started_at"])
+                         (before["submission"], self.kept(before["id"])["notification_finished_at"]))
+        self.assertIsNotNone(self.kept(before["id"])["notification_started_at"])
         self.kill(sending)
 
         for retry in self.two_retries(chosen):
             self.assertEqual(("Question?", before["created_at"], "submission_unknown", None),
                              (retry["body"], retry["created_at"], retry["submission"],
-                              retry["notification_finished_at"]))
+                              self.kept(retry["id"])["notification_finished_at"]))
         self.assertEqual([(1,)], self.sql("SELECT COUNT(*) FROM messages WHERE id=?", (chosen,)))
         self.assertEqual([chosen], [m["id"] for m in self.htalk("--as", "bob", "inbox")["messages"]])
         acknowledged = self.htalk("--as", "bob", "ack", chosen)
         self.assertIsNotNone(acknowledged["ack_at"])
         self.assertEqual(("submission_unknown", None, "pending"),
-                         (acknowledged["submission"], acknowledged["notification_finished_at"],
+                         (acknowledged["submission"], self.kept(acknowledged["id"])["notification_finished_at"],
                           acknowledged["notification_cleanup"]["status"]))
         repeated_ack = self.recover(acknowledged["recovery"]["retry_notification_cleanup"])
         self.assertEqual((acknowledged["ack_at"], "pending"),
@@ -1437,7 +1440,7 @@ class ProcessRecovery(HtalkCase):
         wait_for(lambda: not fake_is_running(), message="the orphaned fake client to exit")
         after_child = self.htalk("--as", "bob", "show", chosen)
         self.assertEqual(("submission_unknown", None, acknowledged["ack_at"]),
-                         (after_child["submission"], after_child["notification_finished_at"],
+                         (after_child["submission"], self.kept(after_child["id"])["notification_finished_at"],
                           after_child["ack_at"]))
         after_child_ack = self.recover(acknowledged["recovery"]["retry_notification_cleanup"])
         self.assertEqual((acknowledged["ack_at"], "pending"),
@@ -1451,16 +1454,17 @@ class ProcessRecovery(HtalkCase):
         wait_for(self.waits, message="the wait after a confirmed notification")
         before = self.htalk("--as", "alice", "show", chosen)
         self.assertEqual("submitted", before["submission"])
-        self.assertIsNotNone(before["notification_finished_at"])
+        attempt = self.kept(chosen)
+        self.assertIsNotNone(attempt["notification_finished_at"])
         self.kill(sending)
         self.assertTrue(self.waits(), "SIGKILL must leave the registered poll behind")
 
         for retry in self.two_retries(chosen):
-            self.assertEqual(("submitted", before["created_at"], before["notification_finished_at"]),
-                             (retry["submission"], retry["created_at"], retry["notification_finished_at"]))
+            self.assertEqual(("submitted", before["created_at"], attempt),
+                             (retry["submission"], retry["created_at"], self.kept(chosen)))
         answer = self.htalk("--as", "bob", "reply", chosen, "--message", "Answer")
         self.assertEqual("submitted", answer["submission"])
-        self.assertIsNotNone(answer["notification_finished_at"])
+        self.assertIsNotNone(self.kept(answer["id"])["notification_finished_at"])
         recovered = self.htalk("--as", "alice", "wait", chosen, "--seconds", "0")
         self.assertEqual(answer["id"], recovered["reply"]["id"])
         self.assertEqual("submitted", recovered["submission"])
@@ -1485,7 +1489,7 @@ class ProcessRecovery(HtalkCase):
                 wait_for(lambda: sum(process.poll() is not None for process in processes) == 31,
                          message="all other senders to finish before releasing the notification")
                 unfinished = self.htalk("--as", "alice", "show", chosen)
-                self.assertIsNone(unfinished["notification_finished_at"])
+                self.assertIsNone(self.kept(unfinished["id"])["notification_finished_at"])
                 self.release("codex_queue")
                 outputs = []
                 for process in processes:
@@ -1510,9 +1514,6 @@ class ProcessRecovery(HtalkCase):
                             # A retry can observe the saved row before the winner
                             # claims its notification, as well as after that claim.
                             self.assertIn(result["submission"], ("not_submitted", "submission_unknown"))
-                            self.assertEqual(result["submission"] == "not_submitted",
-                                             result["notification_started_at"] is None)
-                            self.assertIsNone(result["notification_finished_at"])
 
     def test_lookup_retry_and_ack_can_race_an_unfinished_notification(self):
         self.configure(codex_queue={"mode": "block"})
@@ -1581,8 +1582,7 @@ class Discovery(HtalkCase):
                            "runtime_status": "running", "source": "claude_agents", "pid": 5001}], found["sessions"])
         self.assertEqual([("claude", "claude_agents", "partial", 1)],
                          [(s["harness"], s["source"], s["status"], s.get("rejected")) for s in found["sources"]])
-        self.assertIn("next_action", found)
-        self.assertIn("scope", found)
+        self.assertEqual({"sessions", "sources", "scope"}, set(found))
         self.assertEqual([], self.htalk("peer", "discover", "--harness", "claude", "--workspace", str(self.tmp))["sessions"])
         self.assertEqual([], live.frames())
         self.assertFalse(self.db.parent.exists())

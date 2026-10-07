@@ -255,12 +255,12 @@ neither selects the first match. The configured sender remains fixed, and the
 selected profile is the recipient. `peer list` shows that selected peer.
 
 Catalogue `show`, `inbox` and `sent` return full message IDs, reply correlation
-and saved state; `show` returns full bodies. These scoped reads omit the ordinary
-CLI's per-message `recovery` action commands. Use the same MCP tool with
+and saved state; `show` returns full bodies. These scoped reads never carry the
+ordinary CLI's per-message `recovery` commands. Use the same MCP tool with
 `["show", "MESSAGE_UUID"]` to read a message, then
 `["ack", "MESSAGE_UUID"]` after reading it. Answer an incoming request with
 `["reply", "REQUEST_UUID", "--message", "answer"]`. Follow
-`recovery.next_page` through the same tool, omitting its `htalk` prefix.
+`next_page` through the same tool, omitting its `htalk` prefix.
 
 Every tool call makes one SSH/MCP connection and verifies device, deployment,
 sender and profile binding before dispatch. Re-publication or retirement makes

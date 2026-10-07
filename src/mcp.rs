@@ -195,7 +195,7 @@ impl Server {
 /// What the MCP tool answers to a call outside its scope. `what` names the part it refuses.
 fn refused(what: &str) -> String {
     format!(
-        "{what} is not available through this tool. Use mailbox commands or peer list/check. Identity, database, registration, files and receivers are configured outside this tool. For a recovery command, omit htalk --db PATH --as NAME and pass only the command and its arguments."
+        "{what} is not available through this tool. Use mailbox commands or peer list/check. Identity, database, registration, files and receivers are configured outside this tool. For a command from a result, omit htalk --db PATH --as NAME and pass only the command and its arguments."
     )
 }
 

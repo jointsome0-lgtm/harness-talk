@@ -99,8 +99,7 @@ peers[4].harness = "opencode"
 ## discover sessions
 $ htalk --db DATABASE peer discover --workspace WORKSPACE --opencode-url OPENCODE_URL
 exit 0
-keys: next_action, scope, sessions[{harness, pid, runtime_status, session_id, source, workspace}], sources[{detail, error, harness, path, source, status} | {detail, error, harness, source, status, url, version} | {detail, harness, next_action, socket, source, status} | {detail, harness, path, scope, source, status} | {harness, source, status}]
-next_action = "Choose an exact session address and register it with peer add. Discovery does not register or notify anyone."
+keys: scope, sessions[{harness, pid, runtime_status, session_id, source, workspace}], sources[{detail, error, harness, path, source, status} | {detail, error, harness, source, status, url, version} | {detail, harness, next_action, socket, source, status} | {detail, harness, path, scope, source, status} | {harness, source, status}]
 scope = "Current local client environment and the listed endpoints only. Unavailable sources do not prove there are no sessions."
 sessions[0].harness = "claude"
 sessions[0].pid = 424200
@@ -146,13 +145,10 @@ state = "ready"
 ## send, the notice was submitted
 $ htalk --db DATABASE --as helper send alice --id REQUEST_ID --message 'Invented question'
 exit 0
-keys: ack_at, actor_source, body, created, created_at, id, in_reply_to, next_action, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{show, wait}, reply, sender, seq, state, submission, wait_returned_at
+keys: ack_at, actor_source, body, created, created_at, id, in_reply_to, notification_detail, recipient, reply, sender, seq, state, submission
 actor_source = "option"
 created = true
-next_action = "Use recovery.wait to wait again on this saved request, or recovery.show to inspect it. Never repeat an uncertain notification."
 notification_detail = "claude_socket_bytes_written"
-recovery.show = "htalk --db DATABASE --as helper show REQUEST_ID"
-recovery.wait = "htalk --db DATABASE --as helper wait REQUEST_ID --seconds 45"
 reply = null
 state = "saved"
 submission = "submitted"
@@ -160,13 +156,10 @@ submission = "submitted"
 ## the same send again
 $ htalk --db DATABASE --as helper send alice --id REQUEST_ID --message 'Invented question'
 exit 0
-keys: ack_at, actor_source, body, created, created_at, id, in_reply_to, next_action, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{show, wait}, reply, sender, seq, state, submission, wait_returned_at
+keys: ack_at, actor_source, body, created, created_at, id, in_reply_to, notification_detail, recipient, reply, sender, seq, state, submission
 actor_source = "option"
 created = false
-next_action = "Use recovery.wait to wait again on this saved request, or recovery.show to inspect it. Never repeat an uncertain notification."
 notification_detail = "claude_socket_bytes_written"
-recovery.show = "htalk --db DATABASE --as helper show REQUEST_ID"
-recovery.wait = "htalk --db DATABASE --as helper wait REQUEST_ID --seconds 45"
 reply = null
 state = "saved"
 submission = "submitted"
@@ -174,28 +167,21 @@ submission = "submitted"
 ## the recipient's inbox
 $ htalk --db DATABASE --as alice inbox
 exit 0
-keys: actor_source, messages[{ack_at, body, created_at, id, in_reply_to, next_action, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{ack_after_reading, show}, reply, sender, seq, state, submission, wait_returned_at}], next_action, omitted, total
+keys: actor_source, messages[{ack_at, body, created_at, id, in_reply_to, notification_detail, recipient, reply, sender, seq, state, submission}], omitted, total
 actor_source = "option"
-messages[0].next_action = "Read the message with recovery.show. After reading, use recovery.ack_after_reading. Acknowledging a question leaves it open until you reply. Never repeat an uncertain notification."
 messages[0].notification_detail = "claude_socket_bytes_written"
-messages[0].recovery.ack_after_reading = "htalk --db DATABASE --as alice ack REQUEST_ID"
-messages[0].recovery.show = "htalk --db DATABASE --as alice show REQUEST_ID"
 messages[0].reply = null
 messages[0].state = "saved"
 messages[0].submission = "submitted"
-next_action = "Read and ack messages explicitly. Unanswered questions remain until replied to."
 omitted = 0
 total = 1
 
 ## the recipient shows the request
 $ htalk --db DATABASE --as alice show REQUEST_ID
 exit 0
-keys: ack_at, actor_source, body, created_at, id, in_reply_to, next_action, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{ack_after_reading, show}, reply, sender, seq, state, submission, wait_returned_at
+keys: ack_at, actor_source, body, created_at, id, in_reply_to, notification_detail, recipient, reply, sender, seq, state, submission
 actor_source = "option"
-next_action = "Read the message with recovery.show. After reading, use recovery.ack_after_reading. Acknowledging a question leaves it open until you reply. Never repeat an uncertain notification."
 notification_detail = "claude_socket_bytes_written"
-recovery.ack_after_reading = "htalk --db DATABASE --as alice ack REQUEST_ID"
-recovery.show = "htalk --db DATABASE --as alice show REQUEST_ID"
 reply = null
 state = "saved"
 submission = "submitted"
@@ -203,13 +189,11 @@ submission = "submitted"
 ## the recipient acknowledges; Claude has no notice removal
 $ htalk --db DATABASE --as alice ack REQUEST_ID
 exit 0
-keys: ack_at, actor_source, body, created_at, id, in_reply_to, next_action, notification_cleanup{detail, status}, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{show}, reply, sender, seq, state, submission, wait_returned_at
+keys: ack_at, actor_source, body, created_at, id, in_reply_to, notification_cleanup{detail, status}, notification_detail, recipient, reply, sender, seq, state, submission
 actor_source = "option"
-next_action = "Read the message with recovery.show. Acknowledging a question leaves it open until you reply. Never repeat an uncertain notification."
 notification_cleanup.detail = "client_has_no_notification_removal"
 notification_cleanup.status = "unsupported"
 notification_detail = "claude_socket_bytes_written"
-recovery.show = "htalk --db DATABASE --as alice show REQUEST_ID"
 reply = null
 state = "saved"
 submission = "submitted"
@@ -217,12 +201,10 @@ submission = "submitted"
 ## reply to a pull peer
 $ htalk --db DATABASE --as alice reply REQUEST_ID --message 'Invented answer'
 exit 0
-keys: ack_at, actor_source, body, created, created_at, id, in_reply_to, next_action, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{show}, reply, sender, seq, state, submission, wait_returned_at
+keys: ack_at, actor_source, body, created, created_at, id, in_reply_to, notification_detail, recipient, reply, sender, seq, state, submission
 actor_source = "option"
 created = true
-next_action = "Inspect the saved answer with recovery.show; the recipient can retrieve it from their inbox. The recipient uses pull delivery and must poll inbox; no client notice was attempted. Never repeat an uncertain notification."
 notification_detail = "pull_only"
-recovery.show = "htalk --db DATABASE --as alice show REPLY_ID"
 reply = null
 state = "saved"
 submission = "not_submitted"
@@ -230,13 +212,9 @@ submission = "not_submitted"
 ## wait returns the answer
 $ htalk --db DATABASE --as helper wait REQUEST_ID --seconds 0
 exit 0
-keys: ack_at, actor_source, body, created_at, id, in_reply_to, next_action, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{ack_after_reading, show, show_reply}, reply{ack_at, body, created_at, id, in_reply_to, notification_detail, notification_finished_at, notification_started_at, recipient, sender, seq, submission, wait_returned_at}, sender, seq, state, submission, wait_returned_at
+keys: ack_at, actor_source, body, created_at, id, in_reply_to, notification_detail, recipient, reply{ack_at, body, created_at, id, in_reply_to, notification_detail, recipient, sender, seq, submission}, sender, seq, state, submission
 actor_source = "option"
-next_action = "Read the saved answer with recovery.show_reply. After reading, use recovery.ack_after_reading. Never repeat an uncertain notification."
 notification_detail = "claude_socket_bytes_written"
-recovery.ack_after_reading = "htalk --db DATABASE --as helper ack REPLY_ID"
-recovery.show = "htalk --db DATABASE --as helper show REQUEST_ID"
-recovery.show_reply = "htalk --db DATABASE --as helper show REPLY_ID"
 reply.notification_detail = "pull_only"
 reply.submission = "not_submitted"
 state = "reply_received"
@@ -245,15 +223,11 @@ submission = "submitted"
 ## the sender's outgoing list
 $ htalk --db DATABASE --as helper sent
 exit 0
-keys: actor_source, messages[{ack_at, body_bytes, body_preview, created_at, id, in_reply_to, next_action, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{ack_after_reading, show, show_reply}, reply{ack_at, body_bytes, body_preview, created_at, id, in_reply_to, notification_detail, notification_finished_at, notification_started_at, recipient, sender, seq, submission, wait_returned_at}, sender, seq, state, submission, wait_returned_at}], omitted, total
+keys: actor_source, messages[{ack_at, body_bytes, body_preview, created_at, id, in_reply_to, notification_detail, recipient, reply{ack_at, body_bytes, body_preview, created_at, id, in_reply_to, notification_detail, recipient, sender, seq, submission}, sender, seq, state, submission}], omitted, total
 actor_source = "option"
 messages[0].body_bytes = 17
 messages[0].body_preview = "Invented question"
-messages[0].next_action = "Read the saved answer with recovery.show_reply. After reading, use recovery.ack_after_reading. Never repeat an uncertain notification."
 messages[0].notification_detail = "claude_socket_bytes_written"
-messages[0].recovery.ack_after_reading = "htalk --db DATABASE --as helper ack REPLY_ID"
-messages[0].recovery.show = "htalk --db DATABASE --as helper show REQUEST_ID"
-messages[0].recovery.show_reply = "htalk --db DATABASE --as helper show REPLY_ID"
 messages[0].reply.body_bytes = 15
 messages[0].reply.body_preview = "Invented answer"
 messages[0].reply.notification_detail = "pull_only"
@@ -266,13 +240,11 @@ total = 1
 ## the sender acknowledges the answer
 $ htalk --db DATABASE --as helper ack REPLY_ID
 exit 0
-keys: ack_at, actor_source, body, created_at, id, in_reply_to, next_action, notification_cleanup{detail, status}, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{show}, reply, sender, seq, state, submission, wait_returned_at
+keys: ack_at, actor_source, body, created_at, id, in_reply_to, notification_cleanup{detail, status}, notification_detail, recipient, reply, sender, seq, state, submission
 actor_source = "option"
-next_action = "Read the message with recovery.show. The recipient uses pull delivery and must poll inbox; no client notice was attempted. Never repeat an uncertain notification."
 notification_cleanup.detail = "pull_only"
 notification_cleanup.status = "skipped"
 notification_detail = "pull_only"
-recovery.show = "htalk --db DATABASE --as helper show REPLY_ID"
 reply = null
 state = "saved"
 submission = "not_submitted"
@@ -280,12 +252,9 @@ submission = "not_submitted"
 ## the request after its answer was read
 $ htalk --db DATABASE --as helper show REQUEST_ID
 exit 0
-keys: ack_at, actor_source, body, created_at, id, in_reply_to, next_action, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{show, show_reply}, reply{ack_at, body, created_at, id, in_reply_to, notification_detail, notification_finished_at, notification_started_at, recipient, sender, seq, submission, wait_returned_at}, sender, seq, state, submission, wait_returned_at
+keys: ack_at, actor_source, body, created_at, id, in_reply_to, notification_detail, recipient, reply{ack_at, body, created_at, id, in_reply_to, notification_detail, recipient, sender, seq, submission}, sender, seq, state, submission
 actor_source = "option"
-next_action = "Read the saved answer with recovery.show_reply. Never repeat an uncertain notification."
 notification_detail = "claude_socket_bytes_written"
-recovery.show = "htalk --db DATABASE --as helper show REQUEST_ID"
-recovery.show_reply = "htalk --db DATABASE --as helper show REPLY_ID"
 reply.notification_detail = "pull_only"
 reply.submission = "not_submitted"
 state = "reply_received"
@@ -294,11 +263,9 @@ submission = "submitted"
 ## an answer the recipient's wait returned
 $ htalk --db DATABASE --as alice show REPLY_ID
 exit 0
-keys: ack_at, actor_source, body, created_at, id, in_reply_to, next_action, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{show}, reply, sender, seq, state, submission, wait_returned_at
+keys: ack_at, actor_source, body, created_at, id, in_reply_to, notification_detail, recipient, reply, sender, seq, state, submission
 actor_source = "option"
-next_action = "Inspect the saved answer with recovery.show; the recipient can retrieve it from their inbox. The recipient's wait recorded this answer for return, so no client notice was sent. Never repeat an uncertain notification."
 notification_detail = "returned_by_recipient_wait"
-recovery.show = "htalk --db DATABASE --as alice show REPLY_ID"
 reply = null
 state = "saved"
 submission = "not_submitted"
@@ -308,13 +275,10 @@ submission = "not_submitted"
 ## send, queued by the Codex CLI
 $ htalk --db DATABASE --as helper send bob --id QUEUED_ID --message 'Invented task'
 exit 0
-keys: ack_at, actor_source, body, created, created_at, id, in_reply_to, next_action, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{show, wait}, reply, sender, seq, state, submission, wait_returned_at
+keys: ack_at, actor_source, body, created, created_at, id, in_reply_to, notification_detail, recipient, reply, sender, seq, state, submission
 actor_source = "option"
 created = true
-next_action = "Use recovery.wait to wait again on this saved request, or recovery.show to inspect it. Never repeat an uncertain notification."
 notification_detail = "codex_cli_queued:QUEUE_ID"
-recovery.show = "htalk --db DATABASE --as helper show QUEUED_ID"
-recovery.wait = "htalk --db DATABASE --as helper wait QUEUED_ID --seconds 45"
 reply = null
 state = "saved"
 submission = "submitted"
@@ -322,13 +286,11 @@ submission = "submitted"
 ## acknowledge, the queued notice is removed
 $ htalk --db DATABASE --as bob ack QUEUED_ID
 exit 0
-keys: ack_at, actor_source, body, created_at, id, in_reply_to, next_action, notification_cleanup{queue_id, status}, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{show}, reply, sender, seq, state, submission, wait_returned_at
+keys: ack_at, actor_source, body, created_at, id, in_reply_to, notification_cleanup{queue_id, status}, notification_detail, recipient, reply, sender, seq, state, submission
 actor_source = "option"
-next_action = "Read the message with recovery.show. Acknowledging a question leaves it open until you reply. Never repeat an uncertain notification."
 notification_cleanup.queue_id = "QUEUE_ID"
 notification_cleanup.status = "removed"
 notification_detail = "codex_cli_queued:QUEUE_ID"
-recovery.show = "htalk --db DATABASE --as bob show QUEUED_ID"
 reply = null
 state = "saved"
 submission = "submitted"
@@ -336,13 +298,11 @@ submission = "submitted"
 ## acknowledge again, the notice is already gone
 $ htalk --db DATABASE --as bob ack QUEUED_ID
 exit 0
-keys: ack_at, actor_source, body, created_at, id, in_reply_to, next_action, notification_cleanup{queue_id, status}, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{show}, reply, sender, seq, state, submission, wait_returned_at
+keys: ack_at, actor_source, body, created_at, id, in_reply_to, notification_cleanup{queue_id, status}, notification_detail, recipient, reply, sender, seq, state, submission
 actor_source = "option"
-next_action = "Read the message with recovery.show. Acknowledging a question leaves it open until you reply. Never repeat an uncertain notification."
 notification_cleanup.queue_id = "QUEUE_ID"
 notification_cleanup.status = "absent"
 notification_detail = "codex_cli_queued:QUEUE_ID"
-recovery.show = "htalk --db DATABASE --as bob show QUEUED_ID"
 reply = null
 state = "saved"
 submission = "submitted"
@@ -350,13 +310,10 @@ submission = "submitted"
 ## send without a notice
 $ htalk --db DATABASE --as helper send bob --id QUIET_ID --message 'Poll for this' --no-notify
 exit 0
-keys: ack_at, actor_source, body, created, created_at, id, in_reply_to, next_action, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{show, wait}, reply, sender, seq, state, submission, wait_returned_at
+keys: ack_at, actor_source, body, created, created_at, id, in_reply_to, notification_detail, recipient, reply, sender, seq, state, submission
 actor_source = "option"
 created = true
-next_action = "Use recovery.wait to wait again on this saved request, or recovery.show to inspect it. Never repeat an uncertain notification."
 notification_detail = null
-recovery.show = "htalk --db DATABASE --as helper show QUIET_ID"
-recovery.wait = "htalk --db DATABASE --as helper wait QUIET_ID --seconds 45"
 reply = null
 state = "saved"
 submission = "not_submitted"
@@ -364,13 +321,11 @@ submission = "not_submitted"
 ## acknowledge a message that had no notice
 $ htalk --db DATABASE --as bob ack QUIET_ID
 exit 0
-keys: ack_at, actor_source, body, created_at, id, in_reply_to, next_action, notification_cleanup{detail, status}, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{show}, reply, sender, seq, state, submission, wait_returned_at
+keys: ack_at, actor_source, body, created_at, id, in_reply_to, notification_cleanup{detail, status}, notification_detail, recipient, reply, sender, seq, state, submission
 actor_source = "option"
-next_action = "Read the message with recovery.show. Acknowledging a question leaves it open until you reply. Never repeat an uncertain notification."
 notification_cleanup.detail = "no_confirmed_queue_receipt"
 notification_cleanup.status = "skipped"
 notification_detail = null
-recovery.show = "htalk --db DATABASE --as bob show QUIET_ID"
 reply = null
 state = "saved"
 submission = "not_submitted"
@@ -378,12 +333,9 @@ submission = "not_submitted"
 ## wait ends without an answer
 $ htalk --db DATABASE --as helper wait QUIET_ID --seconds 0
 exit 0
-keys: ack_at, actor_source, body, created_at, id, in_reply_to, next_action, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{show, wait}, reply, sender, seq, state, submission, wait_ended, wait_returned_at
+keys: ack_at, actor_source, body, created_at, id, in_reply_to, notification_detail, recipient, reply, sender, seq, state, submission, wait_ended
 actor_source = "option"
-next_action = "Use recovery.wait to wait again on this saved request, or recovery.show to inspect it. Never repeat an uncertain notification."
 notification_detail = null
-recovery.show = "htalk --db DATABASE --as helper show QUIET_ID"
-recovery.wait = "htalk --db DATABASE --as helper wait QUIET_ID --seconds 45"
 reply = null
 state = "saved"
 submission = "not_submitted"
@@ -392,7 +344,7 @@ wait_ended = "timeout"
 ## acknowledge while the sender is still submitting
 $ htalk --db DATABASE --as bob ack QUIET_ID
 exit 0
-keys: ack_at, actor_source, body, created_at, id, in_reply_to, next_action, notification_cleanup{detail, status}, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{retry_notification_cleanup, show}, reply, sender, seq, state, submission, wait_returned_at
+keys: ack_at, actor_source, body, created_at, id, in_reply_to, next_action, notification_cleanup{detail, status}, notification_detail, recipient, recovery{retry_notification_cleanup, show}, reply, sender, seq, state, submission
 actor_source = "option"
 next_action = "Read the message with recovery.show. Acknowledging a question leaves it open until you reply. Acknowledgment is saved. After submission finishes, use recovery.retry_notification_cleanup to retry removal. If the sending process stopped before saving its completion receipt, cleanup can remain pending indefinitely; htalk cannot reconstruct the missing receipt. Never repeat an uncertain notification."
 notification_cleanup.detail = "notification_submission_has_no_completion_receipt"
@@ -407,7 +359,7 @@ submission = "submission_unknown"
 ## acknowledge when Codex state cannot be verified
 $ htalk --db DATABASE --as bob ack QUEUED_ID
 exit 0
-keys: ack_at, actor_source, body, created_at, id, in_reply_to, next_action, notification_cleanup{detail, status}, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{retry_notification_cleanup, show}, reply, sender, seq, state, submission, wait_returned_at
+keys: ack_at, actor_source, body, created_at, id, in_reply_to, next_action, notification_cleanup{detail, status}, notification_detail, recipient, recovery{retry_notification_cleanup, show}, reply, sender, seq, state, submission
 actor_source = "option"
 next_action = "Read the message with recovery.show. Acknowledging a question leaves it open until you reply. Acknowledgment is saved. After submission finishes, use recovery.retry_notification_cleanup to retry removal. Verify the registered Codex address and native access. If sandbox restrictions prevented cleanup, use your client's normal approval flow before retrying. Never repeat an uncertain notification."
 notification_cleanup.detail = "recipient_not_in_codex_state"
@@ -422,13 +374,10 @@ submission = "submitted"
 ## send to an OpenCode session
 $ htalk --db DATABASE --as helper send muse --message 'Invented prompt'
 exit 0
-keys: ack_at, actor_source, body, created, created_at, id, in_reply_to, next_action, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{show, wait}, reply, sender, seq, state, submission, wait_returned_at
+keys: ack_at, actor_source, body, created, created_at, id, in_reply_to, notification_detail, recipient, reply, sender, seq, state, submission
 actor_source = "option"
 created = true
-next_action = "Use recovery.wait to wait again on this saved request, or recovery.show to inspect it. Never repeat an uncertain notification."
 notification_detail = "opencode_prompt_async_accepted"
-recovery.show = "htalk --db DATABASE --as helper show UUID"
-recovery.wait = "htalk --db DATABASE --as helper wait UUID --seconds 45"
 reply = null
 state = "saved"
 submission = "submitted"
@@ -436,7 +385,7 @@ submission = "submitted"
 ## send, the recipient's client is not running
 $ htalk --db DATABASE --as helper send carol --message 'Anyone there?'
 exit 2
-keys: ack_at, actor_source, body, created, created_at, id, in_reply_to, next_action, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{show, wait}, reply, sender, seq, state, submission, wait_returned_at
+keys: ack_at, actor_source, body, created, created_at, id, in_reply_to, next_action, notification_detail, recipient, recovery{show, wait}, reply, sender, seq, state, submission
 actor_source = "option"
 created = true
 next_action = "Use recovery.wait to wait again on this saved request, or recovery.show to inspect it. Never repeat an uncertain notification."
@@ -450,12 +399,10 @@ submission = "not_submitted"
 ## reply to a retired peer
 $ htalk --db DATABASE --as helper reply LATE_ID --message 'Late answer'
 exit 0
-keys: ack_at, actor_source, body, created, created_at, id, in_reply_to, next_action, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{show}, reply, sender, seq, state, submission, wait_returned_at
+keys: ack_at, actor_source, body, created, created_at, id, in_reply_to, notification_detail, recipient, reply, sender, seq, state, submission
 actor_source = "option"
 created = true
-next_action = "Inspect the saved answer with recovery.show; the recipient can retrieve it from their inbox. The recipient peer is retired, so no client notice was sent. Never repeat an uncertain notification."
 notification_detail = "recipient_retired"
-recovery.show = "htalk --db DATABASE --as helper show UUID"
 reply = null
 state = "saved"
 submission = "not_submitted"
@@ -465,33 +412,27 @@ submission = "not_submitted"
 ## an inbox page with more behind it
 $ htalk --db DATABASE --as bob inbox --limit 1
 exit 0
-keys: actor_source, messages[{ack_at, body, created_at, id, in_reply_to, next_action, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{show}, reply, sender, seq, state, submission, wait_returned_at}], next_action, omitted, recovery{next_page}, total
+keys: actor_source, messages[{ack_at, body, created_at, id, in_reply_to, notification_detail, recipient, reply, sender, seq, state, submission}], next_page, omitted, total
 actor_source = "option"
-messages[0].next_action = "Read the message with recovery.show. Acknowledging a question leaves it open until you reply. Never repeat an uncertain notification."
 messages[0].notification_detail = "codex_cli_queued:QUEUE_ID"
-messages[0].recovery.show = "htalk --db DATABASE --as bob show QUEUED_ID"
 messages[0].reply = null
 messages[0].state = "saved"
 messages[0].submission = "submitted"
-next_action = "Read and ack messages explicitly. Unanswered questions remain until replied to. Newer messages remain: use recovery.next_page."
+next_page = "htalk --db DATABASE --as bob inbox --limit 1 --after-seq 3"
 omitted = 1
-recovery.next_page = "htalk --db DATABASE --as bob inbox --limit 1 --after-seq 3"
 total = 2
 
 ## an outgoing page with more behind it
 $ htalk --db DATABASE --as helper sent --limit 1 --bodies
 exit 0
-keys: actor_source, messages[{ack_at, body, created_at, id, in_reply_to, next_action, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{show}, reply, sender, seq, state, submission, wait_returned_at}], next_action, omitted, recovery{next_page}, total
+keys: actor_source, messages[{ack_at, body, created_at, id, in_reply_to, notification_detail, recipient, reply, sender, seq, state, submission}], next_page, omitted, total
 actor_source = "option"
-messages[0].next_action = "Inspect the saved answer with recovery.show; the recipient can retrieve it from their inbox. The recipient peer is retired, so no client notice was sent. Never repeat an uncertain notification."
 messages[0].notification_detail = "recipient_retired"
-messages[0].recovery.show = "htalk --db DATABASE --as helper show UUID"
 messages[0].reply = null
 messages[0].state = "saved"
 messages[0].submission = "not_submitted"
-next_action = "Older messages remain: use recovery.next_page."
+next_page = "htalk --db DATABASE --as helper sent --limit 1 --before-seq 8 --bodies"
 omitted = 5
-recovery.next_page = "htalk --db DATABASE --as helper sent --limit 1 --before-seq 8 --bodies"
 total = 6
 
 # Interruption
@@ -527,7 +468,7 @@ state = "interrupted"
 ## the same send after the interruption
 $ htalk --db DATABASE --as helper send bob --id STUCK_ID --message 'Invented task'
 exit 0
-keys: ack_at, actor_source, body, created, created_at, id, in_reply_to, next_action, notification_detail, notification_finished_at, notification_started_at, recipient, recovery{show, wait}, reply, sender, seq, state, submission, wait_returned_at
+keys: ack_at, actor_source, body, created, created_at, id, in_reply_to, next_action, notification_detail, recipient, recovery{show, wait}, reply, sender, seq, state, submission
 actor_source = "option"
 created = false
 next_action = "Use recovery.wait to wait again on this saved request, or recovery.show to inspect it. Never repeat an uncertain notification."

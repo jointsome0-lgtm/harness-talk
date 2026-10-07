@@ -157,9 +157,13 @@ pub struct Row {
     pub created_at: f64,
     pub ack_at: Option<f64>,
     pub submission: Submission,
+    // These three stay in the mailbox and are in no answer.
+    #[serde(skip_serializing)]
     pub notification_started_at: Option<f64>,
+    #[serde(skip_serializing)]
     pub notification_finished_at: Option<f64>,
     pub notification_detail: Option<String>,
+    #[serde(skip_serializing)]
     pub wait_returned_at: Option<f64>,
 }
 
@@ -248,8 +252,6 @@ pub struct Page {
     pub messages: Vec<Value>,
     pub total: i64,
     pub omitted: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_action: Option<String>,
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

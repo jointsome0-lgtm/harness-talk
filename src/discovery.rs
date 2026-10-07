@@ -58,7 +58,6 @@ pub fn finish(found: Found, workspace: Option<&str>) -> Value {
         )
     });
     json!({"sessions": sessions, "sources": found.sources,
-        "next_action": "Choose an exact session address and register it with peer add. Discovery does not register or notify anyone.",
         "scope": "Current local client environment and the listed endpoints only. Unavailable sources do not prove there are no sessions."})
 }
 

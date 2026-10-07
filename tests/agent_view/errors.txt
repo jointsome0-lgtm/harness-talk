@@ -201,7 +201,6 @@ message_id_conflict
 peer_already_has_a_different_address
 peer_required_use_as_or_HTALK_PEER
 peer_retired
-pull_only    (no entry below)
 reply_conflict_existing_answer_preserved
 session_already_has_a_peer_name
 unsupported_harness

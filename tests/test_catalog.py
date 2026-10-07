@@ -309,7 +309,7 @@ finally:
                             self.assertNotIn('body', row)
                             self.assertEqual(message['body'].splitlines()[0], row['body_preview'])
                         if page['omitted']:
-                            continuation = page['recovery']['next_page']
+                            continuation = page['next_page']
                             self.assertNotIn(str(self.tmp), continuation)
                             self.assertNotIn('--db', continuation)
                             self.assertNotIn('--as', continuation)
@@ -317,7 +317,7 @@ finally:
                             self.assertEqual('htalk', words[0])
                             args = words[1:]
                         else:
-                            self.assertNotIn('recovery', page)
+                            self.assertNotIn('next_page', page)
             self.assertTrue(client.call('send', 'hidden', '--id', str(uuid.uuid4()), '--message', 'blocked')['isError'])
             if selected:
                 self.assertTrue(client.call('send', 'carol', '--id', str(uuid.uuid4()), '--message', 'blocked')['isError'])

@@ -86,7 +86,7 @@ Successful subprocess calls return `{ "exit_code": 0, "result": CLI_JSON }`
 as structured content and JSON text. Nonzero CLI exits set MCP `isError` and
 preserve the CLI JSON and exit code. Validation and transport failures return
 text with `isError`. An error does not prove that a write was absent: inspect
-`sent` or `show` before repeating work. CLI recovery commands include the pinned
+`sent` or `show` before repeating work. CLI `recovery` commands and `next_page` include the pinned
 identity and database; leave those global options out of the MCP args array.
 
 Calls are independent subprocesses, so a `wait` does not block other tool calls.
