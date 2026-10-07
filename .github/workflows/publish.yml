@@ -95,9 +95,68 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
+  # macOS and Windows have the mailbox, pull peers and the MCP tool. Each wheel is installed in a
+  # new environment on its own system and the contract of those parts runs against it.
+  build-ported:
+    env:
+      RUSTUP_TOOLCHAIN: "1.98.1"
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      matrix:
+        include:
+          - runner: macos-latest
+            name: macos-arm64
+          - runner: macos-15-intel
+            name: macos-x86_64
+          - runner: windows-latest
+            name: windows-x64
+    defaults:
+      run:
+        shell: bash
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+      - name: Select Rust
+        run: rustup toolchain install 1.98.1 --profile minimal
+      - name: Test native contracts
+        run: cargo test --locked
+      - name: Build and check the binary wheel
+        run: |
+          python -m pip install 'maturin>=1.15,<2' twine
+          maturin build --release --locked --target-dir "$RUNNER_TEMP/dist-build" --out dist
+          python -m twine check --strict dist/*
+          python -c 'import hashlib, pathlib, sys; [print(hashlib.sha256(p.read_bytes()).hexdigest(), p) for p in sorted(pathlib.Path("dist").iterdir())]'
+      - name: Test the installed wheel outside the checkout
+        run: |
+          python -m venv "$RUNNER_TEMP/wheel"
+          bin="$RUNNER_TEMP/wheel/bin"
+          if [ ! -d "$bin" ]; then bin="$RUNNER_TEMP/wheel/Scripts"; fi
+          wheel=(dist/*.whl)
+          "$bin/python" -m pip install "${wheel[0]}"
+          "$bin/python" -m pip check
+          export HTALK_TEST_COMMAND="$("$bin/python" -c 'import json, shutil, sys; print(json.dumps([shutil.which("htalk", path=sys.argv[1])]))' "$bin")"
+          cp tests/compat_support.py tests/test_cli_compat.py tests/test_mcp.py tests/test_mail_recovery.py "$RUNNER_TEMP/"
+          cd "$RUNNER_TEMP"
+          "$bin/htalk" --version
+          "$bin/htalk" --help
+          python -c 'import os, platform; print(platform.machine(), os.environ["HTALK_TEST_COMMAND"])'
+          python -B -m unittest test_cli_compat test_mcp test_mail_recovery -v
+      - name: Store the checked distribution
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: harness-talk-dist-${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
   publish:
     if: github.event_name == 'workflow_dispatch' && inputs.mode == 'publish' && github.ref == 'refs/heads/main'
-    needs: build
+    needs: [build, build-ported]
     runs-on: ubuntu-latest
     environment:
       name: pypi
