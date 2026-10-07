@@ -160,4 +160,6 @@ Ready to release when installation and bidirectional exchanges work on real mach
 
 Use the CLI and existing storage contract until real callers require another interface. A new adapter should add client-specific setup and notification behavior, not another mailbox implementation. Every release records changes in production code, tests and dependencies separately. Keep an extension only when it has a demonstrated caller and a focused compatibility test.
 
+Version 0.13.0 changes names and texts once and no stored data: an error is a fixed code where it was a Python class name, a command that worked answers without recovery guidance, and the help and the MCP tool print one text. `src/` is smaller than in 0.12.0 and no dependency was added. See the [upgrade note](docs/releases/0.13.0.md).
+
 Update this file when a release ships or its scope changes. Put evidence and exact versions in the linked PRs and release records. Follow the publication procedure only after the owner authorizes that release; a completed PR or roadmap entry does not publish a package or migrate a working mailbox.
