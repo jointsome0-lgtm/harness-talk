@@ -37,7 +37,7 @@ fn in_workspace(native: Option<&Value>, workspace: &str) -> bool {
     native
         .and_then(Value::as_str)
         .filter(|p| Path::new(p).is_absolute())
-        .is_some_and(|p| lossy(&os::resolve(Path::new(p))) == workspace)
+        .is_some_and(|p| os::same_path(&lossy(&os::resolve(Path::new(p))), workspace))
 }
 
 /// Filter by the resolved workspace, sort, and add the public guidance fields.

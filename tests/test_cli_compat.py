@@ -1041,7 +1041,6 @@ class Notifications(HtalkCase):
         self.assertEqual(2, len([c for c in self.calls("codex") if c.get("rpc") == "thread/queue/delete"]))
 
     def test_opencode_prompt_is_posted_once_to_the_exact_session(self):
-        self.need_opencode()
         server, url = self.opencode_server({"ses_muse": {"id": "ses_muse", "directory": str(self.work),
                                                          "time": {"created": 1, "updated": 2}}})
         self.add_peer("alice")
@@ -1076,7 +1075,6 @@ class OpenCodeServer(HtalkCase):
     every request; a test waits on that record, on the command's answer or on its exit."""
 
     def setUp(self):
-        self.need_opencode()
         super().setUp()
         self.session = {"id": "ses_muse", "directory": str(self.work), "time": {"created": 1, "updated": 2}}
         self.server, self.url = self.opencode_server({"ses_muse": self.session})
@@ -1687,10 +1685,6 @@ class OpenCodeDiscovery(HtalkCase):
     """Read-only OpenCode discovery: server sources, saved metadata and per-record diagnostics."""
     NO_SERVER = "http://127.0.0.1:abc"  # Malformed, so nothing is asked and the default server is not tried.
     UPDATED = 1788990000000
-
-    def setUp(self):
-        self.need_opencode()
-        super().setUp()
 
     def database(self, data):
         return (data or self.home / ".local/share") / "opencode/opencode.db"
