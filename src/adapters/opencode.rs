@@ -374,16 +374,17 @@ impl Server {
             .map_err(|_| Req::Before(Error::code("invalid_opencode_url")))?
             .map_err(failed)?;
         let status = answer.status().as_u16();
-        let mut raw = Vec::new();
-        let whole = answer.body_mut().as_reader();
-        whole
-            .take(MAX_RESPONSE as u64 + 1)
-            .read_to_end(&mut raw)
-            .map_err(|e| failed(e.into()))?;
-        if raw.len() > MAX_RESPONSE {
-            return Err(Req::After(Error::code("opencode_response_too_large")));
+        let mut whole = answer.body_mut().as_reader();
+        let (mut raw, mut part) = (Vec::new(), [0; 8192]);
+        // Not `read_to_end`, which starts a read again after an interrupt ended it.
+        while raw.len() <= MAX_RESPONSE {
+            match whole.read(&mut part) {
+                Ok(0) => return Ok((status, raw)),
+                Ok(n) => raw.extend_from_slice(&part[..n]),
+                Err(e) => return Err(failed(e.into())),
+            }
         }
-        Ok((status, raw))
+        Err(Req::After(Error::code("opencode_response_too_large")))
     }
 
     /// Return (status, json); JSON null and an empty body are both None.
