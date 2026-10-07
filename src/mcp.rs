@@ -1,4 +1,6 @@
 //! One protocol adapter; mailbox behavior remains in the ordinary CLI.
+use crate::commands::{Cli, Command as Table, OverMcp};
+use clap::Parser;
 use rmcp::{
     RoleServer, ServerHandler, ServiceExt,
     handler::server::wrapper::Parameters,
@@ -55,6 +57,8 @@ enum Backend {
     Connect(Vec<String>),
 }
 
+const OUTSIDE: &str = "Use mailbox commands or peer list/check. Identity, database, registration, files and receivers are configured outside this tool. For a recovery command, omit htalk --db PATH --as NAME and pass only the command and its arguments.";
+
 fn error(message: impl Into<String>) -> CallToolResult {
     CallToolResult::error(vec![ContentBlock::text(message.into())])
 }
@@ -74,10 +78,10 @@ impl Mailbox {
         ctx: RequestContext<RoleServer>,
     ) -> CallToolResult {
         // Parse with the existing CLI so flag values cannot bypass the scope.
-        let parsed = crate::parser::command()
-            .try_get_matches_from(std::iter::once("htalk".to_owned()).chain(args.iter().cloned()));
-        let matches = match parsed {
-            Ok(matches) => matches,
+        let parsed =
+            Cli::try_parse_from(std::iter::once("htalk".to_owned()).chain(args.iter().cloned()));
+        let cli = match parsed {
+            Ok(cli) => cli,
             Err(e)
                 if matches!(
                     e.kind(),
@@ -88,30 +92,24 @@ impl Mailbox {
             }
             Err(e) => return error(e.to_string()),
         };
-        let Some((name, options)) = matches.subcommand() else {
-            return error("A mailbox command is required.");
+        // The command table says which commands this tool runs.
+        let command = match cli {
+            Cli {
+                db: None,
+                actor: None,
+                command: Table::Mailbox(command),
+                ..
+            } => command,
+            _ => return error(OUTSIDE),
         };
-        if matches.get_one::<String>("db").is_some()
-            || matches.get_one::<String>("actor").is_some()
-            || !matches!(
-                name,
-                "inbox" | "sent" | "show" | "ack" | "send" | "reply" | "wait" | "peer"
-            )
-            || (name == "peer" && !matches!(options.subcommand_name(), Some("list" | "check")))
-            || options
-                .try_get_one::<String>("message_file")
-                .ok()
-                .flatten()
-                .is_some()
-        {
-            return error(
-                "Use mailbox commands or peer list/check. Identity, database, registration, files and receivers are configured outside this tool. For a recovery command, omit htalk --db PATH --as NAME and pass only the command and its arguments.",
-            );
-        }
-        if name == "send" && options.get_one::<String>("id").is_none() {
-            return error(
-                "send requires --id YOUR_NEW_UUID. Keep it and reuse the same ID/body after cancellation or disconnect; inspect sent/show before repeating work.",
-            );
+        match command.over_mcp() {
+            OverMcp::Run => {}
+            OverMcp::Refuse => return error(OUTSIDE),
+            OverMcp::NeedsId => {
+                return error(
+                    "send requires --id YOUR_NEW_UUID. Keep it and reuse the same ID/body after cancellation or disconnect; inspect sent/show before repeating work.",
+                );
+            }
         }
         if catalog_binding.is_some() && self.catalog.is_none() {
             return error("This endpoint does not accept a catalogue scope.");
@@ -139,7 +137,7 @@ impl Mailbox {
                 );
             }
             let scope = catalog_binding.as_ref().unwrap_or(binding);
-            match scope.command_scope(db, name, options) {
+            match scope.command_scope(db, &command) {
                 Ok(Some(value)) => {
                     return CallToolResult::structured(
                         serde_json::json!({"exit_code":0,"result":value}),

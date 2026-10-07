@@ -13,7 +13,6 @@
 " Selected profiles: {}."
 "--codex-socket needs an absolute Unix socket path"
 "--mcp-command needs an absolute executable path"
-"A mailbox command is required."
 "AF_UNIX path too long"
 "Accept: application/json\r\n"
 "Another receiver holds this state directory"
