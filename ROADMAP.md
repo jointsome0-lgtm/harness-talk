@@ -152,7 +152,9 @@ Independent offline mailboxes, synchronization and relay infrastructure require 
 
 ## Native macOS and Windows
 
-Planned. Provide native packages and a working mailbox CLI on both operating systems. They may ship in separate releases if their remaining work differs. WSL does not count as native Windows support.
+Partly shipped. 0.14 has wheels for macOS ARM64, macOS x86-64 and Windows x64, and on both systems the mailbox, pull peers, the MCP tool and OpenCode delivery. Every one of these is checked on GitHub's hosted runners; none was run on a person's machine with real clients. [What works on which system](docs/platforms.md) has the table. WSL does not count as native Windows support.
+
+Left: native notices into Codex and Claude Code and `htalk receive` on each system, each with a live check there; process groups that hold every descendant on Windows; the catalogue's channels; a check of the session receivers; an exchange on a real Mac and a real Windows machine.
 
 Ready to release when installation and bidirectional exchanges work on real machines, with CI covering storage, paths, permissions and process behavior on each OS. Document native notification support separately for each harness/OS pair. Keep OS-specific discovery and notification code outside the shared mailbox rules; consider these dependencies during earlier stages.
 

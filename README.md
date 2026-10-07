@@ -13,7 +13,7 @@ Beyond the three native clients:
 - The [MCP mailbox tool](integrations/mcp.md) gives a client with MCP support the same message commands over stdio. Tool access and automatic session notification are documented separately for each harness.
 - Two devices can share one mailbox through the [MCP-over-SSH route](integrations/ssh.md), with a [Codex receiver](integrations/remote.md) for a worker on another device and a [Linux user service](integrations/ssh-service.md) for a reverse SSH route.
 
-Each release has its upgrade note under [docs/releases](docs/releases/). [0.13.0](docs/releases/0.13.0.md) changes error codes, the keys of a successful result and the text of the help, once; the mailbox stays on schema 3 and needs no migration. Stop mailbox writers and receivers before updating the CLI and their matching adapter files.
+Each release has its upgrade note under [docs/releases](docs/releases/). [0.14.0](docs/releases/0.14.0.md) adds macOS and Windows and changes nothing on Linux. [0.13.0](docs/releases/0.13.0.md) changes error codes, the keys of a successful result and the text of the help, once; the mailbox stays on schema 3 and needs no migration. Stop mailbox writers and receivers before updating the CLI and their matching adapter files.
 
 ## Install and share a database
 
@@ -24,9 +24,9 @@ uv tool install harness-talk
 export HTALK_DB=/absolute/shared/directory/mail.sqlite3
 ```
 
-Or install with `python -m pip install harness-talk` (Python 3.11+). htalk is a Rust executable, distributed as a Python package. Linux wheels for x86-64 and ARM64 with glibc 2.28+ include the compiled executable and SQLite; installing a matching wheel needs no Rust compiler. The installed `htalk` runs without Python. Source installs require Rust 1.88+, a C compiler and a linker; see [development](docs/development.md).
+Or install with `python -m pip install harness-talk` (Python 3.11+). htalk is a Rust executable, distributed as a Python package. Wheels for Linux x86-64 and ARM64 (glibc 2.28+), macOS ARM64 and x86-64, and Windows x64 include the compiled executable and SQLite; installing a matching wheel needs no Rust compiler. The same two install lines work on all three systems. On macOS and Windows 0.14 has the mailbox, pull peers, the MCP tool and OpenCode delivery; notices into Codex and Claude Code and the catalogue are Linux only, and all of it was checked on hosted runners, not with real clients. [What works on which system](docs/platforms.md) has the table. The installed `htalk` runs without Python. Source installs require Rust 1.88+, a C compiler and a linker; see [development](docs/development.md).
 
-Set the same `HTALK_DB` in both sessions. Both must be able to run `htalk` and write the database directory. Only `peer add` creates the file; other commands report `database_not_found` for a wrong path. `--db PATH` overrides the environment; [storage defaults](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/reference.md#database-and-peers) are documented separately.
+Set the same `HTALK_DB` in both sessions. Both must be able to run `htalk` and write the database directory. Only `peer add` creates the file; other commands report `database_not_found` for a wrong path. `--db PATH` overrides the environment; without either, the mailbox is `~/.local/share/harness-talk/mail.sqlite3` on Linux, `~/Library/Application Support/harness-talk/mail.sqlite3` on macOS and `%LOCALAPPDATA%\harness-talk\mail.sqlite3` on Windows; [storage defaults](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/reference.md#database-and-peers) are documented separately. On Windows set the variable with `set HTALK_DB=...` or `$env:HTALK_DB = "..."`.
 
 A mailbox on schema 1 or 2 is backed up and upgraded to schema 3 by the first command that opens it; see [migration and recovery](docs/reference.md#database-and-peers). Update every htalk installation that uses the mailbox.
 
