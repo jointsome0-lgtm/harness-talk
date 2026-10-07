@@ -19,8 +19,10 @@ use windows_sys::Win32::{
             CTRL_BREAK_EVENT, CTRL_C_EVENT, GenerateConsoleCtrlEvent, SetConsoleCtrlHandler,
         },
         JobObjects::{
-            AssignProcessToJobObject, CreateJobObjectW, JOBOBJECT_BASIC_ACCOUNTING_INFORMATION,
-            JobObjectBasicAccountingInformation, QueryInformationJobObject, TerminateJobObject,
+            AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+            JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JobObjectBasicAccountingInformation, JobObjectExtendedLimitInformation,
+            QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
         },
         Threading::{
             CREATE_NEW_PROCESS_GROUP, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
@@ -134,6 +136,21 @@ impl OwnedGroup {
             process,
             job: Owned(job),
         };
+        // A server that is killed runs no cleanup. Its handle to the job closes with it, and
+        // this makes that the end of the members.
+        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+        if unsafe {
+            SetInformationJobObject(
+                group.job.0,
+                JobObjectExtendedLimitInformation,
+                (&raw const limits).cast(),
+                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            )
+        } == 0
+        {
+            return Err(io::Error::last_os_error());
+        }
         if unsafe { AssignProcessToJobObject(group.job.0, group.process.0) } == 0 {
             let refused = io::Error::last_os_error();
             // A child that has exited enters no job, and has nothing left to stop.
