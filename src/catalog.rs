@@ -6,7 +6,8 @@ use crate::{
     commands::{Mailbox, PeerCommand},
     error::Error,
     model::Peer,
-    os, validate,
+    os::{self, Grouped, Open},
+    validate,
 };
 use clap::{Args, Subcommand};
 pub(crate) use endpoint::{NO_SCOPE, serve};
@@ -21,11 +22,6 @@ use std::{
     collections::{BTreeMap, HashSet},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
-    os::{
-        fd::AsRawFd,
-        unix::fs::{MetadataExt, OpenOptionsExt},
-        unix::process::CommandExt,
-    },
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{
@@ -62,18 +58,6 @@ impl Drop for Mdns {
         }
         if let Ok(done) = self.daemon.shutdown() {
             let _ = done.recv_timeout(Duration::from_secs(2));
-        }
-    }
-}
-
-struct Signals(Vec<signal_hook::SigId>);
-impl Drop for Signals {
-    fn drop(&mut self) {
-        for id in self.0.drain(..) {
-            signal_hook::low_level::unregister(id);
-        }
-        if let Some(flag) = STOP.get() {
-            flag.store(false, Ordering::Relaxed);
         }
     }
 }
@@ -331,16 +315,9 @@ fn text(s: &str, max: usize) -> Result<(), Error> {
 }
 
 fn private_file(path: &Path) -> Result<File, Error> {
-    let f = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)?;
+    let f = OpenOptions::new().read(true).no_follow().open(path)?;
     let m = f.metadata()?;
-    if !m.is_file()
-        || m.uid() != unsafe { libc::getuid() }
-        || m.mode() & 0o077 != 0
-        || m.len() > LIMIT as u64
-    {
+    if !m.is_file() || !os::is_private(&m) || m.len() > LIMIT as u64 {
         return Err(code("catalog_config_must_be_private_owned_file"));
     }
     Ok(f)
@@ -359,13 +336,11 @@ fn read<T: DeserializeOwned>(path: &Path) -> Result<T, Error> {
 
 fn stamp(path: &Path) -> Result<DbStamp, Error> {
     let m = fs::symlink_metadata(path)?;
-    if !m.is_file() || m.uid() != unsafe { libc::getuid() } {
+    if !m.is_file() || !os::is_mine(&m) {
         return Err(code("catalog_mailbox_not_owned_file"));
     }
-    Ok(DbStamp {
-        device: m.dev(),
-        inode: m.ino(),
-    })
+    let (device, inode) = os::file_id(&m);
+    Ok(DbStamp { device, inode })
 }
 
 fn load(path: &Path) -> Result<Catalog, Error> {
@@ -486,7 +461,7 @@ fn lock(path: &Path) -> Result<File, Error> {
         .ok_or_else(|| code("catalog_config_requires_directory"))?;
     fs::create_dir_all(parent)?;
     let m = fs::metadata(parent)?;
-    if m.uid() != unsafe { libc::getuid() } || m.mode() & 0o022 != 0 {
+    if !os::is_mine(&m) || os::others_write(&m) {
         return Err(code("catalog_directory_not_owned"));
     }
     // Keep normal config writers coordinated with older clients. A .lock config
@@ -502,14 +477,14 @@ fn lock(path: &Path) -> Result<File, Error> {
         .write(true)
         .create(true)
         .truncate(false)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW)
+        .private()
+        .no_follow()
         .open(lock_path)?;
     let m = f.metadata()?;
-    if !m.is_file() || m.uid() != unsafe { libc::getuid() } || m.mode() & 0o077 != 0 {
+    if !m.is_file() || !os::is_private(&m) {
         return Err(code("catalog_invalid_lock"));
     }
-    if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+    if !os::try_lock(&f, false).unwrap_or(false) {
         return Err(code("catalog_writer_active"));
     }
     Ok(f)
@@ -528,7 +503,7 @@ fn save(path: &Path, c: &Catalog) -> Result<(), Error> {
         let mut f = OpenOptions::new()
             .write(true)
             .create_new(true)
-            .mode(0o600)
+            .private()
             .open(&temp)?;
         f.write_all(&bytes)?;
         f.sync_all()?;
@@ -642,11 +617,7 @@ fn trust(path: &Path) -> Result<Trust, Error> {
         }
         for path in [&d.identity_file, &d.known_hosts_file] {
             let m = fs::symlink_metadata(path)?;
-            if !path.is_absolute()
-                || !m.is_file()
-                || m.uid() != unsafe { libc::getuid() }
-                || m.mode() & 0o022 != 0
-            {
+            if !path.is_absolute() || !m.is_file() || !os::is_mine(&m) || os::others_write(&m) {
                 return Err(code("catalog_invalid_ssh_file"));
             }
         }
@@ -656,7 +627,7 @@ fn trust(path: &Path) -> Result<Trust, Error> {
 
 fn connector(d: &TrustedDevice, route: &Route, operation: &str) -> Vec<String> {
     let mut args = vec![
-        "/usr/bin/ssh".into(),
+        os::SSH.into(),
         "-F".into(),
         "/dev/null".into(),
         "-T".into(),
@@ -705,7 +676,7 @@ fn capture(args: &[String], budget: Duration) -> Result<Vec<u8>, Error> {
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .env("LC_ALL", "C")
-        .process_group(0)
+        .own_group()
         .spawn()?;
     let group = child.id() as i32;
     let stdout = child.stdout.take().unwrap();
@@ -735,9 +706,7 @@ fn capture(args: &[String], budget: Duration) -> Result<Vec<u8>, Error> {
         thread::sleep(Duration::from_millis(25));
     };
     // A ProxyCommand may own descendants that still hold stdout after SSH exits.
-    unsafe {
-        libc::kill(-group, libc::SIGKILL);
-    }
+    os::kill_group(group);
     let received = reader.join();
     if stopped() {
         return Err(Error::Interrupted);
@@ -811,7 +780,7 @@ fn daemon(interface: &str) -> Result<Mdns, Error> {
     let flags = fs::read_to_string(Path::new("/sys/class/net").join(interface).join("flags"))?;
     let flags = u32::from_str_radix(flags.trim().trim_start_matches("0x"), 16)
         .map_err(|_| code("catalog_interface_unavailable"))?;
-    if flags & libc::IFF_UP as u32 == 0 || flags & libc::IFF_MULTICAST as u32 == 0 {
+    if !os::multicast_ready(flags) {
         return Err(code("catalog_interface_unavailable"));
     }
     let d = Mdns {
@@ -1411,10 +1380,7 @@ fn run(action: &Action, db: Option<&str>, actor: Option<&str>) -> Result<(), Err
         let flag = STOP
             .get_or_init(|| Arc::new(AtomicBool::new(false)))
             .clone();
-        Some(Signals(vec![
-            signal_hook::flag::register(signal_hook::consts::SIGINT, flag.clone())?,
-            signal_hook::flag::register(signal_hook::consts::SIGTERM, flag)?,
-        ]))
+        Some(os::Stop::on(flag)?)
     } else {
         None
     };

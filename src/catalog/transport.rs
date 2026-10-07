@@ -1,12 +1,11 @@
 //! Resolve one explicit channel; keep identity and mailbox policy in the catalogue.
 use super::{capture, code};
-use crate::error::Error;
+use crate::{error::Error, os};
 use serde_json::Value;
 use std::{
     collections::BTreeMap,
     fs,
     net::{IpAddr, Ipv4Addr},
-    os::unix::fs::{FileTypeExt, MetadataExt},
     path::PathBuf,
     time::{Duration, Instant},
 };
@@ -61,11 +60,11 @@ impl TailClient {
             })?;
             if !path.is_absolute()
                 || path.to_str().is_none()
-                || (m.uid() != 0 && m.uid() != unsafe { libc::getuid() })
+                || !(os::is_roots(&m) || os::is_mine(&m))
                 || if socket {
-                    !m.file_type().is_socket()
+                    !os::is_socket(&m)
                 } else {
-                    !m.is_file() || m.mode() & 0o022 != 0 || m.mode() & 0o111 == 0
+                    !m.is_file() || os::others_write(&m) || !os::is_executable(&m)
                 }
             {
                 return Err(code(if socket {
@@ -80,8 +79,8 @@ impl TailClient {
                 let parent = fs::metadata(path.parent().unwrap())
                     .map_err(|_| code("catalog_tailscale_invalid_socket"))?;
                 if !parent.is_dir()
-                    || parent.mode() & 0o022 != 0
-                    || (parent.uid() != 0 && parent.uid() != unsafe { libc::getuid() })
+                    || os::others_write(&parent)
+                    || !(os::is_roots(&parent) || os::is_mine(&parent))
                 {
                     return Err(code("catalog_tailscale_invalid_socket"));
                 }

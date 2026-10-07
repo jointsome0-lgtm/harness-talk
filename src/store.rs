@@ -2,11 +2,11 @@
 use crate::{
     error::{Error, Failure},
     model::*,
-    os, validate,
+    os::{self, Open},
+    validate,
 };
 use rusqlite::{Connection, OpenFlags, Params, TransactionBehavior, params, types::Value as Sql};
 use serde_json::{Map, Value};
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use std::{fs, io, thread};
@@ -176,15 +176,22 @@ pub(crate) fn summarize(message: &mut Value) {
     one(message);
 }
 
-/// Python's `Path.mkdir(mode, parents=True, exist_ok=True)`: only the last directory gets `mode`.
-fn make_dir(path: &Path, mode: u32) -> io::Result<()> {
-    match fs::DirBuilder::new().mode(mode).create(path) {
+/// Python's `Path.mkdir(0o700, parents=True, exist_ok=True)`: only the last directory is private.
+fn make_dir(path: &Path, private: bool) -> io::Result<()> {
+    let create = |path: &Path| {
+        if private {
+            os::create_private_dir(path)
+        } else {
+            fs::create_dir(path)
+        }
+    };
+    match create(path) {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             if let Some(parent) = path.parent() {
-                make_dir(parent, 0o777)?;
+                make_dir(parent, false)?;
             }
-            match fs::DirBuilder::new().mode(mode).create(path) {
+            match create(path) {
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists && path.is_dir() => Ok(()),
                 other => other,
             }
@@ -245,7 +252,7 @@ impl Store {
         };
         if create {
             if let Some(parent) = store.path.parent() {
-                make_dir(parent, 0o700)?;
+                make_dir(parent, true)?;
             }
             // Create privately before sqlite opens it, independent of the caller's umask.
             fs::OpenOptions::new()
@@ -253,7 +260,7 @@ impl Store {
                 .write(true)
                 .create(true)
                 .truncate(false)
-                .mode(0o600)
+                .private()
                 .open(&store.path)?;
         } else if let Err(e) = fs::metadata(&store.path) {
             // Access and corruption errors surface separately when opening.
@@ -497,7 +504,7 @@ impl Store {
                 Err(e) => Outcome::not_submitted(crate::compat::failure_detail(e)),
             },
         };
-        // SIGINT leaves the durable claim unfinished, as a KeyboardInterrupt
+        // An interrupt leaves the durable claim unfinished, as a KeyboardInterrupt
         // did in 0.4. A caller must inspect it and must never replay the notice.
         if os::interrupted() {
             return Err(Error::Interrupted);

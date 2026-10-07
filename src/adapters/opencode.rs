@@ -1027,10 +1027,7 @@ pub fn notify(peer: &Peer, body: &str, skip: Skip<'_>) -> Outcome {
 }
 
 fn saved_database() -> PathBuf {
-    let base = env::var_os("XDG_DATA_HOME")
-        .filter(|b| !b.is_empty())
-        .map_or_else(|| os::home().join(".local/share"), PathBuf::from);
-    os::expand_user(&base).join("opencode/opencode.db")
+    os::expand_user(&os::data_home(true)).join("opencode/opencode.db")
 }
 
 /// `str(pathlib.Path(p))`: repeated slashes and `.` parts removed.

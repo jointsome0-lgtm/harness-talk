@@ -6,7 +6,7 @@ use crate::{
     notify, os, validate,
 };
 use serde_json::json;
-use std::{io, os::fd::AsRawFd, time::Duration};
+use std::{io, time::Duration};
 
 pub(crate) fn show(session: Session, message_id: &str) -> Answer {
     let message = session.store.get(message_id, Some(session.actor))?;
@@ -60,14 +60,7 @@ pub(crate) fn watch(session: Session) -> Answer {
         }
         // An unloaded/crashed extension closes its read end, even if no new
         // mail arrives. Do not leave an idle watcher behind in that case.
-        let mut sink = libc::pollfd {
-            fd: io::stdout().as_raw_fd(),
-            events: 0,
-            revents: 0,
-        };
-        if unsafe { libc::poll(&mut sink, 1, 0) } > 0
-            && sink.revents & (libc::POLLERR | libc::POLLHUP | libc::POLLNVAL) != 0
-        {
+        if os::hung_up(&io::stdout()) {
             return Err(io::Error::from(io::ErrorKind::BrokenPipe).into());
         }
         let page = match session.store.inbox(&session.own.name, 100, after_seq) {

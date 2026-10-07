@@ -2,7 +2,10 @@
 //! as notification details and shown by discovery, and a few helpers repeat how Python wrote
 //! or compared a value. All of it is gathered here so that it can be removed in one place
 //! (issue #76). Nothing here is to be polished.
-use crate::error::{Error, Failure};
+use crate::{
+    error::{Error, Failure},
+    os::errno,
+};
 use serde_json::Value;
 use std::{
     io,
@@ -50,20 +53,20 @@ impl From<io::Error> for Failure {
     fn from(e: io::Error) -> Self {
         if let Some(errno) = e.raw_os_error() {
             return Self::Class(match errno {
-                libc::ENOENT => "FileNotFoundError",
-                libc::EACCES | libc::EPERM => "PermissionError",
-                libc::EISDIR => "IsADirectoryError",
-                libc::ENOTDIR => "NotADirectoryError",
-                libc::EEXIST => "FileExistsError",
-                libc::EINTR => "InterruptedError",
-                libc::EAGAIN | libc::EALREADY | libc::EINPROGRESS => "BlockingIOError",
-                libc::EPIPE | libc::ESHUTDOWN => "BrokenPipeError",
-                libc::ECONNABORTED => "ConnectionAbortedError",
-                libc::ECONNREFUSED => "ConnectionRefusedError",
-                libc::ECONNRESET => "ConnectionResetError",
-                libc::ETIMEDOUT => "TimeoutError",
-                libc::ECHILD => "ChildProcessError",
-                libc::ESRCH => "ProcessLookupError",
+                errno::ENOENT => "FileNotFoundError",
+                errno::EACCES | errno::EPERM => "PermissionError",
+                errno::EISDIR => "IsADirectoryError",
+                errno::ENOTDIR => "NotADirectoryError",
+                errno::EEXIST => "FileExistsError",
+                errno::EINTR => "InterruptedError",
+                errno::EAGAIN | errno::EALREADY | errno::EINPROGRESS => "BlockingIOError",
+                errno::EPIPE | errno::ESHUTDOWN => "BrokenPipeError",
+                errno::ECONNABORTED => "ConnectionAbortedError",
+                errno::ECONNREFUSED => "ConnectionRefusedError",
+                errno::ECONNRESET => "ConnectionResetError",
+                errno::ETIMEDOUT => "TimeoutError",
+                errno::ECHILD => "ChildProcessError",
+                errno::ESRCH => "ProcessLookupError",
                 _ => "OSError",
             });
         }

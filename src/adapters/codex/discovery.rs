@@ -11,7 +11,6 @@ use crate::{
 use rusqlite::{OpenFlags, types::ValueRef};
 use serde_json::{Map, Value, json};
 use std::collections::{HashMap, HashSet};
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -25,7 +24,7 @@ pub(super) fn discover(sockets: Option<&[String]>) -> Found {
     let held = sockets.is_none().then(|| {
         writers(
             &state::codex_home().join("thread-writer-locks"),
-            Path::new("/proc/locks"),
+            Path::new(os::LOCK_TABLE),
             state::state_path,
         )
     });
@@ -42,13 +41,6 @@ const SCAN_BUDGET: Duration = Duration::from_secs(15);
 
 pub fn default_socket() -> PathBuf {
     state::codex_home().join("app-server-control/app-server-control.sock")
-}
-
-fn dev_major(dev: u64) -> u64 {
-    u64::from(libc::major(dev))
-}
-fn dev_minor(dev: u64) -> u64 {
-    u64::from(libc::minor(dev))
 }
 
 fn int(text: &str, radix: u32) -> Result<i64, Failure> {
@@ -69,7 +61,7 @@ fn column(value: ValueRef<'_>) -> Result<Value, Failure> {
 }
 
 /// Linux kernel lock evidence for native CLI threads, without taking a lock.
-/// `directory` is `$CODEX_HOME/thread-writer-locks`; `lock_table` is normally `/proc/locks`.
+/// `directory` is `$CODEX_HOME/thread-writer-locks`; `lock_table` is normally `os::LOCK_TABLE`.
 pub fn writers(
     directory: &Path,
     lock_table: &Path,
@@ -104,7 +96,6 @@ fn scan_writers(
     src: &mut Map<String, Value>,
     sessions: &mut Vec<Value>,
 ) -> Result<(), Failure> {
-    let uid = unsafe { libc::getuid() };
     let mut files: HashMap<(u64, u64, u64), String> = HashMap::new();
     for entry in std::fs::read_dir(directory)? {
         let path = entry?.path();
@@ -123,11 +114,8 @@ fn scan_writers(
         let Ok(info) = path.symlink_metadata() else {
             continue;
         };
-        if info.file_type().is_file() && info.uid() == uid {
-            files.insert(
-                (dev_major(info.dev()), dev_minor(info.dev()), info.ino()),
-                ident,
-            );
+        if info.file_type().is_file() && os::is_mine(&info) {
+            files.insert(os::lock_key(&info), ident);
         }
     }
     let table = std::fs::read(lock_table)?;
