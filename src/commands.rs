@@ -51,7 +51,7 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand)]
 pub(crate) enum Command {
-    #[cfg(feature = "catalog")]
+    #[cfg(catalog)]
     #[command(
         subcommand,
         arg_required_else_help = false,
@@ -59,6 +59,16 @@ pub(crate) enum Command {
         long_about = "Only explicitly published profiles are exported. Device discovery is unauthenticated; profile reads and mailbox calls require pinned SSH identity and a fixed endpoint. Never launches sessions or retries messages."
     )]
     Catalog(crate::catalog::Action),
+    // The feature asks for the catalogue and this system has no port of it.
+    #[cfg(all(feature = "catalog", not(catalog)))]
+    #[command(
+        disable_help_flag = true,
+        about = "Not on this operating system yet: answers unsupported_on_this_platform."
+    )]
+    Catalog {
+        #[arg(hide = true, num_args = 0.., trailing_var_arg = true, allow_hyphen_values = true)]
+        rest: Vec<String>,
+    },
     #[command(
         about = "Expose this peer's mailbox tools over MCP stdio.",
         long_about = "Run a local MCP stdio server with a fixed database and peer, or keep a client connection alive while connecting to a remote mailbox separately for each tool call. Local mode requires --as or HTALK_PEER. Remote mode uses --connect -- COMMAND ARGS; that owner-configured command must reach a fixed htalk MCP endpoint. Calls are never automatically retried. This server does not wake an idle agent."
@@ -90,14 +100,14 @@ pub(crate) struct Mcp {
         help = "Owner-configured executable and arguments; executed directly, without a shell."
     )]
     pub connector: Vec<String>,
-    #[cfg(feature = "catalog")]
+    #[cfg(catalog)]
     #[arg(
         long,
         conflicts_with = "connect",
         help = "Expose the fixed published catalogue binding in the MCP handshake; local mode only."
     )]
     pub catalog: Option<String>,
-    #[cfg(feature = "catalog")]
+    #[cfg(catalog)]
     #[arg(
         long,
         requires = "connect",
@@ -464,7 +474,7 @@ pub(crate) struct Arguments {
     #[schemars(skip)]
     _wait_for_previous: bool,
     // A published endpoint is narrowed to the profiles its caller selected.
-    #[cfg(feature = "catalog")]
+    #[cfg(catalog)]
     #[serde(default, rename = "_catalog_binding")]
     #[schemars(skip)]
     pub scope: Option<crate::catalog::Binding>,
@@ -473,7 +483,7 @@ pub(crate) struct Arguments {
 impl Arguments {
     /// The arguments for an endpoint that takes no scope, or its refusal.
     pub(crate) fn unscoped(self) -> Result<Vec<String>, &'static str> {
-        #[cfg(feature = "catalog")]
+        #[cfg(catalog)]
         if self.scope.is_some() {
             return Err(crate::catalog::NO_SCOPE);
         }

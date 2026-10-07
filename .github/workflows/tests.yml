@@ -93,3 +93,31 @@ jobs:
         run: |
           rustup toolchain install 1.88.0 --profile minimal
           cargo +1.88.0 check --locked --all-targets
+
+  # The gate for systems that are being ported: the program builds, the store works and what
+  # is not ported there answers unsupported_on_this_platform. build.rs says what each has.
+  platforms:
+    env:
+      RUSTUP_TOOLCHAIN: "1.98.1"
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Select Rust
+        run: rustup toolchain install 1.98.1 --profile minimal --component clippy
+      - name: Build the mailbox without the catalogue
+        run: |
+          cargo build --locked --no-default-features
+          cargo clippy --locked --no-default-features --all-targets -- -D warnings
+      - name: Check and test Rust
+        run: |
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo test --locked

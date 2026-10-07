@@ -4,25 +4,27 @@ use crate::{
     adapters::{self, Harness, Query},
     error::Error,
     model::Found,
-    os, validate,
+    os,
 };
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 use std::path::Path;
 
 /// A validated (canonical UUID, absolute workspace) pair, as saved by registration.
+#[cfg(native_clients)]
 pub(crate) fn address(
     session_id: Option<&Value>,
     workspace: Option<&Value>,
 ) -> Option<(String, String)> {
-    let session_id = validate::uuid(session_id?.as_str()?).ok()?;
+    let session_id = crate::validate::uuid(session_id?.as_str()?).ok()?;
     let workspace = workspace?.as_str().filter(|w| Path::new(w).is_absolute())?;
     Some((session_id, workspace.to_owned()))
 }
 
-pub(crate) fn source(fields: Value) -> Map<String, Value> {
+#[cfg(native_clients)]
+pub(crate) fn source(fields: Value) -> serde_json::Map<String, Value> {
     match fields {
         Value::Object(map) => map,
-        _ => Map::new(),
+        _ => serde_json::Map::new(),
     }
 }
 

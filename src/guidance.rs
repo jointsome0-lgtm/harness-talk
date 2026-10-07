@@ -105,7 +105,7 @@ pub fn next_page(db: &Path, actor: &str, result: &mut Value, sent: bool, limit: 
 }
 
 /// What a failed catalogue command answers, and its exit code.
-#[cfg(feature = "catalog")]
+#[cfg(catalog)]
 pub(crate) fn catalog_failure(error: &Error) -> (Value, i32) {
     let (action, code) = match error {
         Error::Interrupted => ("The command was interrupted. Run it again.", 130),
@@ -118,6 +118,13 @@ pub(crate) fn catalog_failure(error: &Error) -> (Value, i32) {
         json!({"state":"error", "error":error.to_string(), "next_action":action}),
         code,
     )
+}
+
+/// What a whole command answers on a system it is not ported to.
+#[cfg(all(feature = "catalog", not(catalog)))]
+pub(crate) fn not_ported() -> Value {
+    let error = Error::not_ported();
+    json!({"state":"error", "error":error.fixed(), "next_action":hint(error.fixed())})
 }
 
 /// The hint for an error code, where the code alone decides it. A code that is neither here
@@ -145,6 +152,9 @@ fn hint(code: &str) -> Option<&'static str> {
         }
         "unsupported_harness" => {
             "Native notification adapters are codex, claude and opencode. For another harness, register with --delivery pull and poll inbox."
+        }
+        "unsupported_on_this_platform" => {
+            "htalk does not do this on this operating system yet. A pull peer works on every system: register with --delivery pull and poll inbox."
         }
         "peer_retired" => {
             "Nothing was saved: new requests to or from a retired peer are refused. Choose an active peer with recovery.peers. Replies to saved requests still work. Restoring a peer is a registry decision, not a way to deliver this message."
@@ -225,7 +235,9 @@ fn explain(command: &Mailbox, context: &Context, error: &str) -> Value {
     let mut value = json!({"state":"error", "error":error, "recovery":{"peers":context.recovery(&["peer","list"],false)}});
     let actor = context.actor.as_deref().unwrap_or("");
     match error {
-        "unsupported_harness" => value["next_action"] = hint(error).into(),
+        "unsupported_harness" | "unsupported_on_this_platform" => {
+            value["next_action"] = hint(error).into()
+        }
         "actor_conflicts_with_CODEX_THREAD_ID" | "actor_conflicts_with_CLAUDE_CODE_SESSION_ID" => {
             if let Some(own) = &context.own {
                 let codex = error == "actor_conflicts_with_CODEX_THREAD_ID";

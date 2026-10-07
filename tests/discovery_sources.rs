@@ -1,5 +1,7 @@
 //! Discovery sources against fixture rows, fake RPC calls, fixture lock tables and
 //! fixture Codex state; never live clients, sockets of real sessions or /proc/locks.
+//! Built where the Codex and Claude Code adapters are; `build.rs` says where.
+#![cfg(native_clients)]
 use harness_talk::adapters::claude::sessions as claude_sessions;
 use harness_talk::adapters::codex::discovery::{
     Call, app_servers as codex_app_servers, with_writers, writers as codex_writers,
