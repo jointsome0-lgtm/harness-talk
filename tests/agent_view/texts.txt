@@ -48,8 +48,6 @@
 "Owned group cleanup requires Linux pidfds and /proc"
 "Owned group cleanup requires Linux pidfds"
 "Owned process cleanup did not complete in four seconds"
-"Port could not be cast to integer value"
-"Port out of range 0-65535"
 "Process group anchor changed; cleanup not confirmed"
 "Process group member has a different owner"
 "Process ownership changed"

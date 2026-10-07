@@ -1,4 +1,4 @@
-use crate::{compat::python_whitespace, error::Error};
+use crate::error::Error;
 
 pub fn uuid(value: &str) -> Result<String, Error> {
     let hex = value.replace("urn:", "").replace("uuid:", "");
@@ -21,8 +21,13 @@ pub fn peer_name(value: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// What is trimmed from a body and from a line: whitespace, and the four ASCII separators.
+pub fn is_space(c: char) -> bool {
+    c.is_whitespace() || matches!(c, '\u{1c}'..='\u{1f}')
+}
+
 pub fn text(body: &str) -> Result<(), Error> {
-    if body.trim_matches(python_whitespace).is_empty() || body.len() > 32000 {
+    if body.trim_matches(is_space).is_empty() || body.len() > 32000 {
         Err(Error::code("message_must_be_1_to_32000_bytes"))
     } else {
         Ok(())
@@ -49,7 +54,7 @@ pub fn preview(body: &str) -> String {
         '\n', '\r', '\u{b}', '\u{c}', '\u{1c}', '\u{1d}', '\u{1e}', '\u{85}', '\u{2028}',
         '\u{2029}',
     ])
-    .map(|line| line.trim_matches(python_whitespace))
+    .map(|line| line.trim_matches(is_space))
     .find(|line| !line.is_empty())
     .unwrap_or("")
     .chars()

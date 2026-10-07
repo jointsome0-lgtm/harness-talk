@@ -581,8 +581,8 @@ fn saved_utf8_rejection_at_row_fifty_does_not_backfill_from_sentinel() {
 fn saved_storage_failures_remain_unavailable() {
     let dir = fixture::tempdir();
     for (name, expected) in [
-        ("not-sqlite.db", "opencode_saved_DatabaseError"),
-        ("missing-schema.db", "opencode_saved_OperationalError"),
+        ("not-sqlite.db", "opencode_saved_database_corrupt"),
+        ("missing-schema.db", "opencode_saved_database_unavailable"),
     ] {
         let path = dir.path().join(name);
         if name == "not-sqlite.db" {

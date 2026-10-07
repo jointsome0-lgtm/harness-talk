@@ -1372,6 +1372,64 @@ class Discovery(HtalkCase):
                 self.error("peer", "discover", *words, error=error)
         self.assertFalse(self.db.parent.exists())
 
+    def test_a_failure_below_a_client_is_a_fixed_code(self):
+        def source(*words):
+            first = self.htalk("peer", "discover", *words, code=2)["sources"][0]
+            return first.get("error") or first["detail"]
+        send = lambda name: self.htalk("--as", "alice", "send", name, "--message", "Q", code=2)["notification_detail"]
+        check = lambda name: self.htalk("peer", "check", name, code=2)["error"]
+        self.htalk("peer", "add", "alice", "--harness", "generic", "--delivery", "pull")
+        # `claude agents --json` that fails, that is not JSON, that is not a list.
+        for settings, code in (({"exit": 1}, "command_failed"), ({"stdout": "not json"}, "invalid_json"),
+                               ({"stdout": "{}"}, "invalid_claude_agents_response")):
+            self.configure(claude_agents=settings)
+            self.assertEqual(code, source("--harness", "claude"))
+        # A Claude socket nobody listens on, then no socket; then a session file that cannot be read.
+        self.configure(claude_agents={})
+        _, listener = self.claude_recipient("cl")
+        saved = next((self.home / ".claude/sessions").glob("*.json"))
+        listener.close()
+        self.assertEqual("connection_refused", send("cl"))
+        os.unlink(listener.path)
+        self.assertEqual("file_not_found", send("cl"))
+        for content, code in ((b"not json", "invalid_json"), (b"[1]", "invalid_client_data"), (b"\xff\xfe", "invalid_utf8")):
+            saved.write_bytes(content)
+            self.assertEqual(code, check("cl"))
+        # Codex: no socket and a dead one; saved state that is missing, then not a database; a config that is not one.
+        dead = self.tmp / "dead.sock"
+        with socket.socket(socket.AF_UNIX) as unused:
+            unused.bind(str(dead))
+        self.assertEqual("file_not_found", source("--harness", "codex", "--codex-socket", self.tmp / "none.sock"))
+        self.assertEqual("connection_refused", source("--harness", "codex", "--codex-socket", dead))
+        self.add_peer("cx", "codex")
+        self.assertEqual(("client_database_unavailable",) * 2, (check("cx"), send("cx")))
+        (self.codex_home / "state_5.sqlite").write_bytes(b"not a database, " * 64)
+        self.assertEqual("client_database_corrupt", check("cx"))
+        (self.codex_home / "state_5.sqlite").unlink()
+        (self.codex_home / "config.toml").write_text("sqlite_home = 5\n")
+        self.assertEqual("invalid_codex_config", check("cx"))
+        # An OpenCode server that answers with something that is not HTTP, and one that hangs up.
+        for name, answer, code in (("oa", b"garbage\r\n\r\n", "opencode_invalid_response"), ("ob", None, "opencode_connection_closed")):
+            server = socket.socket()
+            self.addCleanup(server.close)
+            server.bind(("127.0.0.1", 0))
+            server.listen(8)
+
+            def serve(server=server, answer=answer):
+                while True:
+                    try:
+                        connection, _ = server.accept()
+                    except OSError:
+                        return
+                    with connection:
+                        if answer:
+                            connection.recv(65536)
+                            connection.sendall(answer)
+            threading.Thread(target=serve, daemon=True).start()
+            url = "http://127.0.0.1:%d" % server.getsockname()[1]
+            self.add_peer(name, "opencode", None, None, "--url", url)
+            self.assertEqual((code,) * 3, (check(name), send(name), source("--harness", "opencode", "--opencode-url", url)))
+
 
 class ContendedWrites(HtalkCase):
     """What a sender relies on while another process holds the mailbox. Each test waits on the message

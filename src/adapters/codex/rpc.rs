@@ -1,8 +1,7 @@
 //! Bounded JSON RPC to a Codex app-server over its Unix WebSocket or a temporary stdio process.
 use crate::{
-    compat::{self, io_failure, owned_socket, python_dumps, socket_failure},
     error::Failure,
-    os::{self, Grouped, OwnedGroup, connect_unix},
+    os::{self, Grouped, OwnedGroup, connect_unix, owned_socket},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -33,7 +32,7 @@ pub(crate) struct BoundSocket {
 impl BoundSocket {
     pub(crate) fn capture(path: PathBuf) -> Result<Self, Failure> {
         let path = owned_socket(&path)?;
-        let meta = std::fs::metadata(&path).map_err(io_failure)?;
+        let meta = std::fs::metadata(&path)?;
         let ((device, inode), (changed_seconds, changed_nanos)) =
             (os::file_id(&meta), os::changed(&meta));
         Ok(Self {
@@ -79,6 +78,22 @@ fn websocket_failure() -> Failure {
     Failure::coded("codex_websocket_failure")
 }
 
+fn timeout() -> Failure {
+    Failure::coded("codex_rpc_timeout")
+}
+
+fn invalid_response() -> Failure {
+    Failure::coded("codex_rpc_invalid_response")
+}
+
+/// A failure of the stream under a call: an expired deadline is the call's timeout.
+fn stream_failure(error: std::io::Error) -> Failure {
+    match error.kind() {
+        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => timeout(),
+        _ => error.into(),
+    }
+}
+
 impl Rpc {
     /// Connect to an owned Unix socket without compression and initialize the protocol.
     pub fn connect_unix(path: &Path) -> Result<Self, Failure> {
@@ -95,7 +110,7 @@ impl Rpc {
             bound.check()?;
         }
         let deadline = Instant::now() + OPEN_TIMEOUT;
-        let stream = connect_unix(&path, OPEN_TIMEOUT).map_err(io_failure)?;
+        let stream = connect_unix(&path, OPEN_TIMEOUT).map_err(stream_failure)?;
         if let Some(bound) = bound {
             bound.check()?;
         }
@@ -106,8 +121,8 @@ impl Rpc {
         let (socket, _) =
             tungstenite::client::client_with_config("ws://localhost/", stream, Some(config))
                 .map_err(|error| match error {
-                    HandshakeError::Interrupted(_) => compat::TIMEOUT_ERROR,
-                    HandshakeError::Failure(tungstenite::Error::Io(error)) => socket_failure(error),
+                    HandshakeError::Interrupted(_) => timeout(),
+                    HandshakeError::Failure(tungstenite::Error::Io(error)) => stream_failure(error),
                     HandshakeError::Failure(_) => websocket_failure(),
                 })?;
         let mut rpc = Self {
@@ -128,8 +143,7 @@ impl Rpc {
             .stdout(Pipe::piped())
             .stderr(Pipe::null())
             .own_group()
-            .spawn()
-            .map_err(io_failure)?;
+            .spawn()?;
         let mut group = match OwnedGroup::new(child.id()) {
             Ok(group) => group,
             Err(_) => {
@@ -163,7 +177,7 @@ impl Rpc {
             closing: false,
         };
         if let Connection::Stdio(process) = &rpc.connection {
-            os::set_nonblocking(process.stdin.as_ref().unwrap()).map_err(io_failure)?;
+            os::set_nonblocking(process.stdin.as_ref().unwrap())?;
         }
         rpc.initialize()?;
         Ok(rpc)
@@ -192,11 +206,10 @@ impl Rpc {
             deadline,
         )?;
         loop {
-            remaining(deadline).ok_or_else(|| Failure::coded("codex_rpc_timeout"))?;
+            remaining(deadline).ok_or_else(timeout)?;
             let frame = self.recv(deadline)?;
-            let frame: Value =
-                serde_json::from_str(&frame).map_err(|_| compat::JSON_DECODE_ERROR)?;
-            let frame = frame.as_object().ok_or(compat::ATTRIBUTE_ERROR)?;
+            let frame: Value = serde_json::from_str(&frame).map_err(|_| invalid_response())?;
+            let frame = frame.as_object().ok_or_else(invalid_response)?;
             if !same_id(frame.get("id"), self.counter) {
                 continue;
             }
@@ -214,7 +227,7 @@ impl Rpc {
                     None => "codex_rpc_rejected".to_string(),
                 }));
             }
-            return frame.get("result").cloned().ok_or(compat::KEY_ERROR);
+            return frame.get("result").cloned().ok_or_else(invalid_response);
         }
     }
 
@@ -240,11 +253,7 @@ impl Rpc {
                 if socket.close(None).is_ok() {
                     while remaining(deadline).is_some() && socket.read().is_ok() {}
                 }
-                socket
-                    .get_mut()
-                    .stream
-                    .shutdown(std::net::Shutdown::Both)
-                    .map_err(io_failure)?;
+                socket.get_mut().stream.shutdown(std::net::Shutdown::Both)?;
             }
             Connection::Stdio(process) => process.close(first_attempt)?,
         }
@@ -265,7 +274,7 @@ impl Rpc {
     }
 
     fn write(&mut self, frame: &Value, deadline: Instant) -> Result<(), Failure> {
-        let text = python_dumps(frame);
+        let text = frame.to_string();
         match &mut self.connection {
             Connection::Closed => Err(Failure::coded("codex_rpc_closed")),
             Connection::Socket(socket) => {
@@ -279,7 +288,7 @@ impl Rpc {
                                 std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                             ) =>
                         {
-                            compat::TIMEOUT_ERROR
+                            timeout()
                         }
                         _ => websocket_failure(),
                     })
@@ -294,12 +303,12 @@ impl Rpc {
             Connection::Socket(socket) => {
                 socket.get_mut().deadline = deadline;
                 loop {
-                    remaining(deadline).ok_or(compat::TIMEOUT_ERROR)?;
+                    remaining(deadline).ok_or_else(timeout)?;
                     match socket.read() {
                         Ok(Message::Text(text)) => return Ok(text.as_str().to_owned()),
                         Ok(Message::Binary(bytes)) => {
                             return String::from_utf8(bytes.to_vec())
-                                .map_err(|_| compat::UNICODE_DECODE_ERROR);
+                                .map_err(|_| invalid_response());
                         }
                         Ok(Message::Ping(_) | Message::Pong(_) | Message::Frame(_)) => continue,
                         Ok(Message::Close(_)) => return Err(websocket_failure()),
@@ -309,7 +318,7 @@ impl Rpc {
                                 std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                             ) =>
                         {
-                            return Err(compat::TIMEOUT_ERROR);
+                            return Err(timeout());
                         }
                         Err(_) => return Err(websocket_failure()),
                     }
@@ -362,14 +371,6 @@ impl Write for DeadlineStream {
     }
 }
 
-fn stdio_failure(error: std::io::Error) -> Failure {
-    if error.kind() == std::io::ErrorKind::TimedOut {
-        Failure::coded("codex_rpc_timeout")
-    } else {
-        io_failure(error)
-    }
-}
-
 fn poll_until(io: &impl os::Descriptor, writable: bool, deadline: Instant) -> std::io::Result<()> {
     loop {
         let wait = remaining(deadline).ok_or_else(deadline_timeout)?;
@@ -387,17 +388,18 @@ fn poll_until(io: &impl os::Descriptor, writable: bool, deadline: Instant) -> st
 
 impl StdioProcess {
     fn write(&mut self, mut bytes: &[u8], deadline: Instant) -> Result<(), Failure> {
-        let stdin = self.stdin.as_mut().ok_or(compat::VALUE_ERROR)?;
+        let closed = || Failure::coded("codex_rpc_closed");
+        let stdin = self.stdin.as_mut().ok_or_else(closed)?;
         while !bytes.is_empty() {
-            remaining(deadline).ok_or_else(|| Failure::coded("codex_rpc_timeout"))?;
+            remaining(deadline).ok_or_else(timeout)?;
             match stdin.write(bytes) {
-                Ok(0) => return Err(compat::OS_ERROR),
+                Ok(0) => return Err(closed()),
                 Ok(count) => bytes = &bytes[count..],
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
                 Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    poll_until(stdin, true, deadline).map_err(stdio_failure)?;
+                    poll_until(stdin, true, deadline).map_err(stream_failure)?;
                 }
-                Err(error) => return Err(io_failure(error)),
+                Err(error) => return Err(error.into()),
             }
         }
         Ok(())
@@ -405,17 +407,17 @@ impl StdioProcess {
 
     /// Bounded newline framing for the local app-server process.
     fn recv(&mut self, deadline: Instant) -> Result<String, Failure> {
-        remaining(deadline).ok_or_else(|| Failure::coded("codex_rpc_timeout"))?;
+        remaining(deadline).ok_or_else(timeout)?;
         while !self.buffer.contains(&b'\n') {
             if self.buffer.len() >= FRAME_LIMIT {
                 return Err(Failure::coded("codex_rpc_frame_too_large"));
             }
-            poll_until(&self.stdout, false, deadline).map_err(stdio_failure)?;
+            poll_until(&self.stdout, false, deadline).map_err(stream_failure)?;
             let mut chunk = vec![0; 65536];
             let count = match self.stdout.read(&mut chunk) {
                 Ok(count) => count,
                 Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
-                Err(error) => return Err(io_failure(error)),
+                Err(error) => return Err(error.into()),
             };
             if count == 0 {
                 return Err(Failure::coded("codex_rpc_closed"));
@@ -423,14 +425,14 @@ impl StdioProcess {
             self.buffer.extend_from_slice(&chunk[..count]);
         }
         let Some(end) = self.buffer.iter().position(|b| *b == b'\n') else {
-            return Err(compat::OS_ERROR);
+            return Err(Failure::OS_ERROR);
         };
         let mut line: Vec<u8> = self.buffer.drain(..=end).collect();
         line.pop();
         if line.len() > FRAME_LIMIT {
             return Err(Failure::coded("codex_rpc_frame_too_large"));
         }
-        String::from_utf8(line).map_err(|_| compat::UNICODE_DECODE_ERROR)
+        String::from_utf8(line).map_err(|_| invalid_response())
     }
 
     fn close(&mut self, grace: bool) -> Result<(), Failure> {

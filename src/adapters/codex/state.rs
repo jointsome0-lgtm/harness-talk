@@ -1,6 +1,5 @@
 //! The installed Codex CLI's saved thread addresses, read without starting a client.
 use crate::{
-    compat::{self, io_failure, python_whitespace},
     error::Failure,
     os::{self, errno},
 };
@@ -27,7 +26,7 @@ pub fn state_path() -> Result<PathBuf, Failure> {
     let configured = match read_config(&home.join("config.toml"))? {
         Some(config) => match config.get("sqlite_home") {
             Some(toml::Value::String(value)) if !value.is_empty() => Some(PathBuf::from(value)),
-            Some(value) if truthy(value) => return Err(compat::TYPE_ERROR),
+            Some(value) if truthy(value) => return Err(invalid_config()),
             _ => None,
         },
         None => None,
@@ -44,7 +43,7 @@ pub fn state_path() -> Result<PathBuf, Failure> {
         None => {
             let variable = env::var_os("CODEX_SQLITE_HOME").unwrap_or_default();
             let variable = match variable.to_str() {
-                Some(text) => PathBuf::from(text.trim_matches(python_whitespace)),
+                Some(text) => PathBuf::from(text.trim()),
                 None => PathBuf::from(variable),
             };
             if variable.as_os_str().is_empty() {
@@ -82,9 +81,9 @@ pub(crate) fn saved_thread_at(
             ValueRef::Null | ValueRef::Blob(_) => Value::Null,
             ValueRef::Integer(n) => Value::from(n),
             ValueRef::Real(f) => serde_json::Number::from_f64(f).map_or(Value::Null, Value::Number),
-            ValueRef::Text(bytes) => Value::String(
-                String::from_utf8(bytes.to_vec()).map_err(|_| compat::OPERATIONAL_ERROR)?,
-            ),
+            ValueRef::Text(bytes) => {
+                Value::String(String::from_utf8(bytes.to_vec()).map_err(|_| Failure::INVALID_UTF8)?)
+            }
         })
     };
     let ident = match text(0)? {
@@ -105,14 +104,15 @@ fn read_config(path: &Path) -> Result<Option<toml::Table>, Failure> {
         return match error.raw_os_error() {
             Some(errno::ENOENT | errno::ENOTDIR | errno::ELOOP | errno::EBADF) => Ok(None),
             _ if error.kind() == io::ErrorKind::NotFound => Ok(None),
-            _ => Err(io_failure(error)),
+            _ => Err(error.into()),
         };
     }
-    let bytes = fs::read(path).map_err(io_failure)?;
-    let text = String::from_utf8(bytes).map_err(|_| compat::UNICODE_DECODE_ERROR)?;
-    text.parse::<toml::Table>()
-        .map(Some)
-        .map_err(|_| compat::TOML_DECODE_ERROR)
+    let text = String::from_utf8(fs::read(path)?).map_err(|_| invalid_config())?;
+    text.parse().map(Some).map_err(|_| invalid_config())
+}
+
+fn invalid_config() -> Failure {
+    Failure::coded("invalid_codex_config")
 }
 
 fn truthy(value: &toml::Value) -> bool {

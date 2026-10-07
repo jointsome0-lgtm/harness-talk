@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 fn a_descendant_holding_the_pipes_cannot_defeat_the_deadline() {
     let start = Instant::now();
     let result = os::run_command("/bin/sh", &["-c", "sleep 10 &"], Duration::from_millis(200));
-    assert_eq!(result.unwrap_err(), Failure::Class("TimeoutExpired"));
+    assert_eq!(result.unwrap_err(), Failure::COMMAND_TIMED_OUT);
     assert!(start.elapsed() < Duration::from_secs(3));
 }
 
@@ -102,7 +102,7 @@ open(sys.argv[1],'w').write(str(pid)+' '+start)
         }
         exited
     };
-    assert_eq!(result.unwrap_err(), Failure::Class("TimeoutExpired"));
+    assert_eq!(result.unwrap_err(), Failure::COMMAND_TIMED_OUT);
     assert!(start.elapsed() < Duration::from_secs(6));
     assert!(
         stopped,

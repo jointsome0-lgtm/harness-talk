@@ -12,10 +12,9 @@
 use super::{Adapter, Address, Query};
 use crate::model::NativePeer as Peer;
 use crate::{
-    compat::{self, http},
     error::{Error, Failure},
     model::*,
-    os,
+    os, validate,
 };
 use base64::Engine;
 use rusqlite::{OpenFlags, types::ValueRef};
@@ -49,14 +48,16 @@ impl From<Req> for Failure {
         }
     }
 }
-fn coded(code: &str) -> Failure {
+fn coded(code: &'static str) -> Failure {
     Failure::coded(code)
 }
+/// A broken answer, as `uncertain` names it after `opencode_`.
+const INVALID_RESPONSE: &str = "invalid_response";
 fn uncertain(class: &str) -> Req {
     Req::After(Failure::coded(format!("opencode_{class}")))
 }
 fn session_id(value: &str) -> Result<String, Failure> {
-    opencode_session_id(value).map_err(compat::failure)
+    Ok(opencode_session_id(value)?)
 }
 fn opencode_session_id(value: &str) -> Result<String, Error> {
     if !value.starts_with("ses")
@@ -99,12 +100,9 @@ pub fn opencode_url(value: Option<&str>) -> Result<String, Error> {
     }
     if !port.is_empty() {
         if !port.bytes().all(|b| b.is_ascii_digit()) {
-            return Err(Error::Value(
-                "Port could not be cast to integer value".into(),
-            ));
+            return Err(invalid());
         }
-        port.parse::<u16>()
-            .map_err(|_| Error::Value("Port out of range 0-65535".into()))?;
+        port.parse::<u16>().map_err(|_| invalid())?;
     }
     let parsed = url::Url::parse(&value).map_err(|_| invalid())?;
     if parsed.query().is_some_and(|q| !q.is_empty())
@@ -129,7 +127,7 @@ fn credentials() -> Result<Option<String>, Failure> {
     let user = env::var_os("OPENCODE_SERVER_USERNAME").filter(|u| !u.is_empty());
     let user = user.as_deref().map_or(Some("opencode"), |u| u.to_str());
     let (Some(user), Some(password)) = (user, password.to_str()) else {
-        return Err(compat::UNICODE_ENCODE_ERROR);
+        return Err(coded("invalid_opencode_credentials"));
     };
     Ok(Some(format!(
         "Basic {}",
@@ -261,16 +259,19 @@ impl Write for Conn {
     }
 }
 
-/// Python exception class for a socket or TLS failure after the connection opened.
+/// What a socket or TLS failure after the connection opened is called after `opencode_`.
 fn io_class(e: &io::Error) -> &'static str {
     if let Some(inner) = e.get_ref().and_then(|x| x.downcast_ref::<ureq::Error>()) {
         return match inner {
-            ureq::Error::Timeout(_) => compat::TIMEOUT_ERROR.class_name(),
+            ureq::Error::Timeout(_) => "timed_out",
             ureq::Error::Io(e) => io_class(e),
-            _ => compat::SSL_ERROR.class_name(),
+            _ => "tls_failed",
         };
     }
-    Failure::from(io::Error::from(e.kind())).class_name()
+    match e.kind().into() {
+        Failure::System(code) => code,
+        Failure::Coded(_) => "os_error",
+    }
 }
 
 /// Trust roots as Python's default context loads them: SSL_CERT_FILE or the system bundle, plus SSL_CERT_DIR.
@@ -420,7 +421,7 @@ impl<R: Read> Reader<R> {
                 Ok(n) => break n,
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {
                     if os::interrupted() {
-                        return Err(compat::KEYBOARD_INTERRUPT.class_name());
+                        return Err("interrupted");
                     }
                 }
                 Err(e) => return Err(io_class(&e)),
@@ -456,10 +457,10 @@ impl<R: Read> Reader<R> {
     fn framed_line(&mut self) -> Result<Vec<u8>, &'static str> {
         let line = self.readline(MAX_LINE + 1)?;
         if line.len() > MAX_LINE {
-            return Err(http::LINE_TOO_LONG);
+            return Err(INVALID_RESPONSE);
         }
         if !line.ends_with(b"\n") {
-            return Err(http::INCOMPLETE_READ);
+            return Err(INVALID_RESPONSE);
         }
         Ok(line)
     }
@@ -474,7 +475,7 @@ impl<R: Read> Reader<R> {
     fn safe_read(&mut self, n: usize) -> Result<Vec<u8>, &'static str> {
         let data = self.read(n)?;
         if data.len() < n {
-            Err(http::INCOMPLETE_READ)
+            Err(INVALID_RESPONSE)
         } else {
             Ok(data)
         }
@@ -485,7 +486,7 @@ fn pending_owned(buf: &[u8], pos: usize) -> Vec<u8> {
 }
 
 fn is_py_space(c: char) -> bool {
-    compat::python_whitespace(c)
+    validate::is_space(c)
 }
 fn latin1(bytes: &[u8]) -> String {
     bytes.iter().map(|b| *b as char).collect()
@@ -494,29 +495,29 @@ fn latin1(bytes: &[u8]) -> String {
 fn read_status(r: &mut Reader<impl Read>) -> Result<(String, i128), &'static str> {
     let line = r.readline(MAX_LINE + 1)?;
     if line.len() > MAX_LINE {
-        return Err(http::LINE_TOO_LONG);
+        return Err(INVALID_RESPONSE);
     }
     if line.is_empty() {
-        return Err(http::REMOTE_DISCONNECTED);
+        return Err("connection_closed");
     }
     if !line.ends_with(b"\n") {
-        return Err(http::INCOMPLETE_READ);
+        return Err(INVALID_RESPONSE);
     }
     let text = latin1(&line);
     let mut words = text.split(is_py_space).filter(|w| !w.is_empty());
     let (Some(version), Some(status)) = (words.next(), words.next()) else {
-        return Err(http::BAD_STATUS_LINE);
+        return Err(INVALID_RESPONSE);
     };
     if !version.starts_with("HTTP/") {
-        return Err(http::BAD_STATUS_LINE);
+        return Err(INVALID_RESPONSE);
     }
     let status = status
         .is_ascii()
         .then(|| py_int(status.as_bytes(), 10))
         .flatten()
-        .ok_or(http::BAD_STATUS_LINE)?;
+        .ok_or(INVALID_RESPONSE)?;
     if !(100..=999).contains(&status) {
-        return Err(http::BAD_STATUS_LINE);
+        return Err(INVALID_RESPONSE);
     }
     Ok((version.to_owned(), status))
 }
@@ -527,7 +528,7 @@ fn read_header_block(r: &mut Reader<impl Read>) -> Result<Vec<u8>, &'static str>
         let line = r.framed_line()?;
         count += 1;
         if count > MAX_HEADERS {
-            return Err(http::HTTP_EXCEPTION);
+            return Err(INVALID_RESPONSE);
         }
         if matches!(line.as_slice(), b"\r\n" | b"\n") {
             return Ok(block);
@@ -619,7 +620,7 @@ fn read_chunked(r: &mut Reader<impl Read>, mut amt: usize) -> Result<Vec<u8>, &'
                 let size = line.split(|b| *b == b';').next().unwrap_or_default();
                 let size = py_int(size, 16)
                     .filter(|n| *n >= 0)
-                    .ok_or(http::INCOMPLETE_READ)?;
+                    .ok_or(INVALID_RESPONSE)?;
                 if size == 0 {
                     loop {
                         let line = r.framed_line()?;
@@ -651,7 +652,7 @@ fn read_response(r: &mut Reader<impl Read>) -> Result<(i128, Vec<u8>), &'static 
         read_header_block(r)?;
     };
     if !(version == "HTTP/1.0" || version == "HTTP/0.9" || version.starts_with("HTTP/1.")) {
-        return Err(http::UNKNOWN_PROTOCOL);
+        return Err(INVALID_RESPONSE);
     }
     let headers = parse_headers(&read_header_block(r)?);
     let chunked =
@@ -714,7 +715,7 @@ struct Server {
 }
 impl Server {
     fn new(url: Option<&str>) -> Result<Self, Failure> {
-        let url = opencode_url(url).map_err(compat::failure)?;
+        let url = opencode_url(url)?;
         let (scheme, rest) = url
             .split_once("://")
             .ok_or_else(|| coded("invalid_opencode_url"))?;
@@ -743,9 +744,10 @@ impl Server {
             if https { 443 } else { 80 }
         } else {
             if !port.bytes().all(|b| b.is_ascii_digit()) {
-                return Err(compat::VALUE_ERROR);
+                return Err(coded("invalid_opencode_url"));
             }
-            port.parse::<u16>().map_err(|_| compat::VALUE_ERROR)?
+            port.parse::<u16>()
+                .map_err(|_| coded("invalid_opencode_url"))?
         };
         Ok(Self {
             https,
@@ -802,10 +804,10 @@ impl Server {
         });
         let conn = self.connect().map_err(Req::Before)?;
         if target.bytes().any(|b| b <= b' ' || b == 0x7f) {
-            return Err(uncertain(http::INVALID_URL));
+            return Err(Req::After(coded("invalid_opencode_url")));
         }
         if !target.is_ascii() {
-            return Err(Req::Before(compat::UNICODE_ENCODE_ERROR));
+            return Err(Req::Before(coded("invalid_opencode_url")));
         }
         let default_port = if self.https { 443 } else { 80 };
         let host = if self.host.contains(':') {
@@ -840,7 +842,7 @@ impl Server {
         };
         // Check after TCP/TLS setup too, immediately before the first request byte.
         if os::interrupted() {
-            return Err(Req::Before(compat::KEYBOARD_INTERRUPT));
+            return Err(Req::Before(Failure::INTERRUPTED));
         }
         reader
             .conn
@@ -871,7 +873,7 @@ impl Server {
     }
 }
 
-fn expect(response: (i128, Option<Value>), missing: &str) -> Result<Value, Failure> {
+fn expect(response: (i128, Option<Value>), missing: &'static str) -> Result<Value, Failure> {
     match response {
         (401, _) => Err(coded("opencode_unauthorized")),
         (404, _) => Err(coded(missing)),
@@ -1012,7 +1014,7 @@ pub fn notify(peer: &Peer, body: &str, skip: Skip<'_>) -> Outcome {
         Ok((server, None)) => server,
     };
     if os::interrupted() {
-        return Outcome::not_submitted(compat::KEYBOARD_INTERRUPT.to_string());
+        return Outcome::not_submitted(Failure::INTERRUPTED.to_string());
     }
     let path = format!("/session/{}/prompt_async", quote(&peer.session_id, false));
     match server.request("POST", &path, Some(&peer.workspace), Some(body)) {
@@ -1133,8 +1135,8 @@ fn server_sessions(url: &str, workspace: Option<&str>) -> (Vec<Value>, Value) {
     if let Err(failure) = result {
         source["status"] = json!("unavailable");
         source["error"] = json!(match failure {
-            Failure::Coded(code) => code,
-            Failure::Class(name) => format!("opencode_{name}"),
+            Failure::Coded(code) => code.into_owned(),
+            Failure::System(code) => format!("opencode_{code}"),
         });
         found.clear();
     }
@@ -1190,8 +1192,10 @@ fn saved_sessions(path: &Path) -> (Vec<Value>, Value) {
             source["status"] = json!("unavailable");
             source["detail"] = Value::Null;
             source["error"] = json!(match failure {
-                Failure::Coded(code) => code,
-                Failure::Class(name) => format!("opencode_saved_{name}"),
+                Failure::Coded(code) => code.into_owned(),
+                Failure::System(code) => {
+                    format!("opencode_saved_{}", code.trim_start_matches("client_"))
+                }
             });
             return (Vec::new(), source);
         }

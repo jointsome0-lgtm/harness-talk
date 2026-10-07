@@ -1,15 +1,13 @@
 # Fixed codes, read from the source text, and what a failed command returns.
 #
 # The lists hold every string literal inside a call that raises an error code
-# (Error::code) or that carries a detail (Failure::coded, a notification outcome, a
-# cleanup detail). Values the source spells another way, such as a skipped notice's
-# reason, appear in the entries below and in results.txt, not in the lists.
+# (Error::code) or that carries a detail (a Failure, a notification outcome, a cleanup
+# detail). Values the source spells another way, such as a skipped notice's reason,
+# appear in the entries below and in results.txt, not in the lists.
 #
 # A code appears as error in a command's error result, or as a detail:
 # notification_detail, notification_cleanup.detail, a discovery source's detail.
-# A failed check returns its detail code as error. Where no fixed code applies, a
-# detail is an exception class name; docs/reference.md documents that, and no name
-# is listed here.
+# A failed check returns its detail code as error. Every detail is a fixed code.
 
 ## error codes
 actor_conflicts_with_CLAUDE_CODE_SESSION_ID
@@ -117,6 +115,8 @@ workspace_must_be_a_directory
 ## detail codes
 adapter_unavailable
 claude_socket_bytes_written
+client_database_corrupt
+client_database_unavailable
 client_has_no_notification_removal
 codex_cli_invalid_queue_id
 codex_cli_unconfirmed_receipt
@@ -126,6 +126,7 @@ codex_queue_delete_receipt_invalid
 codex_queue_receipt_mismatch
 codex_rpc_closed
 codex_rpc_frame_too_large
+codex_rpc_invalid_response
 codex_rpc_rejected
 codex_rpc_timeout
 codex_server_socket_changed
@@ -135,11 +136,23 @@ codex_store_changed
 codex_store_name_unsupported
 codex_store_path_not_utf8
 codex_websocket_failure
+command_failed
+command_timed_out
+connection_closed
+connection_refused
+file_not_found
+interrupted
 invalid_claude_agents_response
+invalid_client_data
+invalid_codex_config
 invalid_discovery_cursor
+invalid_json
 invalid_loaded_threads_response
+invalid_lock_table
 invalid_native_address
+invalid_opencode_credentials
 invalid_opencode_url
+invalid_utf8
 message_not_acknowledged_by_recipient
 no_confirmed_queue_receipt
 notification_state_unavailable
@@ -150,6 +163,8 @@ opencode_response_too_large
 opencode_unauthorized
 opencode_unreachable
 opencode_url_must_be_loopback
+os_error
+permission_denied
 pull_only
 recipient_identity_changed
 recipient_is_not_an_unarchived_codex_cli_session
@@ -159,6 +174,7 @@ recipient_not_loaded
 recipient_session_archived
 recipient_socket_unavailable
 recipient_unavailable
+timed_out
 
 ## codes built at run time, {} is the variable part
 codex_cli_queued:{}

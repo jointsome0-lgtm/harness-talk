@@ -344,7 +344,7 @@ fn receiver_uses_the_bound_server_without_cli_fallback_and_preserves_receipts() 
         let error = String::from_utf8_lossy(&rejected.stderr);
         assert!(error.contains("Cannot inspect Codex server socket"));
         assert!(error.contains(socket.to_str().unwrap()));
-        assert!(error.contains("FileNotFoundError"));
+        assert!(error.contains("file_not_found"));
         assert!(error.contains("receive status --state"));
         assert_eq!(before, fs::read(&ledger).unwrap());
     }
@@ -663,7 +663,7 @@ fn socket_failures_before_and_after_the_queue_attempt_are_distinct() {
             "missing-receipt",
             Box::new(|p| app_server(p, || (), Some(json!({})))),
             Submission::SubmissionUnknown,
-            "KeyError",
+            "invalid_client_data",
         ),
         (
             "rejected-add",
@@ -761,7 +761,7 @@ fn socket_failures_before_and_after_the_queue_attempt_are_distinct() {
                 })
             }),
             Submission::NotSubmitted,
-            "AttributeError",
+            "invalid_client_data",
         ),
     ];
     for (name, handler, submission, detail) in cases {
@@ -792,7 +792,7 @@ fn socket_failures_before_and_after_the_queue_attempt_are_distinct() {
         &|| read_skip(&id_db, id),
     );
     assert_eq!(
-        (Submission::NotSubmitted, "FileNotFoundError"),
+        (Submission::NotSubmitted, "file_not_found"),
         (absent.submission, absent.detail.as_str())
     );
     fs::write(fixture.dir.join("file.sock"), "").unwrap();
@@ -814,7 +814,7 @@ fn socket_failures_before_and_after_the_queue_attempt_are_distinct() {
         &|| read_skip(&id_db, id),
     );
     assert_eq!(
-        (Submission::NotSubmitted, "ConnectionRefusedError"),
+        (Submission::NotSubmitted, "connection_refused"),
         (refused.submission, refused.detail.as_str())
     );
     assert!(
@@ -872,7 +872,7 @@ fn socket_probe_and_cleanup_repeat_the_live_identity_check() {
             json!({"id": peer.session_id, "cwd": "/other", "status": {"type": "idle"}}),
             "recipient_identity_changed",
         ),
-        (json!([]), "AttributeError"),
+        (json!([]), "invalid_client_data"),
     ] {
         let server = serve(
             &path,
@@ -942,7 +942,7 @@ fn native_queue_runs_once_with_the_exact_uuid_and_checks_the_receipt() {
         (
             "latin1",
             Submission::SubmissionUnknown,
-            "UnicodeDecodeError".into(),
+            "invalid_utf8".into(),
         ),
     ];
     let count = cases.len();
@@ -979,7 +979,7 @@ fn native_queue_is_not_run_without_the_saved_identity_or_after_a_final_check_rec
             (o.submission, o.detail.as_str())
         );
     };
-    not_submitted("OperationalError");
+    not_submitted("client_database_unavailable");
     assert!(
         !fixture.dir.join("state_5.sqlite").exists(),
         "the saved state is never created"
@@ -1030,7 +1030,7 @@ fn native_queue_is_not_run_without_the_saved_identity_or_after_a_final_check_rec
         &|| read_skip(&fresh, "11111111-2222-4333-8444-555555555555"),
     );
     assert_eq!(
-        (Submission::NotSubmitted, "FileNotFoundError"),
+        (Submission::NotSubmitted, "file_not_found"),
         (missing.submission, missing.detail.as_str())
     );
 }
@@ -1074,12 +1074,12 @@ fn saved_identity_follows_configuration_precedence() {
     );
     fs::write(home.join("config.toml"), "sqlite_home = 5\n").unwrap();
     assert_eq!(
-        Failure::Class("TypeError"),
+        Failure::coded("invalid_codex_config"),
         state::state_path().unwrap_err()
     );
     fs::write(home.join("config.toml"), "sqlite_home = [\n").unwrap();
     assert_eq!(
-        Failure::Class("TOMLDecodeError"),
+        Failure::coded("invalid_codex_config"),
         state::state_path().unwrap_err()
     );
 
@@ -1176,7 +1176,7 @@ fn cleanup_requires_a_confirmed_receipt_and_the_saved_identity() {
                 true,
             ),
             CleanupStatus::Unavailable,
-            "ValueError",
+            "codex_cli_invalid_queue_id",
         ),
         (
             &peer,
@@ -1200,7 +1200,7 @@ fn cleanup_requires_a_confirmed_receipt_and_the_saved_identity() {
         &message(&peer, Some(&receipt), Submission::Submitted, true),
     );
     assert_eq!(
-        (CleanupStatus::Unavailable, Some("FileNotFoundError")),
+        (CleanupStatus::Unavailable, Some("file_not_found")),
         (cleanup.status, cleanup.detail.as_deref())
     );
 }

@@ -300,13 +300,13 @@ fn codex_partial_results_survive_a_later_transport_failure() {
         "thread/loaded/list" if params["cursor"].is_null() => {
             Ok(json!({"data": [ID], "nextCursor": "next"}))
         }
-        "thread/loaded/list" => Err(Failure::Class("OSError")),
+        "thread/loaded/list" => Err(Failure::OS_ERROR),
         _ => Ok(thread(ID, &cwd, "active")),
     });
     let found = codex_app_servers(&[dir.text()], &connect);
     assert_eq!(vec![ID], ids(&found));
     assert_eq!(
-        json!({"harness": "codex", "source": "codex_app_server", "socket": dir.text(), "status": "partial", "detail": "OSError"}),
+        json!({"harness": "codex", "source": "codex_app_server", "socket": dir.text(), "status": "partial", "detail": "os_error"}),
         found.sources[0]
     );
     // An RPC timeout during a read ends the source rather than counting a record.

@@ -8,7 +8,6 @@ pub mod rpc;
 pub mod state;
 
 use super::{Adapter, Address, Query};
-use crate::compat::{self, index, io_failure, python_uuid, text_output};
 use crate::model::NativePeer as Peer;
 use crate::os::{self, same_workspace};
 use crate::{
@@ -79,8 +78,7 @@ pub(crate) fn notify_in_store(
         return Outcome::not_submitted("codex_store_name_unsupported");
     }
     let check = || {
-        let current =
-            state::state_path().and_then(|path| std::fs::canonicalize(path).map_err(io_failure))?;
+        let current = std::fs::canonicalize(state::state_path()?)?;
         if current != database {
             return Err(Failure::coded("codex_store_changed"));
         }
@@ -121,7 +119,7 @@ pub fn dismiss(peer: &Peer, message: &Message) -> Cleanup {
         let queue_id = if socket.is_some() {
             queued.to_owned()
         } else {
-            python_uuid(queued).ok_or(compat::VALUE_ERROR)?
+            validate::uuid(queued).map_err(|_| Failure::coded("codex_cli_invalid_queue_id"))?
         };
         let mut rpc = match socket {
             Some(path) => {
@@ -139,8 +137,7 @@ pub fn dismiss(peer: &Peer, message: &Message) -> Cleanup {
             "thread/queue/delete",
             json!({"threadId": peer.session_id, "queuedSubmissionId": queue_id}),
         )?;
-        let object = result.as_object().ok_or(compat::ATTRIBUTE_ERROR)?;
-        let Some(&Value::Bool(deleted)) = object.get("deleted") else {
+        let Some(&Value::Bool(deleted)) = result.get("deleted") else {
             return Err(Failure::coded("codex_queue_delete_receipt_invalid"));
         };
         drop(rpc);
@@ -211,12 +208,20 @@ fn notify_socket(
             json!({"threadId": peer.session_id,
             "clientUserMessageId": message_id, "input": [{"type": "text", "text": body}]}),
         )?;
-        let queued = index(&receipt, "queuedSubmission")?;
-        if index(queued, "clientUserMessageId")?.as_str() != Some(message_id) {
+        let queued = receipt
+            .get("queuedSubmission")
+            .ok_or(Failure::INVALID_DATA)?;
+        let client_id = queued
+            .get("clientUserMessageId")
+            .ok_or(Failure::INVALID_DATA)?;
+        if client_id.as_str() != Some(message_id) {
             return Err(Failure::coded("codex_queue_receipt_mismatch"));
         }
         drop(rpc);
-        let id = index(queued, "id")?.as_str().ok_or(compat::TYPE_ERROR)?;
+        let id = queued
+            .get("id")
+            .and_then(Value::as_str)
+            .ok_or(Failure::INVALID_DATA)?;
         Ok(Outcome::submitted(format!("codex_queued:{id}")))
     })();
     result.unwrap_or_else(|failure| {
@@ -259,15 +264,14 @@ fn notify_cli(peer: &Peer, body: &str, skip: Skip<'_>, database: Option<&Path>) 
         Ok(output) => output,
         // Spawn failures precede submission; anything after the process starts is uncertain.
         Err(failure)
-            if failure == compat::FILE_NOT_FOUND_ERROR || failure == compat::PERMISSION_ERROR =>
+            if failure == Failure::FILE_NOT_FOUND || failure == Failure::PERMISSION_DENIED =>
         {
             return Outcome::not_submitted(failure.to_string());
         }
         Err(failure) => return Outcome::unknown(failure.to_string()),
     };
-    let stdout = match text_output(&output) {
-        Ok(stdout) => stdout,
-        Err(failure) => return Outcome::unknown(failure.to_string()),
+    let Ok(stdout) = std::str::from_utf8(&output.stdout) else {
+        return Outcome::unknown(Failure::INVALID_UTF8.to_string());
     };
     static RECEIPT: OnceLock<regex::Regex> = OnceLock::new();
     let receipt = RECEIPT.get_or_init(|| {
@@ -276,11 +280,11 @@ fn notify_cli(peer: &Peer, body: &str, skip: Skip<'_>, database: Option<&Path>) 
         )
         .expect("valid receipt pattern")
     });
-    match receipt.captures(&stdout) {
+    match receipt.captures(stdout) {
         Some(found) if output.status.code() == Some(0) && found[2] == peer.session_id => {
-            match python_uuid(&found[1]) {
-                Some(queue_id) => Outcome::submitted(format!("codex_cli_queued:{queue_id}")),
-                None => Outcome::unknown("codex_cli_invalid_queue_id"),
+            match validate::uuid(&found[1]) {
+                Ok(queue_id) => Outcome::submitted(format!("codex_cli_queued:{queue_id}")),
+                Err(_) => Outcome::unknown("codex_cli_invalid_queue_id"),
             }
         }
         // The process may have queued before failing or returning an unfamiliar receipt.
@@ -294,9 +298,10 @@ fn check_live(rpc: &mut Rpc, peer: &Peer) -> Result<Value, Failure> {
         "thread/read",
         json!({"threadId": peer.session_id, "includeTurns": false}),
     )?;
-    let thread = index(&result, "thread")?
-        .as_object()
-        .ok_or(compat::ATTRIBUTE_ERROR)?;
+    let thread = result
+        .get("thread")
+        .and_then(Value::as_object)
+        .ok_or(Failure::INVALID_DATA)?;
     if thread.get("id").and_then(Value::as_str) != Some(peer.session_id.as_str())
         || !same_workspace(thread.get("cwd"), &peer.workspace)
     {
@@ -305,7 +310,7 @@ fn check_live(rpc: &mut Rpc, peer: &Peer) -> Result<Value, Failure> {
     let status = match thread.get("status") {
         None => None,
         Some(Value::Object(status)) => status.get("type").and_then(Value::as_str),
-        Some(_) => return Err(compat::ATTRIBUTE_ERROR),
+        Some(_) => return Err(Failure::INVALID_DATA),
     };
     let status = status
         .filter(|s| matches!(*s, "idle" | "active"))
