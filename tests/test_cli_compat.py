@@ -25,7 +25,7 @@ import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from compat_support import (KEPT, MESSAGE_KEYS, OPENCODE_CA, PEER_KEYS, ROW_KEYS, TIMEOUT, UNSETTLED,  # noqa: E402
-                            HtalkCase, any_peer, process_start, wait_for)
+                            INTERRUPT, HtalkCase, any_peer, process_start, wait_for)
 
 LEGACY_V1 = """
 CREATE TABLE peers (name TEXT PRIMARY KEY, harness TEXT NOT NULL, session_id TEXT NOT NULL,
@@ -81,8 +81,8 @@ class DatabaseSelection(HtalkCase):
         self.assertEqual(any_peer(PEER_KEYS, PEER_KEYS | {"delivery"}), set(bob))
         self.assertEqual(["bob"], [peer["name"] for peer in self.htalk("peer", "list")["peers"]])
         # Created privately, independent of the caller's umask.
-        self.assertEqual(0, self.db.stat().st_mode & 0o077)
-        self.assertEqual(0, self.db.parent.stat().st_mode & 0o077)
+        self.assert_mode(0, self.db, 0o077)
+        self.assert_mode(0, self.db.parent, 0o077)
 
     def test_path_precedence_and_resolution(self):
         option, env_db = self.tmp / "option.sqlite3", self.tmp / "env.sqlite3"
@@ -107,6 +107,17 @@ class DatabaseSelection(HtalkCase):
         self.assertTrue((self.home / "tilde.sqlite3").exists())
         self.assertFalse((self.tmp / "~").exists())
         self.assertEqual(["bob"], [p["name"] for p in self.htalk("peer", "list", db=self.home / "tilde.sqlite3")["peers"]])
+
+    def test_a_path_with_a_space_and_letters_outside_ascii(self):
+        odd = self.tmp / "почта и ящик"
+        self.add_peer("bob", db=odd / "mail.sqlite3")
+        self.assertEqual(["bob"], [peer["name"] for peer in self.htalk("peer", "list", db=odd / "mail.sqlite3")["peers"]])
+        missing = self.error("peer", "list", db=odd / "none.sqlite3", error="database_not_found")
+        self.assertEqual(str(odd / "none.sqlite3"), missing["resolved_path"])
+        home = {"HOME": str(odd), "USERPROFILE": str(odd), "LOCALAPPDATA": str(odd / "local")}
+        self.add_peer("dave", db=False, env=home)
+        self.assertEqual(["dave"], [peer["name"] for peer in self.htalk("peer", "list", db=False, env=home)["peers"]])
+        self.assertEqual(2, len(list(odd.rglob("mail.sqlite3"))))
 
     def test_existing_empty_corrupt_and_newer_files(self):
         self.db.parent.mkdir()
@@ -166,8 +177,8 @@ class SchemaCompatibility(HtalkCase):
         listed = result["peers"]
         backup, = self.backups()
         self.assertEqual(before, self.snapshot(backup))
-        self.assertEqual(0o600, backup.stat().st_mode & 0o777)
-        self.assertEqual(0o700, backup.parent.stat().st_mode & 0o777)
+        self.assert_mode(0o600, backup)
+        self.assert_mode(0o700, backup.parent)
         self.assert_current_schema()
         self.assertEqual(["alice", "bob", "builder"], [peer["name"] for peer in listed])
         self.assertEqual([None] * 3, [peer["url"] for peer in listed])
@@ -247,7 +258,7 @@ class SchemaCompatibility(HtalkCase):
             process = self.spawn("migrate")
             time.sleep(0.2)
             self.assertIsNone(process.poll())
-            process.send_signal(signal.SIGINT)
+            process.send_signal(INTERRUPT)
             time.sleep(0.1)
             holder.rollback()
             self.finish(process, code=130)
@@ -264,7 +275,7 @@ class SchemaCompatibility(HtalkCase):
             # A reader allows the backup but prevents the migration commit.
             wait_for(lambda: self.backups(), message="verified migration backup")
             self.assertIsNone(process.poll())
-            process.send_signal(signal.SIGINT)
+            process.send_signal(INTERRUPT)
             self.finish(process, code=130)
             reader.rollback()
         self.assertEqual(before, self.snapshot(self.db))
@@ -430,7 +441,7 @@ class GenericPeers(HtalkCase):
                 self.assertEqual((2, ""), (refused.code, refused.stdout))
                 self.assertIn("required arguments were not provided", refused.stderr)
                 self.assertIn("--workspace <WORKSPACE>", refused.stderr)
-                self.assertIn("Usage: htalk peer add", refused.stderr)
+                self.assertRegex(refused.stderr, r"Usage: htalk(\.exe)? peer add")
                 self.assertFalse(self.db.exists())
 
 
@@ -490,13 +501,13 @@ class InboxWatch(HtalkCase):
         # Even after another poll, old open questions must not wake the agent again.
         self.assertEqual(answer["id"], events.get(timeout=15)["id"])
         self.htalk("--as", "bob", "ack", answer["id"])
-        process.send_signal(signal.SIGINT)
+        process.send_signal(INTERRUPT)
         self.assertEqual(130, process.wait(timeout=15))
 
         restarted, events = start()
         replay = [events.get(timeout=15)["id"] for _ in range(len(ids) - 1)]
         self.assertEqual([id_ for id_ in ids if id_ != ids[1]], replay)
-        restarted.send_signal(signal.SIGINT)
+        restarted.send_signal(INTERRUPT)
         self.assertEqual(130, restarted.wait(timeout=15))
 
         # An extension crash closes the pipe, even without another arriving message.
@@ -1030,6 +1041,7 @@ class Notifications(HtalkCase):
         self.assertEqual(2, len([c for c in self.calls("codex") if c.get("rpc") == "thread/queue/delete"]))
 
     def test_opencode_prompt_is_posted_once_to_the_exact_session(self):
+        self.need_opencode()
         server, url = self.opencode_server({"ses_muse": {"id": "ses_muse", "directory": str(self.work),
                                                          "time": {"created": 1, "updated": 2}}})
         self.add_peer("alice")
@@ -1064,6 +1076,7 @@ class OpenCodeServer(HtalkCase):
     every request; a test waits on that record, on the command's answer or on its exit."""
 
     def setUp(self):
+        self.need_opencode()
         super().setUp()
         self.session = {"id": "ses_muse", "directory": str(self.work), "time": {"created": 1, "updated": 2}}
         self.server, self.url = self.opencode_server({"ses_muse": self.session})
@@ -1186,7 +1199,7 @@ class OpenCodeServer(HtalkCase):
         chosen = str(uuid.uuid4())
         sending = self.spawn("--as", "alice", "send", "muse", "--id", chosen, "--message", "Q")
         self.assertTrue(started.wait(TIMEOUT))
-        sending.send_signal(signal.SIGINT)
+        sending.send_signal(INTERRUPT)
         # The command answers while the server still holds its last check.
         result = self.finish(sending, code=130)
         self.assertEqual(("interrupted", chosen), (result["state"], result["message_id"]))
@@ -1312,7 +1325,7 @@ class NotificationOrdering(HtalkCase):
 
 class Interrupts(HtalkCase):
     def interrupt(self, process, code=130):
-        process.send_signal(signal.SIGINT)
+        process.send_signal(INTERRUPT)
         result = self.finish(process, code=code)
         self.assertEqual("interrupted", result["state"])
         self.assertIn("Do not resend", result["next_action"])
@@ -1675,6 +1688,10 @@ class OpenCodeDiscovery(HtalkCase):
     NO_SERVER = "http://127.0.0.1:abc"  # Malformed, so nothing is asked and the default server is not tried.
     UPDATED = 1788990000000
 
+    def setUp(self):
+        self.need_opencode()
+        super().setUp()
+
     def database(self, data):
         return (data or self.home / ".local/share") / "opencode/opencode.db"
 
@@ -1867,7 +1884,8 @@ class ContendedWrites(HtalkCase):
         # A FIFO opens for writing only while a reader holds it. That shows from outside when a send has
         # opened its message file and when it has read it to the end.
         self.pipe = self.tmp / "pipe"
-        os.mkfifo(self.pipe)
+        if hasattr(os, "mkfifo"):
+            os.mkfifo(self.pipe)
 
     def hold(self, statement):
         db = sqlite3.connect(self.db, isolation_level=None)
@@ -1915,7 +1933,12 @@ class ContendedWrites(HtalkCase):
         self.running(process, "send did not wait for the reader")
         return turned_away(self.db)
 
+    def need_pipe(self):
+        if not self.pipe.exists():
+            self.skipTest("this system has no named pipe in the file tree to watch a send through")
+
     def test_contended_send_saves_the_body_it_read_once(self):
+        self.need_pipe()
         body = self.tmp / "body.txt"
         body.symlink_to(self.pipe)
         changed = self.tmp / "changed.txt"
@@ -1941,6 +1964,7 @@ class ContendedWrites(HtalkCase):
         self.assertEqual([(sent["id"],)], self.sql("SELECT id FROM messages"))
 
     def test_interrupt_while_another_writer_holds_the_mailbox_saves_nothing(self):
+        self.need_pipe()
         writer = self.hold("BEGIN IMMEDIATE")
         # A registration waits for the same writer. Nobody interrupts it.
         waiting = self.spawn(*self.peer_words("carol"))
@@ -1948,7 +1972,7 @@ class ContendedWrites(HtalkCase):
         proc = self.spawn("--as", "alice", "send", "bob", "--message-file", self.pipe, "--no-notify", group=True)
         self.give_body(proc, b"Interrupted")
         self.keeps_waiting(proc)
-        proc.send_signal(signal.SIGINT)
+        proc.send_signal(INTERRUPT)
         interrupted = self.finish(proc, code=130)
         self.assertEqual(("interrupted", None), (interrupted["state"], interrupted["message_id"]))
         self.running(waiting, "the interrupted send waited as long as the writer nobody interrupted")

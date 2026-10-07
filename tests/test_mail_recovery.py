@@ -6,7 +6,7 @@ import subprocess
 import unittest
 import uuid
 
-from compat_support import HtalkCase, wait_for
+from compat_support import INTERRUPT, HtalkCase, wait_for
 from test_mcp import McpClient
 
 
@@ -71,7 +71,7 @@ class MailRecovery(HtalkCase):
                 writer.execute("BEGIN IMMEDIATE")
                 try:
                     if interrupt:
-                        process.send_signal(signal.SIGINT)
+                        process.send_signal(INTERRUPT)
                     returned = self.finish_while_locked(process, code=130 if interrupt else 0)
                     if interrupt:
                         self.assertEqual("interrupted", returned["state"])

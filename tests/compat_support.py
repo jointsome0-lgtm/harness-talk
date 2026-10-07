@@ -62,11 +62,18 @@ def htalk_command():
         if not (executable.is_file() and os.access(executable, os.X_OK)):
             raise CommandUnavailable("HTALK_TEST_COMMAND executable is missing: %s" % executable)
         return words
-    local = REPO / "target/debug/htalk"
+    local = REPO / ("target/debug/htalk.exe" if WINDOWS else "target/debug/htalk")
     if local.is_file() and os.access(local, os.X_OK):
         return [str(local)]
     raise CommandUnavailable("No htalk under test: set HTALK_TEST_COMMAND or build %s" % local)
 
+
+WINDOWS = os.name == "nt"
+# How a test asks a running htalk to stop. Windows has no signals: a process that leads its own group, as every
+# process this fixture starts there does, is sent Ctrl-Break for either request.
+INTERRUPT = signal.CTRL_BREAK_EVENT if WINDOWS else signal.SIGINT
+TERMINATE = signal.CTRL_BREAK_EVENT if WINDOWS else signal.SIGTERM
+OWN_GROUP = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if WINDOWS else {}
 
 NOT_PORTED = "unsupported_on_this_platform"
 _native_clients = None
@@ -103,6 +110,9 @@ def children(pid):
     """The process ids of a process's children, as text."""
     if sys.platform == "linux":
         return Path("/proc/%s/task/%s/children" % (pid, pid)).read_text().split()
+    if WINDOWS:
+        asked = "(Get-CimInstance Win32_Process -Filter 'ParentProcessId=%s').ProcessId" % pid
+        return subprocess.run(["powershell", "-NoProfile", "-Command", asked], capture_output=True, text=True).stdout.split()
     return subprocess.run(["pgrep", "-P", str(pid)], capture_output=True, text=True).stdout.split()
 
 
@@ -110,6 +120,9 @@ def gone(pid):
     """Whether a process has exited and been reaped."""
     if sys.platform == "linux":
         return not Path("/proc/%s" % pid).exists()
+    if WINDOWS:
+        listed = subprocess.run(["tasklist", "/FI", "PID eq %s" % pid, "/NH", "/FO", "CSV"], capture_output=True, text=True)
+        return '"%s"' % pid not in listed.stdout
     try:
         os.kill(int(pid), 0)
     except ProcessLookupError:
@@ -363,14 +376,25 @@ class HtalkCase(unittest.TestCase):
 
     def default_db(self):
         """The mailbox when neither --db, HTALK_DB nor XDG_DATA_HOME names one."""
+        if WINDOWS:
+            return self.tmp / "local" / "harness-talk" / "mail.sqlite3"
         data = "Library/Application Support" if sys.platform == "darwin" else ".local/share"
         return self.home / data / "harness-talk/mail.sqlite3"
+
+    def assert_mode(self, expected, path, mask=0o777):
+        """Permission bits, where the system has them. On Windows a file is as private as its directory."""
+        if not WINDOWS:
+            self.assertEqual(expected, path.stat().st_mode & mask)
 
     # Environment and invocation
 
     def environment(self, extra=None):
         env = {"PATH": "%s:/usr/bin:/bin" % self.bin, "HOME": str(self.home), "CODEX_HOME": str(self.codex_home),
                "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "TMPDIR": str(self.tmp)}
+        if WINDOWS:
+            env.update({"PATH": os.pathsep.join([str(self.bin), os.environ["PATH"]]), "USERPROFILE": str(self.home),
+                        "LOCALAPPDATA": str(self.tmp / "local"), "TEMP": str(self.tmp), "TMP": str(self.tmp),
+                        "SYSTEMROOT": os.environ["SYSTEMROOT"]})
         env.update({key: os.environ[key] for key in PASSTHROUGH if key in os.environ})
         env.update(extra or {})
         return {key: value for key, value in env.items() if value is not None}
@@ -402,8 +426,9 @@ class HtalkCase(unittest.TestCase):
         """Start htalk. With group=True it leads its own process group, so leftovers can be asked for."""
         process = subprocess.Popen(argv or self.argv(words, db), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    text=True, encoding="utf-8", env=self.environment(env), cwd=self.tmp,
-                                   start_new_session=group,
-                                   preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
+                                   **(OWN_GROUP if WINDOWS else {
+                                       "start_new_session": group,
+                                       "preexec_fn": lambda: signal.signal(signal.SIGINT, signal.SIG_DFL)}))
         self.processes.append(process)
         if group:
             self.addCleanup(self.stop_group, process.pid)
@@ -411,6 +436,8 @@ class HtalkCase(unittest.TestCase):
 
     @staticmethod
     def stop_group(leader):
+        if WINDOWS:
+            return
         try:
             os.killpg(leader, signal.SIGKILL)
         except ProcessLookupError:
@@ -474,6 +501,11 @@ class HtalkCase(unittest.TestCase):
         """Ends a test of Codex or Claude Code delivery on a system that has no port of it."""
         if not native_clients():
             self.skipTest("native delivery to Codex and Claude Code is not ported to this system")
+
+    def need_opencode(self):
+        """Ends a test of OpenCode peers on a system where they are not ported yet."""
+        if WINDOWS:
+            self.skipTest("OpenCode peers are not ported to this system")
 
     def peer_words(self, name, harness=None, session=None, workspace=None, *options):
         """The words that register a peer. Without a harness it is any peer the system can register: a Claude
