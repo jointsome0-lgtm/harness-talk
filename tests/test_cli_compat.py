@@ -441,7 +441,7 @@ class GenericPeers(HtalkCase):
                 self.assertEqual((2, ""), (refused.code, refused.stdout))
                 self.assertIn("required arguments were not provided", refused.stderr)
                 self.assertIn("--workspace <WORKSPACE>", refused.stderr)
-                self.assertRegex(refused.stderr, r"Usage: htalk(\.exe)? peer add")
+                self.assertRegex(refused.stderr, r"Usage: htalk(?i:\.exe)? peer add")
                 self.assertFalse(self.db.exists())
 
 
