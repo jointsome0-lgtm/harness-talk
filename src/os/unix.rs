@@ -135,6 +135,10 @@ impl Open for OpenOptions {
 pub fn create_private_dir(path: &Path) -> io::Result<()> {
     fs::DirBuilder::new().mode(0o700).create(path)
 }
+/// Makes a directory's entries, a new or renamed file among them, last through a power loss.
+pub fn sync_directory(path: &Path) -> io::Result<()> {
+    File::open(path)?.sync_all()
+}
 /// Opens a directory itself, never a link to one.
 pub fn open_directory(path: &Path) -> io::Result<File> {
     OpenOptions::new()

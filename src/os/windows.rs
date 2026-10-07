@@ -67,6 +67,10 @@ impl Open for OpenOptions {
 pub fn create_private_dir(path: &Path) -> io::Result<()> {
     fs::create_dir(path)
 }
+/// Windows gives no way to flush a directory. A file is flushed itself before it is renamed.
+pub fn sync_directory(_path: &Path) -> io::Result<()> {
+    Ok(())
+}
 
 /// Not ported: without a lock on a directory, contended writers queue in SQLite alone.
 pub fn open_directory(_path: &Path) -> io::Result<File> {

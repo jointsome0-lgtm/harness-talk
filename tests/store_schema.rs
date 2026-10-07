@@ -77,8 +77,11 @@ fn busy_writer_stops_after_its_sleep_budget() {
         rusqlite::Error::SqliteFailure(e, _) if e.code == rusqlite::ErrorCode::DatabaseBusy
     ));
     assert!(elapsed >= Duration::from_secs(5), "{elapsed:?}");
-    // The budget counts requested sleep, so allow scheduler and I/O overhead.
-    assert!(elapsed < Duration::from_secs(10), "{elapsed:?}");
+    // The budget counts requested sleep, so allow scheduler and I/O overhead. Linux sleeps
+    // close to what is asked. A hosted macOS runner took 18.6 s for the same budget, so
+    // elsewhere the bound only says that the wait ends.
+    let allowed = if cfg!(target_os = "linux") { 10 } else { 60 };
+    assert!(elapsed < Duration::from_secs(allowed), "{elapsed:?}");
 }
 
 #[test]

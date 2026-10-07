@@ -22,14 +22,15 @@ pub use unix::{
     DB_HELP, Descriptor, Grouped, Open, SSH, Socket, Stop, changed, create_private_dir, default_db,
     errno, file_id, hung_up, install_interrupt_handler, interrupted, is_executable, is_mine,
     is_private, is_roots, is_socket, kill_group, links, lock, multicast_ready, open_directory,
-    others_write, owned_socket, private_umask, ready, set_nonblocking, stop_requests, try_lock,
+    others_write, owned_socket, private_umask, ready, set_nonblocking, stop_requests,
+    sync_directory, try_lock,
 };
 #[cfg(not(target_os = "linux"))]
 pub use unported::{OwnedGroup, PROC, process_exe, process_stat};
 #[cfg(windows)]
 pub use windows::{
     DB_HELP, Grouped, Open, create_private_dir, default_db, hung_up, install_interrupt_handler,
-    interrupted, lock, open_directory, private_umask, stop_requests,
+    interrupted, lock, open_directory, private_umask, stop_requests, sync_directory,
 };
 
 use std::{
