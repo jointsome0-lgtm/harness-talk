@@ -21,11 +21,11 @@ fn invalid_requests_do_not_wait_for_a_writer() {
         code(store.save("alice", "alice", "Hi", None, None))
     );
     assert_eq!(
-        "badly formed hexadecimal UUID string",
+        "invalid_uuid",
         code(store.save("alice", "bob", "Hi", Some("bad"), None))
     );
     assert_eq!(
-        "badly formed hexadecimal UUID string",
+        "invalid_uuid",
         code(store.save("alice", "bob", "Hi", Some(""), None))
     );
     assert_eq!(

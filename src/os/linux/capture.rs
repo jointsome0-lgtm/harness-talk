@@ -1,7 +1,7 @@
 //! One child run to its end with its output kept, inside a process group this program owns.
 use super::group::OwnedGroup;
 use crate::{
-    error::Failure,
+    error::Error,
     os::{Grouped, interrupted, set_nonblocking},
 };
 use std::{
@@ -16,7 +16,7 @@ pub fn run_command(
     program: &str,
     args: &[&str],
     timeout: Duration,
-) -> Result<std::process::Output, Failure> {
+) -> Result<std::process::Output, Error> {
     let mut child = Command::new(program)
         .args(args)
         .stdin(Stdio::null())
@@ -56,8 +56,8 @@ pub fn run_command(
             return Err(e.into());
         }
     };
-    let mut stdout = child.stdout.take().ok_or(Failure::OS_ERROR)?;
-    let mut stderr = child.stderr.take().ok_or(Failure::OS_ERROR)?;
+    let mut stdout = child.stdout.take().ok_or(Error::System("os_error"))?;
+    let mut stderr = child.stderr.take().ok_or(Error::System("os_error"))?;
     // Nonblocking reads keep the deadline in force even if a grandchild
     // inherits an output pipe after the direct child exits.
     if let Err(error) = set_nonblocking(&stdout).and_then(|()| set_nonblocking(&stderr)) {
@@ -113,9 +113,9 @@ pub fn run_command(
         if interrupted() || Instant::now() >= deadline {
             finish(&mut group, &mut child)?;
             return Err(if interrupted() {
-                Failure::INTERRUPTED
+                Error::Interrupted
             } else {
-                Failure::COMMAND_TIMED_OUT
+                Error::System("command_timed_out")
             });
         }
         thread::sleep(Duration::from_millis(5));

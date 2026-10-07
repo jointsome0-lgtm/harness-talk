@@ -12,7 +12,7 @@
 use super::{Adapter, Address, Query};
 use crate::model::NativePeer as Peer;
 use crate::{
-    error::{Error, Failure},
+    error::{Error, io_code},
     model::*,
     os, validate,
 };
@@ -38,26 +38,23 @@ const MAX_HEADERS: usize = 100;
 
 /// A request failure; `After` means the request may have reached the server.
 enum Req {
-    Before(Failure),
-    After(Failure),
+    Before(Error),
+    After(Error),
 }
-impl From<Req> for Failure {
+impl From<Req> for Error {
     fn from(r: Req) -> Self {
         match r {
             Req::Before(f) | Req::After(f) => f,
         }
     }
 }
-fn coded(code: &'static str) -> Failure {
-    Failure::coded(code)
-}
 /// A broken answer, as `uncertain` names it after `opencode_`.
 const INVALID_RESPONSE: &str = "invalid_response";
 fn uncertain(class: &str) -> Req {
-    Req::After(Failure::coded(format!("opencode_{class}")))
+    Req::After(Error::code(format!("opencode_{class}")))
 }
-fn session_id(value: &str) -> Result<String, Failure> {
-    Ok(opencode_session_id(value)?)
+fn session_id(value: &str) -> Result<String, Error> {
+    opencode_session_id(value)
 }
 fn opencode_session_id(value: &str) -> Result<String, Error> {
     if !value.starts_with("ses")
@@ -119,7 +116,7 @@ pub fn opencode_url(value: Option<&str>) -> Result<String, Error> {
 }
 
 /// Basic auth from the same environment the server reads; never persisted.
-fn credentials() -> Result<Option<String>, Failure> {
+fn credentials() -> Result<Option<String>, Error> {
     let password = env::var_os("OPENCODE_SERVER_PASSWORD").filter(|p| !p.is_empty());
     let Some(password) = password else {
         return Ok(None);
@@ -127,7 +124,7 @@ fn credentials() -> Result<Option<String>, Failure> {
     let user = env::var_os("OPENCODE_SERVER_USERNAME").filter(|u| !u.is_empty());
     let user = user.as_deref().map_or(Some("opencode"), |u| u.to_str());
     let (Some(user), Some(password)) = (user, password.to_str()) else {
-        return Err(coded("invalid_opencode_credentials"));
+        return Err(Error::code("invalid_opencode_credentials"));
     };
     Ok(Some(format!(
         "Basic {}",
@@ -268,10 +265,7 @@ fn io_class(e: &io::Error) -> &'static str {
             _ => "tls_failed",
         };
     }
-    match e.kind().into() {
-        Failure::System(code) => code,
-        Failure::Coded(_) => "os_error",
-    }
+    io_code(e.kind())
 }
 
 /// Trust roots as Python's default context loads them: SSL_CERT_FILE or the system bundle, plus SSL_CERT_DIR.
@@ -714,15 +708,15 @@ struct Server {
     path: String,
 }
 impl Server {
-    fn new(url: Option<&str>) -> Result<Self, Failure> {
+    fn new(url: Option<&str>) -> Result<Self, Error> {
         let url = opencode_url(url)?;
         let (scheme, rest) = url
             .split_once("://")
-            .ok_or_else(|| coded("invalid_opencode_url"))?;
+            .ok_or_else(|| Error::code("invalid_opencode_url"))?;
         let netloc_end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
         let (netloc, path) = rest.split_at(netloc_end);
         if netloc.contains('@') || path.contains(['?', '#']) {
-            return Err(coded("invalid_opencode_url"));
+            return Err(Error::code("invalid_opencode_url"));
         }
         // The same split as urllib.parse.urlsplit's hostname and port.
         let (host, port) = match netloc.split_once('[') {
@@ -734,20 +728,20 @@ impl Server {
         };
         let host = host.to_lowercase();
         if host.is_empty() {
-            return Err(coded("invalid_opencode_url"));
+            return Err(Error::code("invalid_opencode_url"));
         }
         if host != "localhost" && !host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback()) {
-            return Err(coded("opencode_url_must_be_loopback"));
+            return Err(Error::code("opencode_url_must_be_loopback"));
         }
         let https = scheme == "https";
         let port = if port.is_empty() {
             if https { 443 } else { 80 }
         } else {
             if !port.bytes().all(|b| b.is_ascii_digit()) {
-                return Err(coded("invalid_opencode_url"));
+                return Err(Error::code("invalid_opencode_url"));
             }
             port.parse::<u16>()
-                .map_err(|_| coded("invalid_opencode_url"))?
+                .map_err(|_| Error::code("invalid_opencode_url"))?
         };
         Ok(Self {
             https,
@@ -758,8 +752,8 @@ impl Server {
         })
     }
 
-    fn connect(&self) -> Result<Conn, Failure> {
-        let unreachable = || coded("opencode_unreachable");
+    fn connect(&self) -> Result<Conn, Error> {
+        let unreachable = || Error::code("opencode_unreachable");
         let addrs = (self.host.as_str(), self.port)
             .to_socket_addrs()
             .map_err(|_| unreachable())?;
@@ -804,10 +798,10 @@ impl Server {
         });
         let conn = self.connect().map_err(Req::Before)?;
         if target.bytes().any(|b| b <= b' ' || b == 0x7f) {
-            return Err(Req::After(coded("invalid_opencode_url")));
+            return Err(Req::After(Error::code("invalid_opencode_url")));
         }
         if !target.is_ascii() {
-            return Err(Req::Before(coded("invalid_opencode_url")));
+            return Err(Req::Before(Error::code("invalid_opencode_url")));
         }
         let default_port = if self.https { 443 } else { 80 };
         let host = if self.host.contains(':') {
@@ -842,7 +836,7 @@ impl Server {
         };
         // Check after TCP/TLS setup too, immediately before the first request byte.
         if os::interrupted() {
-            return Err(Req::Before(Failure::INTERRUPTED));
+            return Err(Req::Before(Error::Interrupted));
         }
         reader
             .conn
@@ -851,7 +845,7 @@ impl Server {
             .map_err(|e| uncertain(io_class(&e)))?;
         let (status, raw) = read_response(&mut reader).map_err(uncertain)?;
         if raw.len() > MAX_RESPONSE {
-            return Err(Req::After(coded("opencode_response_too_large")));
+            return Err(Req::After(Error::code("opencode_response_too_large")));
         }
         // A completely framed rejection is meaningful even when its error body is not JSON.
         if !(200..300).contains(&status) {
@@ -863,29 +857,28 @@ impl Server {
         }
         let text = raw.strip_prefix(b"\xef\xbb\xbf".as_slice()).unwrap_or(&raw);
         let data: Value = serde_json::from_slice(text)
-            .map_err(|_| Req::After(coded("opencode_invalid_response")))?;
+            .map_err(|_| Req::After(Error::code("opencode_invalid_response")))?;
         Ok((status, if data.is_null() { None } else { Some(data) }))
     }
 
-    fn get(&self, path: &str, query: Option<&str>) -> Result<(i128, Option<Value>), Failure> {
-        self.request("GET", path, query, None)
-            .map_err(Failure::from)
+    fn get(&self, path: &str, query: Option<&str>) -> Result<(i128, Option<Value>), Error> {
+        self.request("GET", path, query, None).map_err(Error::from)
     }
 }
 
-fn expect(response: (i128, Option<Value>), missing: &'static str) -> Result<Value, Failure> {
+fn expect(response: (i128, Option<Value>), missing: &'static str) -> Result<Value, Error> {
     match response {
-        (401, _) => Err(coded("opencode_unauthorized")),
-        (404, _) => Err(coded(missing)),
+        (401, _) => Err(Error::code("opencode_unauthorized")),
+        (404, _) => Err(Error::code(missing)),
         (200, Some(data)) => Ok(data),
-        (status, _) => Err(Failure::coded(format!("opencode_http_{status}"))),
+        (status, _) => Err(Error::code(format!("opencode_http_{status}"))),
     }
 }
-fn invalid() -> Failure {
-    coded("opencode_invalid_response")
+fn invalid() -> Error {
+    Error::code("opencode_invalid_response")
 }
 
-fn health(server: &Server) -> Result<String, Failure> {
+fn health(server: &Server) -> Result<String, Error> {
     let data = expect(
         server.get("/global/health", None)?,
         "recipient_not_in_opencode_server",
@@ -896,7 +889,7 @@ fn health(server: &Server) -> Result<String, Failure> {
     }
 }
 
-fn same_directory(directory: Option<&Value>, workspace: &str) -> Result<bool, Failure> {
+fn same_directory(directory: Option<&Value>, workspace: &str) -> Result<bool, Error> {
     let Some(Value::String(directory)) =
         directory.filter(|d| d.as_str().is_some_and(|s| !s.is_empty()))
     else {
@@ -905,7 +898,7 @@ fn same_directory(directory: Option<&Value>, workspace: &str) -> Result<bool, Fa
     Ok(directory == workspace || os::resolve(Path::new(directory)).to_str() == Some(workspace))
 }
 
-fn session_info(server: &Server, id: &str, workspace: &str) -> Result<Map<String, Value>, Failure> {
+fn session_info(server: &Server, id: &str, workspace: &str) -> Result<Map<String, Value>, Error> {
     let data = expect(
         server.get(&format!("/session/{}", quote(id, false)), Some(workspace))?,
         "recipient_not_in_opencode_server",
@@ -920,15 +913,15 @@ fn session_info(server: &Server, id: &str, workspace: &str) -> Result<Map<String
         return Err(invalid());
     };
     if !same_directory(data.get("directory"), workspace)? {
-        return Err(coded("recipient_identity_changed"));
+        return Err(Error::code("recipient_identity_changed"));
     }
     if time.get("archived").is_some_and(|a| !a.is_null()) {
-        return Err(coded("recipient_session_archived"));
+        return Err(Error::code("recipient_session_archived"));
     }
     Ok(data)
 }
 
-fn status_map(server: &Server, workspace: Option<&str>) -> Result<Map<String, Value>, Failure> {
+fn status_map(server: &Server, workspace: Option<&str>) -> Result<Map<String, Value>, Error> {
     match expect(
         server.get("/session/status", workspace.filter(|w| !w.is_empty()))?,
         "recipient_not_in_opencode_server",
@@ -938,7 +931,7 @@ fn status_map(server: &Server, workspace: Option<&str>) -> Result<Map<String, Va
     }
 }
 
-fn runtime_status(statuses: &Map<String, Value>, id: &str) -> Result<&'static str, Failure> {
+fn runtime_status(statuses: &Map<String, Value>, id: &str) -> Result<&'static str, Error> {
     // The server omits idle sessions from this map.
     let Some(entry) = statuses.get(id).filter(|e| !e.is_null()) else {
         return Ok("idle");
@@ -978,7 +971,7 @@ impl Adapter for Opencode {
     fn notify(&self, peer: &Peer, _message: &Message, body: &str, skip: Skip<'_>) -> Outcome {
         notify(peer, body, skip)
     }
-    fn probe(&self, peer: &Peer) -> Result<Value, Failure> {
+    fn probe(&self, peer: &Peer) -> Result<Value, Error> {
         probe(peer)
     }
     fn discover(&self, query: &Query<'_>) -> Found {
@@ -987,7 +980,7 @@ impl Adapter for Opencode {
 }
 
 /// Exact session and workspace on the registered server, without messaging.
-pub fn probe(peer: &Peer) -> Result<Value, Failure> {
+pub fn probe(peer: &Peer) -> Result<Value, Error> {
     let server = Server::new(peer.url.as_deref())?;
     let version = health(&server)?;
     let id = session_id(&peer.session_id)?;
@@ -1006,7 +999,7 @@ pub fn notify(peer: &Peer, body: &str, skip: Skip<'_>) -> Outcome {
     let preflight = (|| {
         let server = Server::new(peer.url.as_deref())?;
         probe(peer)?;
-        Ok::<_, Failure>((server, skip()?))
+        Ok::<_, Error>((server, skip()?))
     })();
     let server = match preflight {
         Err(failure) => return Outcome::not_submitted(failure.to_string()),
@@ -1014,7 +1007,7 @@ pub fn notify(peer: &Peer, body: &str, skip: Skip<'_>) -> Outcome {
         Ok((server, None)) => server,
     };
     if os::interrupted() {
-        return Outcome::not_submitted(Failure::INTERRUPTED.to_string());
+        return Outcome::not_submitted(Error::Interrupted.to_string());
     }
     let path = format!("/session/{}/prompt_async", quote(&peer.session_id, false));
     match server.request("POST", &path, Some(&peer.workspace), Some(body)) {
@@ -1130,13 +1123,14 @@ fn server_sessions(url: &str, workspace: Option<&str>) -> (Vec<Value>, Value) {
                 Err(()) => reject(&mut source, Some("opencode_invalid_session_records")),
             }
         }
-        Ok::<_, Failure>(())
+        Ok::<_, Error>(())
     })();
     if let Err(failure) = result {
         source["status"] = json!("unavailable");
-        source["error"] = json!(match failure {
-            Failure::Coded(code) => code.into_owned(),
-            Failure::System(code) => format!("opencode_{code}"),
+        source["error"] = json!(if failure.system() {
+            format!("opencode_{failure}")
+        } else {
+            failure.to_string()
         });
         found.clear();
     }
@@ -1184,18 +1178,17 @@ fn saved_sessions(path: &Path) -> (Vec<Value>, Value) {
             };
             out.push((text(row.get_ref(0)?), text(row.get_ref(1)?), updated));
         }
-        Ok::<_, Failure>((out, limited))
+        Ok::<_, Error>((out, limited))
     })();
     let (rows, limited) = match rows {
         Ok(rows) => rows,
         Err(failure) => {
             source["status"] = json!("unavailable");
             source["detail"] = Value::Null;
-            source["error"] = json!(match failure {
-                Failure::Coded(code) => code.into_owned(),
-                Failure::System(code) => {
-                    format!("opencode_saved_{}", code.trim_start_matches("client_"))
-                }
+            source["error"] = json!(if failure.system() {
+                format!("opencode_saved_{failure}")
+            } else {
+                failure.to_string()
             });
             return (Vec::new(), source);
         }

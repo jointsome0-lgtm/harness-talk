@@ -4,7 +4,7 @@ mod fixture;
 
 use fixture::{Fake, Reply, closed_port, session};
 use harness_talk::model::NativePeer as Peer;
-use harness_talk::{adapters::opencode, error::Failure, model::*};
+use harness_talk::{adapters::opencode, error::Error, model::*};
 use serde_json::{Value, json};
 use std::{
     cell::Cell,
@@ -46,13 +46,13 @@ fn case() -> Case {
         peer,
     }
 }
-fn no_skip() -> Result<Option<SkipReason>, Failure> {
+fn no_skip() -> Result<Option<SkipReason>, Error> {
     Ok(None)
 }
 fn outcome(o: Outcome) -> (&'static str, String) {
     (o.submission.as_str(), o.detail)
 }
-fn err(r: Result<Value, Failure>) -> String {
+fn err(r: Result<Value, Error>) -> String {
     r.expect_err("expected a failure").to_string()
 }
 fn raw(text: &str) -> Reply {
@@ -391,12 +391,12 @@ fn saved_state_is_rechecked_after_preflight_and_before_the_post() {
         assert_eq!(seen.get() % 3, 0);
         assert!(seen.get() >= 3); // Called after the three preflight requests.
     }
-    let skip = || Err(Failure::coded("notification_state_unavailable"));
+    let skip = || Err(Error::code("notification_state_unavailable"));
     assert_eq!(
         outcome(opencode::notify(&c.peer, "text", &skip)),
         ("not_submitted", "notification_state_unavailable".into())
     );
-    let skip = || Err(Failure::coded("notification_state_unavailable"));
+    let skip = || Err(Error::code("notification_state_unavailable"));
     assert_eq!(
         outcome(opencode::notify(&c.peer, "text", &skip)),
         ("not_submitted", "notification_state_unavailable".into())

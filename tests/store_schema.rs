@@ -3,7 +3,7 @@
 mod support;
 
 use harness_talk::{
-    error::{Error, Failure},
+    error::Error,
     model::*,
     store::{self, Store},
 };
@@ -86,7 +86,7 @@ fn readonly_skip_check_never_creates_and_reports_only_codes() {
     let temp = Temp::new();
     let missing = temp.path().join("missing.sqlite3");
     assert_eq!(
-        Err(Failure::coded("notification_state_unavailable")),
+        Err(Error::code("notification_state_unavailable")),
         store::skip_reason_readonly(&missing, "x", "bob")
     );
     assert!(!missing.exists());
@@ -100,7 +100,7 @@ fn readonly_skip_check_never_creates_and_reports_only_codes() {
         store::skip_reason_readonly(&temp.db(), &request.row.id, "bob")
     );
     assert_eq!(
-        Err(Failure::coded("notification_message_not_found")),
+        Err(Error::code("notification_message_not_found")),
         store::skip_reason_readonly(&temp.db(), &request.row.id, "alice")
     );
     store.ack(&request.row.id, "bob", &skipped).unwrap();
@@ -114,7 +114,7 @@ fn readonly_skip_check_never_creates_and_reports_only_codes() {
         .execute_batch("DROP TABLE retired_peers")
         .unwrap();
     assert_eq!(
-        Err(Failure::coded("notification_state_unavailable")),
+        Err(Error::code("notification_state_unavailable")),
         store::skip_reason_readonly(&temp.db(), &other.row.id, "bob")
     );
 }

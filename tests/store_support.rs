@@ -57,7 +57,7 @@ pub fn raw(path: &Path) -> rusqlite::Connection {
 
 pub fn code<T: Debug>(result: Result<T, Error>) -> String {
     match result {
-        Err(Error::Code(c)) => c,
+        Err(Error::Code(c)) => c.into_owned(),
         other => panic!("expected a coded error, got {other:?}"),
     }
 }

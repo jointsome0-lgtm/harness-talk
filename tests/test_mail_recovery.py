@@ -110,7 +110,7 @@ class MailRecovery(HtalkCase):
     def test_cli_empty_id_is_rejected_and_omitted_id_is_generated(self):
         for _ in range(2):
             self.error("--as", "alice", "send", "bob", "--id", "", "--message", "Question",
-                       error="badly formed hexadecimal UUID string")
+                       error="invalid_uuid")
         self.assertEqual(0, self.sql("SELECT COUNT(*) FROM messages")[0][0])
         generated = self.htalk("--as", "alice", "send", "bob", "--message", "Generated")
         self.assertEqual(str(uuid.UUID(generated["id"])), generated["id"])
@@ -127,7 +127,7 @@ class MailRecovery(HtalkCase):
             result = client.call("send", "bob", "--id", "", "--message", "Question")
             self.assertTrue(result["isError"])
             self.assertEqual(2, result["structuredContent"]["exit_code"])
-            self.assertEqual("badly formed hexadecimal UUID string",
+            self.assertEqual("invalid_uuid",
                              result["structuredContent"]["result"]["error"])
         self.assertTrue(client.call("send", "bob", "--message", "No ID")["isError"])
         self.assertEqual(0, self.sql("SELECT COUNT(*) FROM messages")[0][0])

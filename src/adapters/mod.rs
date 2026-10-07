@@ -6,7 +6,7 @@ pub mod codex;
 pub mod opencode;
 
 use crate::{
-    error::{Error, Failure},
+    error::Error,
     model::{Cleanup, CleanupStatus, Found, Message, NativePeer, Outcome, Skip},
     os,
 };
@@ -34,7 +34,7 @@ pub(crate) trait Adapter: Sync {
     }
 
     /// Reads the live session at the address without waking it.
-    fn probe(&self, peer: &NativePeer) -> Result<Value, Failure>;
+    fn probe(&self, peer: &NativePeer) -> Result<Value, Error>;
 
     /// Lists the sessions it can see for `peer discover`, with the sources it asked.
     fn discover(&self, query: &Query<'_>) -> Found;

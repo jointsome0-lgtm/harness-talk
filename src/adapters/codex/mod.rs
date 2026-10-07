@@ -10,11 +10,7 @@ pub mod state;
 use super::{Adapter, Address, Query};
 use crate::model::NativePeer as Peer;
 use crate::os::{self, same_workspace};
-use crate::{
-    error::{Error, Failure},
-    model::*,
-    validate,
-};
+use crate::{error::Error, model::*, validate};
 use rpc::Rpc;
 use serde_json::{Value, json};
 use std::{path::Path, sync::OnceLock, time::Duration};
@@ -48,7 +44,7 @@ impl Adapter for Codex {
     fn dismiss(&self, peer: &Peer, message: &Message) -> Cleanup {
         dismiss(peer, message)
     }
-    fn probe(&self, peer: &Peer) -> Result<Value, Failure> {
+    fn probe(&self, peer: &Peer) -> Result<Value, Error> {
         probe(peer)
     }
     fn discover(&self, query: &Query<'_>) -> Found {
@@ -80,7 +76,7 @@ pub(crate) fn notify_in_store(
     let check = || {
         let current = std::fs::canonicalize(state::state_path()?)?;
         if current != database {
-            return Err(Failure::coded("codex_store_changed"));
+            return Err(Error::code("codex_store_changed"));
         }
         saved_identity_at(peer, database)?;
         Ok(None)
@@ -113,13 +109,13 @@ pub fn dismiss(peer: &Peer, message: &Message) -> Cleanup {
         return Cleanup::new(CleanupStatus::Skipped).detail("no_confirmed_queue_receipt");
     };
     let mut attempted = false;
-    let result = (|| -> Result<(bool, String), Failure> {
+    let result = (|| -> Result<(bool, String), Error> {
         // Socket queue IDs are opaque protocol strings. CLI receipts have a UUID
         // contract; normalize only those, and round-trip socket receipts unchanged.
         let queue_id = if socket.is_some() {
             queued.to_owned()
         } else {
-            validate::uuid(queued).map_err(|_| Failure::coded("codex_cli_invalid_queue_id"))?
+            validate::uuid(queued).map_err(|_| Error::code("codex_cli_invalid_queue_id"))?
         };
         let mut rpc = match socket {
             Some(path) => {
@@ -138,7 +134,7 @@ pub fn dismiss(peer: &Peer, message: &Message) -> Cleanup {
             json!({"threadId": peer.session_id, "queuedSubmissionId": queue_id}),
         )?;
         let Some(&Value::Bool(deleted)) = result.get("deleted") else {
-            return Err(Failure::coded("codex_queue_delete_receipt_invalid"));
+            return Err(Error::code("codex_queue_delete_receipt_invalid"));
         };
         drop(rpc);
         Ok((deleted, queue_id))
@@ -159,7 +155,7 @@ pub fn dismiss(peer: &Peer, message: &Message) -> Cleanup {
     }
 }
 
-pub fn probe(peer: &Peer) -> Result<Value, Failure> {
+pub fn probe(peer: &Peer) -> Result<Value, Error> {
     match socket(peer) {
         None => saved_identity(peer),
         Some(path) => {
@@ -170,7 +166,7 @@ pub fn probe(peer: &Peer) -> Result<Value, Failure> {
 }
 
 /// Inspect only the selected listener and ensure it survived the identity read.
-pub(crate) fn probe_bound(peer: &Peer, bound: &rpc::BoundSocket) -> Result<Value, Failure> {
+pub(crate) fn probe_bound(peer: &Peer, bound: &rpc::BoundSocket) -> Result<Value, Error> {
     let mut rpc = Rpc::connect_bound(bound)?;
     let value = check_live(&mut rpc, peer)?;
     bound.check()?;
@@ -193,7 +189,7 @@ fn notify_socket(
     bound: Option<&rpc::BoundSocket>,
 ) -> Outcome {
     let mut attempted = false;
-    let result = (|| -> Result<Outcome, Failure> {
+    let result = (|| -> Result<Outcome, Error> {
         let mut rpc = match bound {
             Some(bound) => Rpc::connect_bound(bound)?,
             None => Rpc::connect_unix(path)?,
@@ -210,18 +206,18 @@ fn notify_socket(
         )?;
         let queued = receipt
             .get("queuedSubmission")
-            .ok_or(Failure::INVALID_DATA)?;
+            .ok_or(Error::invalid_data())?;
         let client_id = queued
             .get("clientUserMessageId")
-            .ok_or(Failure::INVALID_DATA)?;
+            .ok_or(Error::invalid_data())?;
         if client_id.as_str() != Some(message_id) {
-            return Err(Failure::coded("codex_queue_receipt_mismatch"));
+            return Err(Error::code("codex_queue_receipt_mismatch"));
         }
         drop(rpc);
         let id = queued
             .get("id")
             .and_then(Value::as_str)
-            .ok_or(Failure::INVALID_DATA)?;
+            .ok_or(Error::invalid_data())?;
         Ok(Outcome::submitted(format!("codex_queued:{id}")))
     })();
     result.unwrap_or_else(|failure| {
@@ -263,15 +259,13 @@ fn notify_cli(peer: &Peer, body: &str, skip: Skip<'_>, database: Option<&Path>) 
     let output = match os::run_command("codex", &args, QUEUE_TIMEOUT) {
         Ok(output) => output,
         // Spawn failures precede submission; anything after the process starts is uncertain.
-        Err(failure)
-            if failure == Failure::FILE_NOT_FOUND || failure == Failure::PERMISSION_DENIED =>
-        {
+        Err(failure) if matches!(failure.fixed(), "file_not_found" | "permission_denied") => {
             return Outcome::not_submitted(failure.to_string());
         }
         Err(failure) => return Outcome::unknown(failure.to_string()),
     };
     let Ok(stdout) = std::str::from_utf8(&output.stdout) else {
-        return Outcome::unknown(Failure::INVALID_UTF8.to_string());
+        return Outcome::unknown(Error::invalid_utf8().to_string());
     };
     static RECEIPT: OnceLock<regex::Regex> = OnceLock::new();
     let receipt = RECEIPT.get_or_init(|| {
@@ -293,7 +287,7 @@ fn notify_cli(peer: &Peer, body: &str, skip: Skip<'_>, database: Option<&Path>) 
 }
 
 /// The live app-server address must be the registered thread, workspace and a loaded status.
-fn check_live(rpc: &mut Rpc, peer: &Peer) -> Result<Value, Failure> {
+fn check_live(rpc: &mut Rpc, peer: &Peer) -> Result<Value, Error> {
     let result = rpc.call(
         "thread/read",
         json!({"threadId": peer.session_id, "includeTurns": false}),
@@ -301,39 +295,39 @@ fn check_live(rpc: &mut Rpc, peer: &Peer) -> Result<Value, Failure> {
     let thread = result
         .get("thread")
         .and_then(Value::as_object)
-        .ok_or(Failure::INVALID_DATA)?;
+        .ok_or(Error::invalid_data())?;
     if thread.get("id").and_then(Value::as_str) != Some(peer.session_id.as_str())
         || !same_workspace(thread.get("cwd"), &peer.workspace)
     {
-        return Err(Failure::coded("recipient_identity_changed"));
+        return Err(Error::code("recipient_identity_changed"));
     }
     let status = match thread.get("status") {
         None => None,
         Some(Value::Object(status)) => status.get("type").and_then(Value::as_str),
-        Some(_) => return Err(Failure::INVALID_DATA),
+        Some(_) => return Err(Error::invalid_data()),
     };
     let status = status
         .filter(|s| matches!(*s, "idle" | "active"))
-        .ok_or_else(|| Failure::coded("recipient_not_loaded"))?;
+        .ok_or_else(|| Error::code("recipient_not_loaded"))?;
     Ok(
         json!({"harness": "codex", "session_id": thread.get("id"), "workspace": thread.get("cwd"), "status": status}),
     )
 }
 
 /// Read the installed CLI's saved address, without starting any client.
-fn saved_identity(peer: &Peer) -> Result<Value, Failure> {
+fn saved_identity(peer: &Peer) -> Result<Value, Error> {
     let path = state::state_path()?;
     saved_identity_at(peer, &path)
 }
 
-fn saved_identity_at(peer: &Peer, path: &Path) -> Result<Value, Failure> {
+fn saved_identity_at(peer: &Peer, path: &Path) -> Result<Value, Error> {
     let (id, cwd, archived, source) = state::saved_thread_at(path, &peer.session_id)?
-        .ok_or_else(|| Failure::coded("recipient_not_in_codex_state"))?;
+        .ok_or_else(|| Error::code("recipient_not_in_codex_state"))?;
     if id != peer.session_id || !same_workspace(Some(&cwd), &peer.workspace) {
-        return Err(Failure::coded("recipient_identity_changed"));
+        return Err(Error::code("recipient_identity_changed"));
     }
     if archived != 0 || source.as_str() != Some("cli") {
-        return Err(Failure::coded(
+        return Err(Error::code(
             "recipient_is_not_an_unarchived_codex_cli_session",
         ));
     }

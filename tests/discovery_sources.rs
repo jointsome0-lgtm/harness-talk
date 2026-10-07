@@ -5,7 +5,7 @@ use harness_talk::adapters::codex::discovery::{
     Call, app_servers as codex_app_servers, with_writers, writers as codex_writers,
 };
 use harness_talk::discovery::finish;
-use harness_talk::error::Failure;
+use harness_talk::error::Error;
 use harness_talk::model::Found;
 use serde_json::{Value, json};
 use std::cell::RefCell;
@@ -187,8 +187,8 @@ type Log = Rc<RefCell<Vec<(String, Value)>>>;
 
 fn server(
     log: Log,
-    answer: impl Fn(&str, &Value) -> Result<Value, Failure> + 'static,
-) -> impl Fn(&Path) -> Result<Call<'static>, Failure> {
+    answer: impl Fn(&str, &Value) -> Result<Value, Error> + 'static,
+) -> impl Fn(&Path) -> Result<Call<'static>, Error> {
     let answer = Rc::new(answer);
     move |_path: &Path| {
         let (log, answer) = (log.clone(), answer.clone());
@@ -267,7 +267,7 @@ fn codex_rejects_bad_records_without_hiding_later_ones() {
             _ if id == worker => {
                 json!({"thread": {"id": id, "cwd": cwd, "status": {"type": "idle"}, "canAcceptDirectInput": false}})
             }
-            _ if id == rejected_rpc => return Err(Failure::coded("codex_rpc_rejected:-32600")),
+            _ if id == rejected_rpc => return Err(Error::code("codex_rpc_rejected:-32600")),
             _ if id == unknown => thread(id, &cwd, "sleeping"),
             _ if id == GONE => thread(OTHER, &cwd, "idle"),
             _ => thread(id, &cwd, "active"),
@@ -300,7 +300,7 @@ fn codex_partial_results_survive_a_later_transport_failure() {
         "thread/loaded/list" if params["cursor"].is_null() => {
             Ok(json!({"data": [ID], "nextCursor": "next"}))
         }
-        "thread/loaded/list" => Err(Failure::OS_ERROR),
+        "thread/loaded/list" => Err(Error::System("os_error")),
         _ => Ok(thread(ID, &cwd, "active")),
     });
     let found = codex_app_servers(&[dir.text()], &connect);
@@ -312,7 +312,7 @@ fn codex_partial_results_survive_a_later_transport_failure() {
     // An RPC timeout during a read ends the source rather than counting a record.
     let connect = server(Log::default(), |method, _| match method {
         "thread/loaded/list" => Ok(json!({"data": [ID]})),
-        _ => Err(Failure::coded("codex_rpc_timeout")),
+        _ => Err(Error::code("codex_rpc_timeout")),
     });
     let found = codex_app_servers(&[dir.text()], &connect);
     assert_eq!("unavailable", found.sources[0]["status"]);

@@ -3,11 +3,7 @@ use super::{Adapter, Address, Query};
 use crate::discovery::{address, source};
 use crate::model::NativePeer as Peer;
 use crate::os::{self, connect_unix, owned_socket, same_workspace};
-use crate::{
-    error::{Error, Failure},
-    model::*,
-    validate,
-};
+use crate::{error::Error, model::*, validate};
 use serde_json::{Map, Value, json};
 use std::{
     collections::HashMap,
@@ -49,7 +45,7 @@ impl Adapter for Claude {
     fn notify(&self, peer: &Peer, message: &Message, body: &str, skip: Skip<'_>) -> Outcome {
         notify(peer, message, body, skip)
     }
-    fn probe(&self, peer: &Peer) -> Result<Value, Failure> {
+    fn probe(&self, peer: &Peer) -> Result<Value, Error> {
         probe(peer)
     }
     fn discover(&self, _query: &Query<'_>) -> Found {
@@ -58,24 +54,24 @@ impl Adapter for Claude {
 }
 
 /// The live session records. A non-list response is `invalid_claude_agents_response`.
-pub fn agents() -> Result<Vec<Value>, Failure> {
+pub fn agents() -> Result<Vec<Value>, Error> {
     match agents_response()? {
         Value::Array(rows) => Ok(rows),
         _ => Err(invalid_agents()),
     }
 }
 
-fn invalid_agents() -> Failure {
-    Failure::coded("invalid_claude_agents_response")
+fn invalid_agents() -> Error {
+    Error::code("invalid_claude_agents_response")
 }
 
 /// `~/.claude/sessions/PID.json`, parsed but not yet verified.
-pub fn session_metadata(pid: i64) -> Result<Value, Failure> {
+pub fn session_metadata(pid: i64) -> Result<Value, Error> {
     metadata_file(&pid.to_string())
 }
 
 /// The owned messaging socket of the one live session matching the peer's UUID and workspace.
-pub fn live_socket(peer: &Peer) -> Result<PathBuf, Failure> {
+pub fn live_socket(peer: &Peer) -> Result<PathBuf, Error> {
     let listed = agents()?;
     let rows: Vec<&Map<String, Value>> = listed
         .iter()
@@ -91,21 +87,21 @@ pub fn live_socket(peer: &Peer) -> Result<PathBuf, Failure> {
     let pid = match matching.as_slice() {
         [row] => match row.get("pid") {
             Some(Value::Number(pid)) if pid.is_i64() || pid.is_u64() => pid.to_string(),
-            _ => return Err(Failure::coded("recipient_unavailable")),
+            _ => return Err(Error::code("recipient_unavailable")),
         },
-        _ => return Err(Failure::coded("recipient_unavailable")),
+        _ => return Err(Error::code("recipient_unavailable")),
     };
     let metadata = metadata_file(&pid)?;
-    let fields = metadata.as_object().ok_or(Failure::INVALID_DATA)?;
+    let fields = metadata.as_object().ok_or(Error::invalid_data())?;
     if fields.get("sessionId").and_then(Value::as_str) != Some(peer.session_id.as_str())
         || !same_workspace(fields.get("cwd"), &peer.workspace)
     {
-        return Err(Failure::coded("recipient_identity_changed"));
+        return Err(Error::code("recipient_identity_changed"));
     }
     let socket = fields
         .get("messagingSocketPath")
         .and_then(Value::as_str)
-        .ok_or(Failure::INVALID_DATA)?;
+        .ok_or(Error::invalid_data())?;
     owned_socket(Path::new(socket))
 }
 
@@ -122,10 +118,10 @@ pub fn notify(peer: &Peer, message: &Message, body: &str, skip: Skip<'_>) -> Out
         "message": {"role": "user", "content": body}});
     let mut connection = match connect_unix(&path, SOCKET_TIMEOUT) {
         Ok(connection) => connection,
-        Err(error) => return Outcome::not_submitted(Failure::from(error).to_string()),
+        Err(error) => return Outcome::not_submitted(Error::from(error).to_string()),
     };
     if let Err(error) = connection.set_write_timeout(Some(SOCKET_TIMEOUT)) {
-        return Outcome::not_submitted(Failure::from(error).to_string());
+        return Outcome::not_submitted(Error::from(error).to_string());
     }
     match skip() {
         Err(failure) => return Outcome::not_submitted(failure.to_string()),
@@ -134,11 +130,11 @@ pub fn notify(peer: &Peer, message: &Message, body: &str, skip: Skip<'_>) -> Out
     }
     match connection.write_all(format!("{frame}\n").as_bytes()) {
         Ok(()) => Outcome::submitted("claude_socket_bytes_written"),
-        Err(error) => Outcome::unknown(Failure::from(error).to_string()),
+        Err(error) => Outcome::unknown(Error::from(error).to_string()),
     }
 }
 
-pub fn probe(peer: &Peer) -> Result<Value, Failure> {
+pub fn probe(peer: &Peer) -> Result<Value, Error> {
     let socket = live_socket(peer)?;
     Ok(
         json!({"harness": "claude", "session_id": peer.session_id, "workspace": peer.workspace,
@@ -146,35 +142,35 @@ pub fn probe(peer: &Peer) -> Result<Value, Failure> {
     )
 }
 
-fn agents_response() -> Result<Value, Failure> {
+fn agents_response() -> Result<Value, Error> {
     let output = os::run_command("claude", &["agents", "--json"], AGENTS_TIMEOUT)?;
-    let stdout = String::from_utf8(output.stdout).map_err(|_| Failure::INVALID_UTF8)?;
+    let stdout = String::from_utf8(output.stdout).map_err(|_| Error::invalid_utf8())?;
     if !output.status.success() {
-        return Err(Failure::COMMAND_FAILED);
+        return Err(Error::System("command_failed"));
     }
     Ok(serde_json::from_str(&stdout)?)
 }
 
-fn metadata_file(pid: &str) -> Result<Value, Failure> {
+fn metadata_file(pid: &str) -> Result<Value, Error> {
     let path = os::home()
         .join(".claude/sessions")
         .join(format!("{pid}.json"));
-    let text = String::from_utf8(std::fs::read(path)?).map_err(|_| Failure::INVALID_UTF8)?;
+    let text = String::from_utf8(std::fs::read(path)?).map_err(|_| Error::invalid_utf8())?;
     Ok(serde_json::from_str(&text)?)
 }
 
 /// Verify each `claude agents --json` row against its session metadata and live socket.
 /// A malformed row is counted as rejected and never hides another verified row.
 pub fn sessions(
-    listed: Result<Vec<Value>, Failure>,
-    metadata: &dyn Fn(i64) -> Result<Value, Failure>,
+    listed: Result<Vec<Value>, Error>,
+    metadata: &dyn Fn(i64) -> Result<Value, Error>,
 ) -> Found {
     let mut src = source(json!({"harness": "claude", "source": "claude_agents", "status": "ok"}));
     let mut verified = Vec::new();
     match listed {
         Err(failure) => {
             src.insert("status".into(), json!("unavailable"));
-            src.insert("detail".into(), json!(failure.code()));
+            src.insert("detail".into(), json!(failure.fixed()));
         }
         Ok(rows) => {
             let mut identities: HashMap<String, usize> = HashMap::new();
@@ -215,7 +211,7 @@ pub fn sessions(
 fn verify_row(
     row: &Value,
     identities: &HashMap<String, usize>,
-    metadata: &dyn Fn(i64) -> Result<Value, Failure>,
+    metadata: &dyn Fn(i64) -> Result<Value, Error>,
 ) -> Option<Value> {
     let row = row.as_object()?;
     let (session_id, workspace) = address(Some(row.get("sessionId")?), Some(row.get("cwd")?))?;
