@@ -272,7 +272,7 @@ A failed command answers `"state":"error"` with one of these codes as `error`. T
 | `opencode_saved_{}` | The saved OpenCode sessions database could not be read. The rest is the system code. | Look up the system code. Sessions from running servers are still listed. |
 | `opencode_unauthorized` | The OpenCode server answered 401: the credentials are missing or wrong. | Set `OPENCODE_SERVER_PASSWORD`, and `OPENCODE_SERVER_USERNAME` if the server uses one. |
 | `opencode_unreachable` | No connection to the OpenCode server was made, so nothing was sent. | Start the server or correct the URL, then check the peer. |
-| `opencode_{}` | The request to the OpenCode server failed after it was sent. The rest names the failure. | Do not repeat the notice. Check the server and the session. |
+| `opencode_{}` | The exchange with the OpenCode server failed after a connection was made. The rest names the failure. | Check the server and the session. Do not repeat a notice saved as `submission_unknown`. |
 | `recipient_not_in_opencode_server` | The OpenCode server answered 404 for the session or for the server itself. | Check the URL and session id with `htalk peer discover --harness opencode`. |
 | `recipient_session_archived` | The recipient's OpenCode session is archived. | Restore the session in OpenCode, or register the peer's current session. |
 
