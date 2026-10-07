@@ -1,5 +1,25 @@
 # OpenCode sessions
 
+Checked on 2026-10-07 UTC with the htalk `0.13.0` x86-64 publication wheel,
+commit `8fcba3ff45d2864209e6666a89eac8d4d36caeb0`, SHA-256
+`ef97ed9dc6f8034371c956fe13fbe9d9965da5d3d0a307309e1d94a94dcca268`.
+This is the first live check of the adapter since it speaks HTTP through
+`ureq`. OpenCode 1.18.32 ran a new headless server session with a fake key and
+five loopback requests to a deterministic local provider, one of them for the
+session title. Only the bound htalk MCP tool was offered. `peer check` reported
+the server and the session as `idle`; the notice was `submitted` with
+`opencode_prompt_async_accepted` and led to one full show, checks of id,
+sender, recipient, body and reply relationship, a separate request ACK and one
+correlated reply, which the sender's 45-second wait returned. The controller
+read and separately ACKed the answer; both final inboxes were empty. The server
+ended with `-15` after SIGTERM, which does not establish a normal exit. Native
+ACK cleanup was `unsupported`; controller cleanup was `skipped/pull_only`;
+neither proves notice removal. A request for port 0 selected 4096 again. A first attempt
+stopped after show because of a fault in the provider script and is not
+counted. TUI attachment, model comprehension and external transport remain
+unproved. See the [0.13.0 native check](checks/2026-10-07-0.13.0-native.md).
+Earlier checks below remain historical evidence.
+
 Checked on 2026-10-04 UTC with the htalk `0.12.0` x86-64 publication wheel,
 commit `242278b516ea7fe98e287e6e74c71ddcc52e9945`, SHA-256
 `925bc7278058312cb2cbe744a0a55e134737d104fba9fb64d82e7d8d0a7a7290`.
