@@ -30,13 +30,14 @@ pub use unix::{
     others_write, owned_socket, private_umask, ready, set_nonblocking, stop_requests,
     sync_directory, try_lock,
 };
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+pub use unported::OwnedGroup;
 #[cfg(not(target_os = "linux"))]
 pub use unported::{PROC, process_exe, process_stat};
 #[cfg(windows)]
 pub use windows::{
-    DB_HELP, Grouped, Open, OwnedGroup, create_private_dir, default_db, hung_up,
-    install_interrupt_handler, interrupted, lock, open_directory, private_umask, stop_requests,
-    sync_directory,
+    DB_HELP, Grouped, Open, create_private_dir, default_db, hung_up, install_interrupt_handler,
+    interrupted, lock, open_directory, private_umask, stop_requests, sync_directory,
 };
 
 use std::{

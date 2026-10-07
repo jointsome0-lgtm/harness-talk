@@ -66,7 +66,11 @@ fn a_member_that_outlives_the_wrapper_is_stopped_and_a_group_already_gone_is_own
             .unwrap();
         tokio::time::sleep(Duration::from_millis(300)).await;
         let mut group = OwnedGroup::new(child.id().unwrap()).unwrap();
-        assert!(group.exited().unwrap());
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !group.exited().unwrap() {
+            assert!(Instant::now() < deadline);
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         group.finish_async().await.unwrap();
         assert!(child.wait().await.unwrap().success());
     });

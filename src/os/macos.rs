@@ -80,7 +80,11 @@ impl OwnedGroup {
         match e.raw_os_error() {
             // The answers for a group in which only exited processes are left. A member that
             // belongs to another user reads the same, and is not told apart from them.
-            Some(libc::ESRCH | libc::EPERM) if exited => Ok(true),
+            // The kernel looks at the members it listed a moment before, so one that was started
+            // meanwhile is missed once; the group is asked again before it is called empty.
+            Some(libc::ESRCH | libc::EPERM) if exited => {
+                Ok(unsafe { libc::kill(-self.leader, value) } != 0)
+            }
             _ => Err(e),
         }
     }

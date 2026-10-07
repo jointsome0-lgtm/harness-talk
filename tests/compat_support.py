@@ -75,6 +75,9 @@ _native_clients = None
 def native_clients():
     """Whether the htalk under test delivers to Codex and Claude Code on this system. It is asked once."""
     global _native_clients
+    if _native_clients is None and sys.platform == "linux":
+        # Linux has them. Were that to break, the tests of it must fail and not be skipped.
+        _native_clients = True
     if _native_clients is None:
         with tempfile.TemporaryDirectory(prefix="htp") as directory:
             asked = subprocess.run([*htalk_command(), "--db", os.path.join(directory, "probe.sqlite3"), "peer", "add",

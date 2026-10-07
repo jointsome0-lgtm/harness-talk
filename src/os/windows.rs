@@ -1,6 +1,5 @@
-//! Windows: where the mailbox is, and how its files are opened. Interrupts, file locks, a
-//! closed output and a child's process group are not ported yet; each says below what happens
-//! until then.
+//! Windows: where the mailbox is, and how its files are opened. Interrupts, file locks and a
+//! closed output are not ported yet; each says below what happens until then.
 use super::home;
 use std::{
     env,
@@ -83,21 +82,4 @@ pub fn lock(_file: &File) -> io::Result<()> {
 /// Not ported: a closed output is noticed at the next write.
 pub fn hung_up<T>(_io: &T) -> bool {
     false
-}
-
-/// Not ported: a child's process group. It has no value here, so nothing that holds one can run.
-pub enum OwnedGroup {}
-impl OwnedGroup {
-    pub fn new(_pid: u32) -> io::Result<Self> {
-        Err(io::ErrorKind::Unsupported.into())
-    }
-    pub fn exited(&self) -> io::Result<bool> {
-        match *self {}
-    }
-    pub(crate) fn interrupt(&self) -> io::Result<()> {
-        match *self {}
-    }
-    pub async fn finish_async(&mut self) -> io::Result<()> {
-        match *self {}
-    }
 }
