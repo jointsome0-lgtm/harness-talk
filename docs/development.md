@@ -118,4 +118,19 @@ python3 scripts/test_census.py
 
 The same script counts the lines of `src/` outside `src/os/` that name something only a Unix or Linux system has: `libc::`, a signal, `/proc`, a Unix extension of the standard library. That number is 0. Such a call goes into `src/os/`, and the rest of the program asks `os::` for it.
 
-The core cleanup, issue #65, adds rules for each of its pull requests. `main` stays green and releasable after each merge: `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`, then the Python and Node suites named in `.github/workflows/tests.yml`. Each pull request reports, before and after, the core size in tokens, the tests that reach inside, the test count and the lines of test code. A visible change found along the way is not made there; it is noted on issue #76. Code the next phase deletes, the Python class names, the `python_*` helpers and the hand-rolled HTTP client, is gathered into one place, not polished.
+The core cleanup, issue #65, adds rules for each of its pull requests. `main` stays green and releasable after each merge: `cargo fmt --check`, `cargo clippy --locked --all-targets -- -D warnings`, `cargo test --locked`, then the Python and Node suites named in `.github/workflows/tests.yml`. Each pull request reports, before and after, the core size in tokens as `scripts/core_tokens.py` prints it, the tests that reach inside, the test count and the lines of test code. A visible change found along the way is not made there; it is noted on issue #76. Code the next phase deletes, the Python class names, the `python_*` helpers and the hand-rolled HTTP client, is gathered into one place, not polished.
+
+## The core
+
+The core is what a change to mailbox behaviour must read: the commands and their dispatch, the store and its schema, the turn of a contended send, the model of a peer and a message, errors, validation, the recovery guidance, the notification, the session a command runs in, the adapter contract and the portable part of `src/os/`.
+
+- In the core: `src/main.rs`, `src/lib.rs`, `src/cli.rs`, `src/commands.rs`, `src/commands/**`, `src/store.rs`, `src/schema.rs`, `src/write_turn.rs`, `src/model.rs`, `src/error.rs`, `src/validate.rs`, `src/guidance.rs`, `src/notify.rs`, `src/identity.rs`, `src/adapters/mod.rs` and `src/os/mod.rs`.
+- Outside: the adapters under `src/adapters/`, `src/catalog/**`, `src/mcp.rs`, `src/discovery.rs`, `src/compat.rs` and the platform code under `src/os/`.
+
+`scripts/core_tokens.py` measures it. The measure is the bytes of the core files divided by 3.3, a rough count of tokens. The script prints each core file, the total and, for information, the core together with the adapters:
+
+```sh
+python3 scripts/core_tokens.py
+```
+
+CI runs it on every push. It fails when the core is above 70,000 tokens. It also fails when a file under `src/` is on neither list, so a new file is placed by hand, in the script and here. A file belongs in the core when a change to what `send`, `reply`, `wait`, `show`, `ack`, `inbox`, `watch`, `sent` or `peer` does cannot be made without reading it. Code for one harness, one channel or one platform stays outside.
