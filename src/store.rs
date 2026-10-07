@@ -20,12 +20,12 @@ pub const PAGE_LIMIT: i64 = 20;
 // Every peer row carries retired_at, which is null for an active peer.
 const PEER_ROWS: &str =
     "SELECT p.*, r.retired_at FROM peers p LEFT JOIN retired_peers r ON r.name = p.name";
-const INBOX_ACTION: &str =
+pub(crate) const INBOX_ACTION: &str =
     "Read and ack messages explicitly. Unanswered questions remain until replied to.";
-const INBOX: &str = "m.recipient=? AND
+pub(crate) const INBOX: &str = "m.recipient=? AND
             ((m.in_reply_to IS NULL AND NOT EXISTS (SELECT 1 FROM messages r WHERE r.in_reply_to=m.id)) OR
              (m.in_reply_to IS NOT NULL AND m.ack_at IS NULL))";
-const SENT: &str = "m.sender=?";
+pub(crate) const SENT: &str = "m.sender=?";
 
 #[derive(Debug)]
 pub struct Store {
@@ -37,7 +37,7 @@ fn code(c: &str) -> Error {
     Error::code(c)
 }
 
-fn read_row(r: &rusqlite::Row) -> Result<Row, Error> {
+pub(crate) fn read_row(r: &rusqlite::Row) -> Result<Row, Error> {
     Ok(Row {
         seq: r.get("seq")?,
         id: r.get("id")?,
@@ -86,7 +86,7 @@ fn message_row(db: &Connection, sql: &str, p: impl Params) -> Result<Option<Row>
     first(db, sql, p, read_row)
 }
 
-fn peer_on(db: &Connection, name: &str) -> Result<Peer, Error> {
+pub(crate) fn peer_on(db: &Connection, name: &str) -> Result<Peer, Error> {
     first(
         db,
         &format!("{PEER_ROWS} WHERE p.name=?"),
@@ -96,96 +96,12 @@ fn peer_on(db: &Connection, name: &str) -> Result<Peer, Error> {
     .ok_or_else(|| code("unknown_peer"))
 }
 
-/// Catalogue reads cannot create, initialize or migrate a mailbox.
-pub(crate) fn catalog_peers(path: &Path, names: &[String]) -> Result<Vec<Peer>, Error> {
-    let db = catalog_connection(path)?;
-    db.execute_batch("BEGIN")?;
-    names.iter().map(|name| peer_on(&db, name)).collect()
-}
-
-fn catalog_connection(path: &Path) -> Result<Connection, Error> {
-    let db = Connection::open_with_flags(
-        path,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
-    db.busy_timeout(Duration::from_secs(2))?;
-    if db.query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))? != SCHEMA_VERSION {
-        return Err(code("catalog_requires_schema3"));
-    }
-    Ok(db)
-}
-
-pub(crate) fn catalog_message(path: &Path, id: &str, actor: &str) -> Result<Message, Error> {
-    let db = catalog_connection(path)?;
-    db.execute_batch("BEGIN")?;
-    load(&db, &validate::uuid(id)?, Some(actor))
-}
-
-/// Apply the catalogue's conversation filter before pagination and counts.
-pub(crate) fn catalog_page(
-    path: &Path,
-    actor: &str,
-    names: &[String],
-    sent: bool,
-    limit: i64,
-    cursor: Option<i64>,
-    bodies: bool,
-) -> Result<Page, Error> {
-    validate::page(limit, cursor)?;
-    let mut db = catalog_connection(path)?;
-    let tx = db.transaction()?;
-    peer_on(&tx, actor)?;
-    let base = if sent { SENT } else { INBOX };
-    let condition = format!(
-        "({base}) AND CASE WHEN m.sender=?1 THEN m.recipient ELSE m.sender END IN (SELECT value FROM json_each(?2))"
-    );
-    let (order, beyond) = if sent { ("DESC", "<") } else { ("ASC", ">") };
-    let cursor = cursor.unwrap_or(if sent { i64::MAX } else { 0 });
-    let names = serde_json::to_string(names)?;
-    let total = tx.query_row(
-        &format!("SELECT COUNT(*) FROM messages m WHERE {condition}"),
-        params![actor, names],
-        |r| r.get(0),
-    )?;
-    let mut stmt = tx.prepare(&format!("SELECT * FROM messages m WHERE {condition} AND m.seq {beyond} ?3 ORDER BY m.seq {order} LIMIT ?4"))?;
-    let mut found = stmt.query(params![actor, names, cursor, limit])?;
-    let mut rows = Vec::new();
-    while let Some(r) = found.next()? {
-        rows.push(read_row(r)?);
-    }
-    let omitted = match rows.last() {
-        Some(last) => tx.query_row(
-            &format!("SELECT COUNT(*) FROM messages m WHERE {condition} AND m.seq {beyond} ?3"),
-            params![actor, names, last.seq],
-            |r| r.get(0),
-        )?,
-        None => 0,
-    };
-    let mut messages: Vec<Value> = rows
-        .into_iter()
-        .map(|r| Ok(serde_json::to_value(with_reply(&tx, r)?)?))
-        .collect::<Result<_, Error>>()?;
-    if sent && !bodies {
-        messages.iter_mut().for_each(summarize);
-    }
-    Ok(Page {
-        messages,
-        total,
-        omitted,
-        next_action: if sent {
-            None
-        } else {
-            Some(INBOX_ACTION.into())
-        },
-    })
-}
-
-fn with_reply(db: &Connection, row: Row) -> Result<Message, Error> {
+pub(crate) fn with_reply(db: &Connection, row: Row) -> Result<Message, Error> {
     let reply = message_row(db, "SELECT * FROM messages WHERE in_reply_to=?", [&row.id])?;
     Ok(Message::from_row(row, reply))
 }
 
-fn load(db: &Connection, id: &str, actor: Option<&str>) -> Result<Message, Error> {
+pub(crate) fn load(db: &Connection, id: &str, actor: Option<&str>) -> Result<Message, Error> {
     let row = message_row(db, "SELECT * FROM messages WHERE id=?", [id])?
         .ok_or_else(|| code("unknown_message"))?;
     if let Some(actor) = actor
@@ -244,7 +160,7 @@ fn wait_deadline(db: &Connection, message_id: &str, recipient: &str) -> Result<O
 }
 
 /// Replace a message's and its answer's text with its UTF-8 size and first nonblank line.
-fn summarize(message: &mut Value) {
+pub(crate) fn summarize(message: &mut Value) {
     let Some(message) = message.as_object_mut() else {
         return;
     };

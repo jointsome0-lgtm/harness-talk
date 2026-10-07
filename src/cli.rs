@@ -2,6 +2,7 @@ use crate::{
     commands::{self, Cli, Command, Mailbox, PeerCommand, mail::To},
     error::Error,
     guidance, identity,
+    mcp::Plain,
     model::{Delivery, NativeSession, Page, Peer},
     os,
     store::Store,
@@ -433,19 +434,14 @@ pub(crate) fn output(value: &Value) -> io::Result<()> {
 }
 
 fn mcp(options: commands::Mcp, db: Option<String>, actor: Option<String>) -> i32 {
-    let result = if options.connect {
+    let plain = if options.connect {
         if db.is_some() || actor.is_some() {
             eprintln!(
                 "mcp --connect uses the remote endpoint's fixed database and peer; omit --db and --as"
             );
             return 2;
         }
-        match options.expect_catalog {
-            Some(path) => crate::catalog::read_binding(Path::new(&path))
-                .map_err(Box::<dyn std::error::Error>::from)
-                .and_then(|binding| crate::mcp::connect_bound(options.connector, binding)),
-            None => crate::mcp::connect(options.connector),
-        }
+        Plain::Connect(options.connector.clone())
     } else {
         let db = db.map(PathBuf::from).unwrap_or_else(default_db);
         let peer = actor
@@ -455,11 +451,13 @@ fn mcp(options: commands::Mcp, db: Option<String>, actor: Option<String>) -> i32
             eprintln!("htalk mcp requires --as NAME or HTALK_PEER: {error}");
             return 2;
         }
-        match options.catalog {
-            Some(path) => crate::mcp::run_catalog(db, peer, path.into()),
-            None => crate::mcp::run(db, peer),
-        }
+        Plain::Local { db, peer }
     };
+    // The catalogue may bind the endpoint to what it published.
+    #[cfg(feature = "catalog")]
+    let result = crate::catalog::serve(plain, &options);
+    #[cfg(not(feature = "catalog"))]
+    let result = plain.serve();
     match result {
         Ok(()) => 0,
         Err(error) => {
@@ -492,6 +490,7 @@ pub fn main() -> i32 {
         }
     };
     let command = match command {
+        #[cfg(feature = "catalog")]
         Command::Catalog(action) => {
             return crate::catalog::main(&action, db.as_deref(), actor.as_deref());
         }

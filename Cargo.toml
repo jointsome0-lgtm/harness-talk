@@ -13,6 +13,11 @@ exclude = [".audit/**"]
 name = "htalk"
 path = "src/main.rs"
 
+[features]
+default = ["catalog"]
+# Publishing profiles and finding them on known devices. Without it the build is the mailbox alone.
+catalog = []
+
 [dependencies]
 base64 = "0.22"
 clap = { version = "4.5", features = ["derive"] }
