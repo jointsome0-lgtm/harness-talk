@@ -129,3 +129,11 @@ jobs:
         run: |
           cd tests
           python -B -m unittest test_cli_compat test_mcp test_mail_recovery -v
+      - name: Install from the checkout
+        run: |
+          python -m venv "$RUNNER_TEMP/source"
+          bin="$RUNNER_TEMP/source/bin"
+          if [ ! -d "$bin" ]; then bin="$RUNNER_TEMP/source/Scripts"; fi
+          "$bin/python" -m pip install .
+          "$bin/python" -m pip check
+          "$bin/htalk" --version

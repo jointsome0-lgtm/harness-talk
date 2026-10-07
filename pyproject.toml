@@ -13,6 +13,8 @@ license-files = ["LICENSE"]
 dependencies = []
 classifiers = [
     "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
     "Programming Language :: Rust",
 ]
 
