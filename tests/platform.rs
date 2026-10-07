@@ -154,7 +154,8 @@ fn native_delivery_that_is_not_ported_answers_one_code_and_writes_nothing() {
     assert!(!temp.0.join("data").exists());
 
     // `receive` takes its mailbox from the remote watch, so no `--db`.
-    let receive = htalk_bare(&["receive", "status", "--state", workspace]);
+    let state = temp.0.join("state");
+    let receive = htalk_bare(&["receive", "status", "--state", state.to_str().unwrap()]);
     assert_eq!(
         (Some(2), "htalk receive: unsupported_on_this_platform"),
         (
@@ -162,7 +163,7 @@ fn native_delivery_that_is_not_ported_answers_one_code_and_writes_nothing() {
             String::from_utf8_lossy(&receive.stderr).trim()
         )
     );
-    assert!(!temp.0.join("data").exists());
+    assert!(fs::read_dir(&temp.0).unwrap().next().is_none());
 }
 
 #[cfg(not(mcp_server))]

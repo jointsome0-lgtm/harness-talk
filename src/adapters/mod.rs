@@ -118,6 +118,9 @@ impl Adapter for NotPorted {
     fn notify(&self, _: &NativePeer, _: &Message, _: &str, _: Skip<'_>) -> Outcome {
         Outcome::not_submitted(Error::not_ported().fixed())
     }
+    fn dismiss(&self, _: &NativePeer, _: &Message) -> Cleanup {
+        Cleanup::new(CleanupStatus::Unsupported).detail(Error::not_ported().fixed())
+    }
     fn probe(&self, _: &NativePeer) -> Result<Value, Error> {
         Err(Error::not_ported())
     }
