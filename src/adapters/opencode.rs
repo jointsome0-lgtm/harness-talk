@@ -1022,7 +1022,7 @@ pub fn notify(peer: &Peer, body: &str, skip: Skip<'_>) -> Outcome {
 }
 
 fn saved_database() -> PathBuf {
-    os::expand_user(&os::data_home(true)).join("opencode/opencode.db")
+    os::expand_user(&os::data_home()).join("opencode/opencode.db")
 }
 
 /// `str(pathlib.Path(p))`: repeated slashes and `.` parts removed.

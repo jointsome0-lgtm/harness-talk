@@ -90,6 +90,7 @@ fn invalid_response() -> Error {
 fn stream_failure(error: std::io::Error) -> Error {
     match error.kind() {
         std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut => timeout(),
+        std::io::ErrorKind::Interrupted => Error::Interrupted,
         _ => error.into(),
     }
 }
@@ -340,13 +341,29 @@ fn deadline_timeout() -> std::io::Error {
     std::io::Error::new(std::io::ErrorKind::TimedOut, "RPC deadline expired")
 }
 
+/// How long one wait for the client may last: what is left of `deadline`, cut short enough
+/// that an interrupt is seen before the next one. A signal alone does not end a wait,
+/// because it can arrive between two of them.
+fn slice(deadline: Instant) -> std::io::Result<Duration> {
+    if os::interrupted() {
+        return Err(std::io::ErrorKind::Interrupted.into());
+    }
+    let left = remaining(deadline).ok_or_else(deadline_timeout)?;
+    Ok(left.min(Duration::from_millis(50)))
+}
+
+/// Whether a read or write ended only because its slice did.
+fn again(error: &std::io::Error) -> bool {
+    use std::io::ErrorKind::*;
+    matches!(error.kind(), Interrupted | WouldBlock | TimedOut)
+}
+
 impl Read for DeadlineStream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         loop {
-            self.stream
-                .set_read_timeout(Some(remaining(self.deadline).ok_or_else(deadline_timeout)?))?;
+            self.stream.set_read_timeout(Some(slice(self.deadline)?))?;
             match self.stream.read(buf) {
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) if again(&error) => continue,
                 result => return result,
             }
         }
@@ -356,10 +373,9 @@ impl Read for DeadlineStream {
 impl Write for DeadlineStream {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         loop {
-            self.stream
-                .set_write_timeout(Some(remaining(self.deadline).ok_or_else(deadline_timeout)?))?;
+            self.stream.set_write_timeout(Some(slice(self.deadline)?))?;
             match self.stream.write(buf) {
-                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(error) if again(&error) => continue,
                 result => return result,
             }
         }
@@ -373,9 +389,8 @@ impl Write for DeadlineStream {
 
 fn poll_until(io: &impl os::Descriptor, writable: bool, deadline: Instant) -> std::io::Result<()> {
     loop {
-        let wait = remaining(deadline).ok_or_else(deadline_timeout)?;
-        match os::ready(io, writable, wait) {
-            Ok(false) => return Err(deadline_timeout()),
+        match os::ready(io, writable, slice(deadline)?) {
+            Ok(false) => (),
             Err(error) if error.kind() != std::io::ErrorKind::Interrupted => return Err(error),
             Err(_) => (),
             Ok(true) => {
