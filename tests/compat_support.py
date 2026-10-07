@@ -62,7 +62,7 @@ def htalk_command():
         if not (executable.is_file() and os.access(executable, os.X_OK)):
             raise CommandUnavailable("HTALK_TEST_COMMAND executable is missing: %s" % executable)
         return words
-    local = REPO / "target/debug/htalk"
+    local = REPO / ("target/debug/htalk.exe" if WINDOWS else "target/debug/htalk")
     if local.is_file() and os.access(local, os.X_OK):
         return [str(local)]
     raise CommandUnavailable("No htalk under test: set HTALK_TEST_COMMAND or build %s" % local)
