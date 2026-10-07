@@ -33,19 +33,21 @@ pub fn new_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-/// A new store with one Claude peer per name.
+/// A new store with one Claude peer per name. The record is written as registration would
+/// save it, without asking the adapter, so the store is tested on a system that has none.
 pub fn store(temp: &Temp, names: &[&str]) -> Store {
     let store = Store::open(&temp.db(), true).unwrap();
     for name in names {
-        let peer = harness_talk::notify::native_peer(
-            name,
-            Harness::Claude,
-            &new_id(),
-            temp.workspace(),
-            None,
-            None,
-        )
-        .unwrap();
+        let peer = Peer {
+            name: (*name).into(),
+            harness: Harness::Claude.to_string(),
+            delivery: Delivery::Native,
+            session_id: Some(new_id()),
+            workspace: Some(temp.workspace().into()),
+            socket: None,
+            url: None,
+            retired_at: None,
+        };
         store.register(&peer).unwrap();
     }
     store
