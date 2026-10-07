@@ -6,39 +6,14 @@ For Linux and mutually trusted sessions. Mailbox processes share one trusted OS 
 
 The [roadmap](ROADMAP.md) tracks the planned releases and their completion criteria.
 
-This checkout also includes [session receivers](integrations/README.md) for
-Pi, Oh My Pi, Hermes, OpenClaw, Agent Zero, Cline, OpenHands, Copilot CLI and Gemini CLI,
-using a shared `htalk watch` stream. Kilo uses the existing OpenCode HTTP adapter.
-The receivers require htalk 0.7.0 or newer and adapter files from the matching
-source archive or checkout. The installed binary wheel supplies `htalk`.
+Beyond the three native clients:
 
-Version 0.8.0 also provides separate managed sessions for
-[Goose](integrations/goose.md), [Letta Code](integrations/letta.md), and
-[Antigravity SDK](integrations/antigravity.md). They share owner-task binding,
-same-session restart and explicit recovery. They do not attach to existing
-TUI or IDE windows. The tested Antigravity Luna route requires an external
-provider adaptation described in its setup.
+- [Session receivers](integrations/README.md) for Pi, Oh My Pi, Hermes, OpenClaw, Agent Zero, Cline, OpenHands, Copilot CLI and Gemini CLI read a shared `htalk watch` stream. Kilo uses the OpenCode adapter. The installed wheel supplies `htalk`; the receivers are files of the matching source archive or checkout.
+- Managed sessions for [Goose](integrations/goose.md), [Letta Code](integrations/letta.md) and the [Antigravity SDK](integrations/antigravity.md) share owner-task binding, same-session restart and explicit recovery. They do not attach to existing TUI or IDE windows.
+- The [MCP mailbox tool](integrations/mcp.md) gives a client with MCP support the same message commands over stdio. Tool access and automatic session notification are documented separately for each harness.
+- Two devices can share one mailbox through the [MCP-over-SSH route](integrations/ssh.md), with a [Codex receiver](integrations/remote.md) for a worker on another device and a [Linux user service](integrations/ssh-service.md) for a reverse SSH route.
 
-For clients with MCP support, the shared [MCP mailbox tool](integrations/mcp.md)
-provides the same message commands over stdio. Tool access and automatic session
-notification are documented separately for each harness.
-
-Two devices can share one mailbox through the [MCP-over-SSH route](integrations/ssh.md).
-Version 0.9.0 adds reconnecting tool access and a [Codex receiver](integrations/remote.md)
-for a worker on another device. Keep the mailbox on an available PC so requests
-remain saved while the worker is disconnected. The receiver keeps native queue
-receipts and stops on uncertain delivery instead of resubmitting work.
-
-The [Linux user-service guide](integrations/ssh-service.md) and socket helper
-maintain a reverse SSH route when only the worker accepts SSH. They recover
-transport separately from model execution. See the [checked recovery and
-resume limits](docs/checks/2026-09-27-ssh-lifecycle.md).
-
-Version 0.12.0 adds catalogue discovery and profile selection through an explicitly pinned SSH IPv4 address. It needs no mDNS or Tailscale daemon. Upgrade clients before adding the optional trust-file field; see the [0.12.0 upgrade and recovery notes](docs/releases/0.12.0.md).
-
-Version 0.11.1 fixes repeated legacy migration and extra backups when a send or reply encounters contention after migration BEGIN. Mailbox schema remains 3. Existing schema-3 mailboxes need no migration; schema 1/2 still receive a verified backup and automatic migration on first use. See the [0.11.1 patch, upgrade and rollback notes](docs/releases/0.11.1.md).
-
-Stop mailbox writers and receivers before updating the CLI and their matching adapter files. The 0.11.0 receiver requirements still apply: old Antigravity/Letta idle state requires explicit inspection and named session retirement before further managed work. OpenHands requires a private `HTALK_OPENHANDS_STATE` directory. Keep saved state and receipts. Do not reset them to bypass recovery. Subprocess cleanup needs Linux 5.3+ and readable `/proc`; managed Python receivers also require working pidfd APIs in that interpreter. See the [0.11.0 adapter, recovery and host requirements](docs/releases/0.11.0.md).
+Each release has its upgrade note under [docs/releases](docs/releases/). [0.13.0](docs/releases/0.13.0.md) changes error codes, the keys of a successful result and the text of the help, once; the mailbox stays on schema 3 and needs no migration. Stop mailbox writers and receivers before updating the CLI and their matching adapter files.
 
 ## Install and share a database
 
@@ -49,24 +24,13 @@ uv tool install harness-talk
 export HTALK_DB=/absolute/shared/directory/mail.sqlite3
 ```
 
-Or install with `python -m pip install harness-talk` (Python 3.11+). Since version 0.5, htalk is a Rust executable, distributed through the same package name. Linux wheels for x86-64 and ARM64 with glibc 2.28+ include the compiled executable and SQLite; installing a matching wheel needs no Rust compiler. The installed `htalk` runs without Python. Source installs require Rust 1.88+, a C compiler and a linker; see [development](docs/development.md).
+Or install with `python -m pip install harness-talk` (Python 3.11+). htalk is a Rust executable, distributed as a Python package. Linux wheels for x86-64 and ARM64 with glibc 2.28+ include the compiled executable and SQLite; installing a matching wheel needs no Rust compiler. The installed `htalk` runs without Python. Source installs require Rust 1.88+, a C compiler and a linker; see [development](docs/development.md).
 
 Set the same `HTALK_DB` in both sessions. Both must be able to run `htalk` and write the database directory. Only `peer add` creates the file; other commands report `database_not_found` for a wrong path. `--db PATH` overrides the environment; [storage defaults](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/reference.md#database-and-peers) are documented separately.
 
-From version 0.6.1, install the new version and continue using the same commands. The first command that opens a schema 1 or 2 mailbox saves and checks a private SQLite backup in `PATH.backups`, then upgrades it to schema 3 in one transaction. Messages, replies, acknowledgments, notification receipts and retirement marks are preserved. If backup or migration fails, the command stops and the mailbox stays on its previous schema. No separate migration command is needed; see [migration and recovery](docs/reference.md#database-and-peers).
+A mailbox on schema 1 or 2 is backed up and upgraded to schema 3 by the first command that opens it; see [migration and recovery](docs/reference.md#database-and-peers). Update every htalk installation that uses the mailbox.
 
-Update every htalk installation that uses the mailbox: clients 0.5.1 and earlier reject schema 3. There is no automatic downgrade or backup restoration.
-
-Native commands and peer JSON retain their earlier shape after migration. Python imports from `harness_talk` are no longer supported. Replace module invocations in scripts with the installed command, keeping the same database and arguments:
-
-```sh
-# Before 0.5
-python -m harness_talk --as builder inbox
-# 0.5 and later
-htalk --as builder inbox
-```
-
-Fixed htalk error codes remain stable; uncoded OS/SQLite error wording and JSON whitespace may differ from the Python version. Parse JSON fields and fixed codes rather than exception prose.
+Errors carry fixed codes, listed in the [reference](docs/reference.md#error-codes). Parse JSON fields and codes, not prose: a file or database failure of the mailbox itself is answered in the system's words.
 
 ## Find and register the participants
 
