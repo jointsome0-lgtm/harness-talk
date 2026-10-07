@@ -25,7 +25,7 @@ import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from compat_support import (KEPT, MESSAGE_KEYS, OPENCODE_CA, PEER_KEYS, ROW_KEYS, TIMEOUT, UNSETTLED,  # noqa: E402
-                            HtalkCase, process_start, wait_for)
+                            HtalkCase, any_peer, process_start, wait_for)
 
 LEGACY_V1 = """
 CREATE TABLE peers (name TEXT PRIMARY KEY, harness TEXT NOT NULL, session_id TEXT NOT NULL,
@@ -78,25 +78,24 @@ class DatabaseSelection(HtalkCase):
                 self.assertIn("peer add", error["next_action"])
         self.assertFalse(self.db.parent.exists())
         bob = self.add_peer("bob")
-        self.assertEqual(PEER_KEYS, set(bob))
+        self.assertEqual(any_peer(PEER_KEYS, PEER_KEYS | {"delivery"}), set(bob))
         self.assertEqual(["bob"], [peer["name"] for peer in self.htalk("peer", "list")["peers"]])
         # Created privately, independent of the caller's umask.
         self.assertEqual(0, self.db.stat().st_mode & 0o077)
         self.assertEqual(0, self.db.parent.stat().st_mode & 0o077)
 
     def test_path_precedence_and_resolution(self):
-        address = ["peer", "add", "bob", "--harness", "claude", "--session", str(uuid.uuid4()), "--workspace", str(self.work)]
         option, env_db = self.tmp / "option.sqlite3", self.tmp / "env.sqlite3"
         xdg = self.tmp / "xdg"
-        self.htalk(*address, db=option, env={"HTALK_DB": str(env_db), "XDG_DATA_HOME": str(xdg)})
+        self.add_peer("bob", db=option, env={"HTALK_DB": str(env_db), "XDG_DATA_HOME": str(xdg)})
         self.assertEqual((True, False), (option.exists(), env_db.exists()))
-        self.htalk(*address, db=False, env={"HTALK_DB": str(env_db), "XDG_DATA_HOME": str(xdg)})
+        self.add_peer("bob", db=False, env={"HTALK_DB": str(env_db), "XDG_DATA_HOME": str(xdg)})
         self.assertTrue(env_db.exists())
         self.assertFalse(xdg.exists())
-        self.htalk(*address, db=False, env={"HTALK_DB": "", "XDG_DATA_HOME": str(xdg)})
+        self.add_peer("bob", db=False, env={"HTALK_DB": "", "XDG_DATA_HOME": str(xdg)})
         self.assertTrue((xdg / "harness-talk/mail.sqlite3").exists())
-        self.htalk(*address, db=False)
-        self.assertTrue((self.home / ".local/share/harness-talk/mail.sqlite3").exists())
+        self.add_peer("bob", db=False)
+        self.assertTrue(self.default_db().exists())
         # An empty XDG_DATA_HOME is an unset one: the same mailbox, and nothing under the working directory.
         listed = self.htalk("peer", "list", db=False, env={"XDG_DATA_HOME": ""})
         self.assertEqual(["bob"], [peer["name"] for peer in listed["peers"]])
@@ -104,7 +103,7 @@ class DatabaseSelection(HtalkCase):
         # A relative or ~ path resolves against the working directory or HOME, in errors too.
         missing = self.error("peer", "list", db="rel/mail.sqlite3", cwd=self.work, error="database_not_found")
         self.assertEqual(str(self.work / "rel/mail.sqlite3"), missing["resolved_path"])
-        self.htalk(*address, db="~/tilde.sqlite3")
+        self.add_peer("bob", db="~/tilde.sqlite3")
         self.assertTrue((self.home / "tilde.sqlite3").exists())
         self.assertFalse((self.tmp / "~").exists())
         self.assertEqual(["bob"], [p["name"] for p in self.htalk("peer", "list", db=self.home / "tilde.sqlite3")["peers"]])
@@ -121,8 +120,7 @@ class DatabaseSelection(HtalkCase):
         self.assertEqual(b"not a database" * 100, corrupt.read_bytes())
         self.sql("PRAGMA user_version=4")
         self.error("peer", "list", error="unsupported_database_version")
-        self.error("peer", "add", "bob", "--harness", "claude", "--session", str(uuid.uuid4()),
-                   "--workspace", str(self.work), error="unsupported_database_version")
+        self.assertEqual("unsupported_database_version", self.add_peer("bob", code=2)["error"])
         self.assertEqual(4, self.user_version())
 
 
@@ -182,8 +180,11 @@ class SchemaCompatibility(HtalkCase):
                          (shown["ack_at"], shown["submission"], shown["notification_detail"], self.kept(shown["id"])["wait_returned_at"]))
         answered = self.htalk("--as", "bob", "show", ids["q3"])
         self.assertEqual(("reply_received", ids["r3"], "Old answer"), (answered["state"], answered["reply"]["id"], answered["reply"]["body"]))
-        # An identical registration of a migrated peer is accepted unchanged.
-        self.assertEqual(listed[0], self.add_peer("alice", "claude", ids["alice"]))
+
+    def test_identical_registration_of_a_migrated_peer_is_accepted_unchanged(self):
+        ids = self.legacy_v1(self.db)
+        alice = self.htalk("peer", "list")["peers"][0]
+        self.assertEqual(alice, self.add_peer("alice", "claude", ids["alice"]))
 
     def test_early_version_two_migrates_on_ordinary_read(self):
         ids = self.legacy_v1(self.db)
@@ -201,7 +202,7 @@ class SchemaCompatibility(HtalkCase):
     def test_migrate_uses_normal_database_selection(self):
         selected = self.tmp / "selected.sqlite3"
         for path, env in ((selected, {"HTALK_DB": str(selected)}),
-                          (self.home / ".local/share/harness-talk/mail.sqlite3", {})):
+                          (self.default_db(), {})):
             with self.subTest(path=path):
                 self.legacy_v1(path)
                 before = self.snapshot(path)
@@ -435,7 +436,7 @@ class GenericPeers(HtalkCase):
 
     def test_unknown_native_adapter_keeps_mail_readable(self):
         self.pull("alice")
-        self.add_peer("bob")
+        self.add_peer("bob", "claude")
         self.sql("UPDATE peers SET harness='unknown-future-adapter' WHERE name='bob'")
         self.assertEqual(2, len(self.htalk("peer", "list")["peers"]))
         self.error("peer", "check", "bob", error="adapter_unavailable")
@@ -556,6 +557,8 @@ class Registration(HtalkCase):
                  ("bob", "claude", uuid_session, str(self.tmp / "file"), [], "workspace_must_be_a_directory"))
         for name, harness, session, workspace, options, code in coded:
             with self.subTest(name=name, harness=harness, options=options):
+                if harness != "opencode" and code != "invalid_peer_name":
+                    self.need_native()
                 error = self.error("peer", "add", name, "--harness", harness, "--session", session,
                                    "--workspace", workspace, *options, error=code)
                 self.assertIn("peer list", error["recovery"]["peers"])
@@ -585,7 +588,7 @@ class Conversation(HtalkCase):
         self.assertEqual(("alice", "bob", None, "Which case?", "saved", None, True, "option"),
                          (question["sender"], question["recipient"], question["in_reply_to"], question["body"],
                           question["state"], question["reply"], question["created"], question["actor_source"]))
-        self.assertEqual(("not_submitted", None, None, None, None),
+        self.assertEqual(("not_submitted", None, any_peer(None, "pull_only"), None, None),
                          (question["submission"], self.kept(question["id"])["notification_started_at"], question["notification_detail"],
                           question["ack_at"], self.kept(question["id"])["wait_returned_at"]))
         self.assertEqual(str(uuid.UUID(question["id"])), question["id"])
@@ -758,7 +761,7 @@ class Recovery(HtalkCase):
     def test_recovery_commands_are_executable_with_a_quoted_database_path(self):
         self.db = self.tmp / "mail 'quoted' $draft" / "m.sqlite3"
         self.add_peer("builder")
-        self.add_peer("reviewer")
+        self.add_peer("reviewer", "claude")
         # Nobody runs the reviewer's client, so the notice fails and the message is answered with advice.
         question = self.htalk("--as", "builder", "send", "reviewer", "--message", "Question", code=2)
         prefix = ["htalk", "--db", str(self.db), "--as", "builder"]
@@ -791,7 +794,7 @@ class Recovery(HtalkCase):
 class Retirement(HtalkCase):
     def test_retired_peers_neither_send_nor_receive_new_requests(self):
         self.add_peer("alice")
-        bob = self.add_peer("bob")
+        bob = self.add_peer("bob", "claude")
         chosen = str(uuid.uuid4())
         self.htalk("--as", "alice", "send", "bob", "--id", chosen, "--message", "Before", "--no-notify")
         from_bob = self.htalk("--as", "bob", "send", "alice", "--message", "Question from bob", "--no-notify")["id"]
@@ -968,7 +971,7 @@ class Notifications(HtalkCase):
 
     def test_unconfirmed_notice_exits_2_saves_the_message_and_is_never_retried(self):
         self.add_peer("alice")
-        self.add_peer("bob")
+        self.add_peer("bob", "claude")
         chosen = str(uuid.uuid4())
         failed = self.htalk("--as", "alice", "send", "bob", "--id", chosen, "--message", "Q", code=2)
         self.assertEqual(("not_submitted", "recipient_unavailable", True),
@@ -1273,7 +1276,7 @@ class NotificationOrdering(HtalkCase):
         self.assertEqual(2, self.htalk("--as", "bob", "inbox")["total"])
 
     def test_answer_returned_by_the_requester_wait_is_not_notified(self):
-        self.add_peer("alice")
+        self.add_peer("alice", "claude")
         self.add_peer("bob")
         question = self.htalk("--as", "alice", "send", "bob", "--message", "Q", "--no-notify")["id"]
         waiting = self.spawn("--as", "alice", "wait", question, "--seconds", "20")
@@ -1300,7 +1303,7 @@ class NotificationOrdering(HtalkCase):
         wait_for(self.waits, message="the send --wait registration")
         self.htalk("--as", "bob", "reply", chosen, "--message", "Answer", "--no-notify")
         result = self.finish(sending, code=0)
-        self.assertEqual((chosen, True, "not_submitted", "recipient_unavailable", "Answer"),
+        self.assertEqual((chosen, True, "not_submitted", any_peer("recipient_unavailable", "pull_only"), "Answer"),
                          (result["id"], result["created"], result["submission"], result["notification_detail"],
                           result["reply"]["body"]))
         self.assertIsNotNone(self.kept(result["reply"]["id"])["wait_returned_at"])
@@ -1579,6 +1582,7 @@ class Discovery(HtalkCase):
 
 
     def test_claude_discovery_is_read_only_and_reports_coverage(self):
+        self.need_native()
         from compat_support import ClaudeSocket
         live = ClaudeSocket(self.tmp / "live.sock")
         self.sockets.append(live)
@@ -1606,6 +1610,8 @@ class Discovery(HtalkCase):
         self.assertFalse(self.db.parent.exists())
 
     def test_a_failure_below_a_client_is_a_fixed_code(self):
+        self.need_native()
+
         def source(*words):
             first = self.htalk("peer", "discover", *words, code=2)["sources"][0]
             return first.get("error") or first["detail"]
@@ -1857,7 +1863,7 @@ class ContendedWrites(HtalkCase):
     def setUp(self):
         super().setUp()
         self.add_peer("alice")
-        self.codex_recipient("bob")
+        self.add_peer("bob")
         # A FIFO opens for writing only while a reader holds it. That shows from outside when a send has
         # opened its message file and when it has read it to the end.
         self.pipe = self.tmp / "pipe"
@@ -1937,8 +1943,7 @@ class ContendedWrites(HtalkCase):
     def test_interrupt_while_another_writer_holds_the_mailbox_saves_nothing(self):
         writer = self.hold("BEGIN IMMEDIATE")
         # A registration waits for the same writer. Nobody interrupts it.
-        waiting = self.spawn("peer", "add", "carol", "--harness", "claude", "--session", str(uuid.uuid4()),
-                             "--workspace", str(self.work))
+        waiting = self.spawn(*self.peer_words("carol"))
         self.keeps_waiting(waiting)
         proc = self.spawn("--as", "alice", "send", "bob", "--message-file", self.pipe, "--no-notify", group=True)
         self.give_body(proc, b"Interrupted")
@@ -1953,8 +1958,19 @@ class ContendedWrites(HtalkCase):
         self.assertEqual("carol", self.finish(waiting)["name"])
         self.assertEqual([], self.sql("SELECT id FROM messages"))
 
+    def test_senders_that_write_at_once_lose_no_message(self):
+        ids = [str(uuid.uuid4()) for _ in range(16)]
+        senders = [self.spawn("--as", "alice", "send", "bob", "--id", one, "--message", "From " + one, "--no-notify")
+                   for one in ids]
+        for sender in senders:
+            self.assertTrue(self.finish(sender)["created"])
+        saved = self.sql("SELECT id, body, seq FROM messages")
+        self.assertEqual(sorted((one, "From " + one) for one in ids), sorted(row[:2] for row in saved))
+        self.assertEqual(16, len({row[2] for row in saved}))
+
     def test_repeated_send_returns_during_the_first_notification(self):
-        words = ["--as", "alice", "send", "bob", "--id", str(uuid.uuid4()), "--message", "One notice"]
+        self.codex_recipient("dave")
+        words = ["--as", "alice", "send", "dave", "--id", str(uuid.uuid4()), "--message", "One notice"]
         self.configure(codex_queue={"mode": "block"})
         proc = self.spawn(*words)
         self.started("codex_queue")

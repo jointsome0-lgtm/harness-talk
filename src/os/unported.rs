@@ -1,6 +1,8 @@
 //! What a system other than Linux has not been given yet. A port replaces its item here with
 //! the system's own.
-use std::{io, path::Path};
+#[cfg(not(target_os = "macos"))]
+use std::io;
+use std::path::Path;
 
 /// No process table is read here, so no session is recognized by its ancestry.
 pub const PROC: &str = "/proc";
@@ -12,7 +14,9 @@ pub fn process_exe(_root: &Path, _pid: i64) -> Option<Vec<u8>> {
 }
 
 /// A child's process group. It has no value here, so nothing that holds one can run.
+#[cfg(not(target_os = "macos"))]
 pub enum OwnedGroup {}
+#[cfg(not(target_os = "macos"))]
 impl OwnedGroup {
     pub fn new(_pid: u32) -> io::Result<Self> {
         Err(io::ErrorKind::Unsupported.into())

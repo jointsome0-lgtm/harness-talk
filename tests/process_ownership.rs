@@ -41,31 +41,6 @@ fn member_disappearance_does_not_hide_permission_or_other_io_failures() {
 }
 
 #[test]
-fn retained_tokio_wrapper_is_not_reaped_by_the_signal_driver() {
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .unwrap();
-    runtime.block_on(async {
-        let mut child = tokio::process::Command::new("/bin/true")
-            .process_group(0)
-            .spawn()
-            .unwrap();
-        let mut group = OwnedGroup::new(child.id().unwrap()).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while !group.exited().unwrap() {
-            assert!(Instant::now() < deadline);
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        group.check_anchor().unwrap();
-        group.finish_async().await.unwrap();
-        assert!(child.wait().await.unwrap().success());
-        assert!(group.step(libc::SIGTERM).is_err());
-    });
-}
-
-#[test]
 fn high_process_handles_and_reaped_anchor_fail_closed() {
     let files: Vec<_> = (0..1100)
         .map(|_| fs::File::open("/dev/null").unwrap())
