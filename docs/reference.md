@@ -14,7 +14,7 @@ Choose one writable directory shared by the participants. SQLite writers need di
 1. `--db PATH`
 2. `HTALK_DB`
 3. `$XDG_DATA_HOME/harness-talk/mail.sqlite3`, when the variable is set and not empty
-4. `~/.local/share/harness-talk/mail.sqlite3`, or on macOS `~/Library/Application Support/harness-talk/mail.sqlite3`
+4. `~/.local/share/harness-talk/mail.sqlite3`, or on macOS `~/Library/Application Support/harness-talk/mail.sqlite3`, or on Windows `%LOCALAPPDATA%\harness-talk\mail.sqlite3`
 
 A checkout is never the default database location. New databases use schema 3. Discovery and `--help` do not open the database.
 
