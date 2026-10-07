@@ -422,6 +422,16 @@ class GenericPeers(HtalkCase):
                            error="pull_peer_has_no_native_address")
                 self.assertFalse(self.db.exists())
 
+    def test_native_peer_without_its_session_is_a_usage_error(self):
+        for words in ((), ("--delivery", "native"), ("--session", str(uuid.uuid4()))):
+            with self.subTest(words=words):
+                refused = self.run_raw("peer", "add", "bob", "--harness", "codex", *words)
+                self.assertEqual((2, ""), (refused.code, refused.stdout))
+                self.assertIn("required arguments were not provided", refused.stderr)
+                self.assertIn("--workspace <WORKSPACE>", refused.stderr)
+                self.assertIn("Usage: htalk peer add", refused.stderr)
+                self.assertFalse(self.db.exists())
+
 
     def test_unknown_native_adapter_keeps_mail_readable(self):
         self.pull("alice")

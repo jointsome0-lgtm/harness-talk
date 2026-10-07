@@ -139,35 +139,36 @@ pub(crate) enum Action {
         about = "Publish an existing peer; replace a profile binding explicitly with --profile-id."
     )]
     Publish(Publish),
+    #[command(about = "Withdraw a published profile.")]
     Unpublish {
-        #[arg(long, value_name = "config", help = CONFIG)]
+        #[arg(long, help = CONFIG)]
         config: String,
-        #[arg(value_name = "profile_id")]
+        #[arg(help = "Profile UUID from publish or export.")]
         profile_id: String,
     },
     #[command(
         about = "Read only this endpoint's published profiles; no private session addresses."
     )]
     Export {
-        #[arg(long, value_name = "config", help = CONFIG)]
+        #[arg(long, help = CONFIG)]
         config: String,
     },
     #[command(about = "Fixed SSH endpoint: accepts only the exact remote command catalog or mcp.")]
     Serve {
-        #[arg(long, value_name = "config", help = CONFIG)]
+        #[arg(long, help = CONFIG)]
         config: String,
     },
     #[command(about = "Advertise this catalogue until stopped; no standalone daemon is installed.")]
     Advertise {
-        #[arg(long, value_name = "config", help = CONFIG)]
+        #[arg(long, help = CONFIG)]
         config: String,
-        #[arg(long, value_name = "interface")]
+        #[arg(long, help = "Advertise only on this local interface.")]
         interface: String,
         #[arg(
             long,
-            value_name = "seconds",
             default_value = "0",
-            value_parser = clap::value_parser!(u64).range(0..=86400)
+            value_parser = clap::value_parser!(u64).range(0..=86400),
+            help = "Stop after this many seconds; 0 runs until stopped."
         )]
         seconds: u64,
     },
@@ -178,7 +179,6 @@ pub(crate) enum Action {
     #[command(about = "Find this published profile and expose its checked MCP route on stdio.")]
     Connect {
         #[arg(
-            value_name = "profile",
             help = "Canonical UUID selects only that profile identity, with no name fallback. Other inputs match display names exactly. For UUID-shaped or duplicate names, use the profile's own UUID."
         )]
         profile: String,
@@ -189,23 +189,29 @@ pub(crate) enum Action {
 
 #[derive(Args)]
 pub(crate) struct Publish {
-    #[arg(long, value_name = "config", help = CONFIG)]
+    #[arg(long, help = CONFIG)]
     config: String,
-    #[arg(value_name = "peer")]
+    #[arg(help = "Registered peer to publish.")]
     peer: String,
-    #[arg(long, value_name = "name")]
+    #[arg(long, help = "Profile display name.")]
     name: String,
-    #[arg(long, value_name = "role")]
+    #[arg(long, help = "What the profile is for.")]
     role: String,
-    #[arg(long, value_name = "device_name", default_value = "htalk device")]
+    #[arg(
+        long,
+        value_name = "NAME",
+        default_value = "htalk device",
+        help = "Device label, set by the first publication."
+    )]
     device_name: String,
-    #[arg(long, value_name = "profile_id")]
+    #[arg(long, value_name = "UUID", help = "Replace this profile's binding.")]
     profile_id: Option<String>,
     #[arg(
         long,
-        value_name = "ssh_port",
+        value_name = "PORT",
         default_value = "22",
-        value_parser = clap::value_parser!(u16).range(1..)
+        value_parser = clap::value_parser!(u16).range(1..),
+        help = "SSH port, set by the first publication."
     )]
     ssh_port: u16,
 }
@@ -215,20 +221,18 @@ pub(crate) struct Publish {
 pub(crate) struct Browse {
     #[arg(
         long,
-        value_name = "trust",
         help = "Private list of known device IDs, mailbox bindings and pinned SSH files."
     )]
     trust: String,
     #[arg(
         long,
-        value_name = "interface",
+        required_unless_present("via"),
         required_if_eq_any([("via", "lan"), ("via", "bluetooth")]),
         help = "Inspect only this local interface."
     )]
     interface: Option<String>,
     #[arg(
         long,
-        value_name = "via",
         default_value = "lan",
         value_parser = ["lan", "bluetooth", "tailscale", "ssh"],
         help = "Choose one channel; never fails over a mailbox call."
@@ -236,32 +240,31 @@ pub(crate) struct Browse {
     via: String,
     #[arg(
         long,
-        value_name = "tailscale_binary",
+        value_name = "PATH",
         default_value = "/usr/bin/tailscale",
         help = "Owned Tailscale 1.102.x executable, used only with --via tailscale."
     )]
     tailscale_binary: String,
     #[arg(
         long,
-        value_name = "tailscale_socket",
+        value_name = "PATH",
         default_value = "/var/run/tailscale/tailscaled.sock",
         help = "Local Tailscale daemon socket, used only with --via tailscale."
     )]
     tailscale_socket: String,
     #[arg(
         long,
-        value_name = "seconds",
         default_value = "5",
-        value_parser = clap::value_parser!(u64).range(1..=30)
+        value_parser = clap::value_parser!(u64).range(1..=30),
+        help = "Seconds to look on lan or bluetooth, 1–30."
     )]
     seconds: u64,
 }
 
 impl Browse {
-    /// Read by the lan and bluetooth channels. The parser asks for it only when --via is
-    /// spelled out, so the default channel without one still stops here, as before.
+    /// Read by the lan and bluetooth channels, where the parser requires it.
     fn interface(&self) -> &str {
-        self.interface.as_deref().unwrap()
+        self.interface.as_deref().unwrap_or_default()
     }
 }
 

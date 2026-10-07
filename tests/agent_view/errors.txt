@@ -104,7 +104,6 @@ database_not_found
 database_unavailable
 file_not_found
 interrupted
-invalid_arguments
 invalid_claude_agents_response
 invalid_client_data
 invalid_codex_config
@@ -550,10 +549,10 @@ $ htalk send
 exit 2
 stderr:
   error: the following required arguments were not provided:
-    <--message <message>|--message-file <PATH>>
-    <recipient>
+    <--message <MESSAGE>|--message-file <PATH>>
+    <RECIPIENT>
 
-  Usage: htalk send <--message <message>|--message-file <PATH>> <recipient>
+  Usage: htalk send <--message <MESSAGE>|--message-file <PATH>> <RECIPIENT>
 
   For more information, try '--help'.
 

@@ -133,7 +133,6 @@ A failed command answers `"state":"error"` with one of these codes as `error`. T
 | --- | --- | --- |
 | `claude_socket_is_discovered_from_live_identity` | `--socket` was given for a Claude Code peer. | Leave out `--socket`. htalk finds the socket from the live session. |
 | `codex_socket_requires_codex_discovery` | `--codex-socket` was given while `peer discover` searched another harness. | Use `--harness codex` or leave out `--codex-socket`. |
-| `invalid_arguments` | `peer add` for native delivery had no `--session` or no `--workspace`. | Give both `--session` and `--workspace`. |
 | `invalid_harness_id` | The harness label is not 1 to 64 lowercase letters, digits, `_` or `-`. | Give a label in that form. |
 | `invalid_opencode_session_id` | The OpenCode session id does not start with `ses`, or has characters outside letters, digits, `_.-`. | Copy the session id from `peer discover --harness opencode`. |
 | `invalid_opencode_url` | The OpenCode server URL is not a plain `http` or `https` URL with a host. | Give a URL such as `http://127.0.0.1:4096`, without user or query. |

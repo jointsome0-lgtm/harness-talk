@@ -1,6 +1,6 @@
 //! The command table. Every command is declared here once, with its arguments and help text;
 //! the parser, the dispatch in `cli.rs` and the MCP tool read this declaration.
-use clap::{ArgAction, Args, Parser, Subcommand};
+use clap::{ArgAction, ArgMatches, Args, Parser, Subcommand};
 use rmcp::schemars;
 
 pub(crate) mod mail;
@@ -28,7 +28,7 @@ fn integer_argument(value: &str) -> Result<String, String> {
     disable_help_subcommand = true,
     arg_required_else_help = false,
     about = "htalk: durable local messages with optional client notifications.",
-    after_help = "Setup: use one shared database and register both participants.\n  htalk peer discover\n  htalk peer add --help\n\nExchange, using each session's own registered name:\n  htalk --as alice send bob --message 'Please check this.' --wait 45\n  htalk --as bob inbox\n  htalk --as bob ack REQUEST_ID\n  htalk --as bob reply REQUEST_ID --message 'Checked.'\n  htalk --as alice wait REQUEST_ID\n  htalk --as alice ack REPLY_ID\nRead the body before ack. REQUEST_ID and REPLY_ID are message IDs from JSON,\nnot native session IDs. A reply has its own id and an in_reply_to request ID.\n\nPut --db and --as before the command, or set HTALK_DB and HTALK_PEER.\nA command run by a registered Claude Code session can omit --as.\nUse htalk COMMAND --help, or htalk peer COMMAND --help, for examples.\nResults are JSON; one that failed or is uncertain adds next_action and recovery.\nExit 0: completed, including send --wait that returned an answer. Exit 2:\ninvalid input, or an unconfirmed notification without an answer; the message\nmay be saved. Exit 130: interrupted; inspect recovery."
+    after_help = "Setup: use one shared database and register both participants.\n  htalk peer discover\n  htalk peer add --help\n\nExchange, using each session's own registered name:\n  htalk --as alice send bob --message 'Please check this.' --wait 45\n  htalk --as bob inbox\n  htalk --as bob ack REQUEST_ID\n  htalk --as bob reply REQUEST_ID --message 'Checked.'\n  htalk --as alice wait REQUEST_ID\n  htalk --as alice ack REPLY_ID\nRead the body before ack. REQUEST_ID and REPLY_ID are message IDs from JSON,\nnot native session IDs. A reply has its own id and an in_reply_to request ID.\n\nPut --db and --as before the command, or set HTALK_DB and HTALK_PEER.\nUse htalk COMMAND --help, or htalk peer COMMAND --help, for examples.\nResults are JSON; one that failed or is uncertain adds next_action and recovery.\nExit 0: completed, including send --wait that returned an answer. Exit 2:\ninvalid input, or an unconfirmed notification without an answer; the message\nmay be saved. Exit 130: interrupted; inspect recovery."
 )]
 pub(crate) struct Cli {
     #[arg(long, action = ArgAction::Version, help = "show program's version number and exit")]
@@ -87,7 +87,6 @@ pub(crate) struct Mcp {
         last = true,
         num_args = 1..,
         requires = "connect",
-        value_name = "connector",
         help = "Owner-configured executable and arguments; executed directly, without a shell."
     )]
     pub connector: Vec<String>,
@@ -95,7 +94,6 @@ pub(crate) struct Mcp {
     #[arg(
         long,
         conflicts_with = "connect",
-        value_name = "catalog",
         help = "Expose the fixed published catalogue binding in the MCP handshake; local mode only."
     )]
     pub catalog: Option<String>,
@@ -103,7 +101,7 @@ pub(crate) struct Mcp {
     #[arg(
         long,
         requires = "connect",
-        value_name = "expect_catalog",
+        value_name = "CATALOG",
         help = "Private expected catalogue binding; reject a changed endpoint before every tool call."
     )]
     pub expect_catalog: Option<String>,
@@ -117,11 +115,13 @@ pub(crate) struct Receive {
     pub watch: Option<ReceiveWatch>,
 }
 
+const STATE: &str = "The receiver's --state directory.";
+
 #[derive(Subcommand)]
 pub(crate) enum ReceiveAction {
     #[command(about = "Inspect saved receipts and the local Codex target without waking it.")]
     Status {
-        #[arg(long, value_name = "state")]
+        #[arg(long, help = STATE)]
         state: String,
     },
     #[command(
@@ -129,22 +129,21 @@ pub(crate) enum ReceiveAction {
         long_about = "After explicitly resuming the same Codex session at the saved socket path, verify its UUID and workspace and accept the replacement listener. Preserves receipts; refuses active receivers and unresolved submissions. Does not resume, queue, or resend work."
     )]
     Rebind {
-        #[arg(long, value_name = "state")]
+        #[arg(long, help = STATE)]
         state: String,
     },
 }
 
 #[derive(Args)]
 pub(crate) struct ReceiveWatch {
-    #[arg(long, value_name = "peer")]
+    #[arg(long, help = "Mailbox peer the remote watch runs as.")]
     pub peer: String,
-    #[arg(long, value_name = "session")]
+    #[arg(long, help = "Existing Codex session UUID to notify.")]
     pub session: String,
-    #[arg(long, value_name = "workspace")]
+    #[arg(long, help = "That session's workspace path.")]
     pub workspace: String,
     #[arg(
         long,
-        value_name = "state",
         help = "Private receiver directory. Keep it across reconnects and restarts."
     )]
     pub state: String,
@@ -164,7 +163,6 @@ pub(crate) struct ReceiveWatch {
         last = true,
         num_args = 1..,
         required = true,
-        value_name = "connector",
         help = "Fixed watch executable and arguments, after --; no shell."
     )]
     pub connector: Vec<String>,
@@ -189,14 +187,13 @@ pub(crate) enum Mailbox {
     #[command(
         about = "Save a request and attempt one notification.",
         long_about = "Save a request before attempting one notification. After uncertain delivery, recover with show, wait or sent; do not send it again under a new ID.",
-        after_help = "Example, after both peers are registered:\n  htalk --as alice send bob --message 'Please check this.' --wait 45\nSave id as REQUEST_ID. If reply is present, read reply.body and ack reply.id.\nOtherwise continue with htalk --as alice wait REQUEST_ID.\nPut --db PATH and --as NAME before send, or use HTALK_DB and HTALK_PEER."
+        after_help = "Example, after both peers are registered:\n  htalk --as alice send bob --message 'Please check this.' --wait 45\nSave id as REQUEST_ID. If reply is present, read reply.body and ack reply.id.\nOtherwise continue with htalk --as alice wait REQUEST_ID."
     )]
     Send {
-        #[arg(value_name = "recipient", help = "Registered recipient peer name.")]
+        #[arg(help = "Registered recipient peer name.")]
         recipient: String,
         #[arg(
             long,
-            value_name = "id",
             help = "Caller-generated UUID, saved before sending. An identical retry returns the saved request without another notification."
         )]
         id: Option<String>,
@@ -209,18 +206,18 @@ pub(crate) enum Mailbox {
             value_name = "SECONDS",
             default_value = "0",
             allow_negative_numbers = true,
-            help = "Wait 0–45 seconds for an answer (default: 0). An answer recorded by this wait before the final notification check skips that notice. It does not resend."
+            help = "Wait 0–45 seconds for an answer. An answer recorded by this wait before the final notification check skips that notice. It does not resend."
         )]
         wait: f64,
     },
     #[command(
         about = "Save an answer to an exact request.",
         long_about = "Answer the exact incoming request. An identical retry returns the saved answer without another notification.",
-        after_help = "Example: htalk --as bob reply REQUEST_ID --message 'Checked.'\nREQUEST_ID is the incoming question's id from inbox or show.\nThe saved answer has its own id; the original sender acknowledges that answer."
+        after_help = "Example: htalk --as bob reply REQUEST_ID --message 'Checked.'\nThe saved answer has its own id; the original sender acknowledges that answer."
     )]
     Reply {
         #[arg(
-            value_name = "message_id",
+            value_name = "REQUEST_ID",
             help = "Incoming request UUID from inbox or show."
         )]
         message_id: String,
@@ -236,41 +233,32 @@ pub(crate) enum Mailbox {
     )]
     Wait {
         #[arg(
-            value_name = "message_id",
+            value_name = "REQUEST_ID",
             help = "Outgoing request UUID from send, sent or show."
         )]
         message_id: String,
         #[arg(
             long,
-            value_name = "seconds",
             default_value = "45",
             allow_negative_numbers = true,
-            help = "Wait 0–45 seconds; 0 checks once (default: 45)."
+            help = "Wait 0–45 seconds; 0 checks once."
         )]
         seconds: f64,
     },
     #[command(
         about = "Read a saved message and its correlated answer without acknowledging.",
-        long_about = "Read a saved message and its correlated answer without acknowledging.",
         after_help = "Example: htalk --as alice show MESSAGE_ID\nOnly the sender or recipient can show a message. ack_at is its read mark;\nreply is the correlated answer, with its own id and ack_at."
     )]
     Show {
-        #[arg(
-            value_name = "message_id",
-            help = "Message UUID from inbox, sent or another command's result."
-        )]
+        #[arg(help = "Message UUID from inbox, sent or another command's result.")]
         message_id: String,
     },
     #[command(
-        about = "Record that you read an incoming message and remove its pending Codex notice when possible. A question stays open until answered.",
-        long_about = "Record that you read an incoming message and remove its pending Codex notice when possible. A question stays open until answered.",
+        about = "Record that you read an incoming message. A question stays open until answered.",
         after_help = "Example: htalk --as alice ack REPLY_ID\nFor an answer returned by wait, use reply.id, not the outgoing request's id.\nRepeated ack is safe. Read notification_cleanup separately: ack may succeed\nwhile cleanup fails. Use recovery.retry_notification_cleanup when returned.\nClaude/OpenCode do not support withdrawing an already queued notice."
     )]
     Ack {
-        #[arg(
-            value_name = "message_id",
-            help = "Message UUID from inbox, sent or another command's result."
-        )]
+        #[arg(help = "Message UUID from inbox, sent or another command's result.")]
         message_id: String,
     },
     #[command(
@@ -285,7 +273,7 @@ pub(crate) enum Mailbox {
             default_value = "20",
             value_parser = integer_argument,
             allow_negative_numbers = true,
-            help = "Return at most N messages, 1–500 (default: 20)."
+            help = "Return at most N messages, 1–500."
         )]
         limit: String,
         #[arg(
@@ -315,7 +303,7 @@ pub(crate) enum Mailbox {
             default_value = "20",
             value_parser = integer_argument,
             allow_negative_numbers = true,
-            help = "Return at most N messages, 1–500 (default: 20)."
+            help = "Return at most N messages, 1–500."
         )]
         limit: String,
         #[arg(
@@ -335,11 +323,7 @@ pub(crate) enum Mailbox {
 #[derive(Args)]
 #[group(id = "exclusive_0", required = true, multiple = false)]
 pub(crate) struct Body {
-    #[arg(
-        long,
-        value_name = "message",
-        help = "Nonblank message body, at most 32,000 UTF-8 bytes."
-    )]
+    #[arg(long, help = "Nonblank message body, at most 32,000 UTF-8 bytes.")]
     pub message: Option<String>,
     #[arg(
         long,
@@ -374,26 +358,24 @@ pub(crate) enum PeerCommand {
     Discover {
         #[arg(
             long,
-            value_name = "harness",
             value_parser = ["codex", "claude", "opencode"],
             help = "Inspect only this client (default: all three)."
         )]
         harness: Option<String>,
         #[arg(
             long,
-            value_name = "workspace",
             help = "Only return sessions matching this resolved workspace path."
         )]
         workspace: Option<String>,
         #[arg(
             long,
-            value_name = "codex_socket",
+            value_name = "PATH",
             help = "Inspect this running app-server socket; repeat for several servers."
         )]
         codex_socket: Option<Vec<String>>,
         #[arg(
             long,
-            value_name = "opencode_url",
+            value_name = "URL",
             help = "Inspect this local OpenCode server; repeat for several servers."
         )]
         opencode_url: Option<Vec<String>>,
@@ -404,16 +386,16 @@ pub(crate) enum PeerCommand {
         after_help = "Example: htalk peer check bob\nRun this before send. A successful check does not prove message receipt."
     )]
     Check {
-        #[arg(value_name = "name", help = "Registered peer name.")]
+        #[arg(help = "Registered peer name.")]
         name: String,
     },
     #[command(
         about = "Refuse new requests to or from a peer that is no longer used.",
         long_about = "Mark a registered peer retired. New requests to or from it are refused, and notices to it are skipped. Replies to saved requests, inbox, show, wait and ack keep working. The name and session stay bound.",
-        after_help = "Example: htalk peer retire bob\npeer list then hides bob; peer list --all shows its retired_at. Repeating keeps\nthe first time. Replies to saved requests remain possible."
+        after_help = "Example: htalk peer retire bob\npeer list then hides bob; peer list --all shows its retired_at. Repeating keeps\nthe first time."
     )]
     Retire {
-        #[arg(value_name = "name", help = "Registered peer name.")]
+        #[arg(help = "Registered peer name.")]
         name: String,
     },
     #[command(
@@ -422,7 +404,7 @@ pub(crate) enum PeerCommand {
         after_help = "Example: htalk peer restore bob"
     )]
     Restore {
-        #[arg(value_name = "name", help = "Registered peer name.")]
+        #[arg(help = "Registered peer name.")]
         name: String,
     },
 }
@@ -430,19 +412,16 @@ pub(crate) enum PeerCommand {
 #[derive(Args)]
 pub(crate) struct PeerAdd {
     #[arg(
-        value_name = "name",
         help = "Local name: 1–64 lowercase letters, digits, _ or -; start with a letter or digit."
     )]
     pub name: String,
     #[arg(
         long,
-        value_name = "harness",
         help = "Harness label. Native: codex, claude or opencode. Pull: any lowercase peer-style ID."
     )]
     pub harness: String,
     #[arg(
         long,
-        value_name = "delivery",
         default_value = "native",
         value_parser = ["native", "pull"],
         help = "Native client notification, or inbox polling without a native session."
@@ -450,27 +429,25 @@ pub(crate) struct PeerAdd {
     pub delivery: String,
     #[arg(
         long,
-        value_name = "session",
+        required_unless_present("delivery"),
         required_if_eq("delivery", "native"),
         help = "Exact ID from discovery: Codex/Claude UUID or OpenCode ses... ID."
     )]
     pub session: Option<String>,
     #[arg(
         long,
-        value_name = "workspace",
+        required_unless_present("delivery"),
         required_if_eq("delivery", "native"),
         help = "Session workspace path; must match after resolving paths."
     )]
     pub workspace: Option<String>,
     #[arg(
         long,
-        value_name = "socket",
         help = "Codex only: explicit standalone app-server Unix socket. Omit to use native codex queue."
     )]
     pub socket: Option<String>,
     #[arg(
         long,
-        value_name = "url",
         help = "OpenCode only: loopback server URL (default: http://127.0.0.1:4096)."
     )]
     pub url: Option<String>,
@@ -504,41 +481,50 @@ impl Arguments {
     }
 }
 
-/// What the MCP tool does with a command.
-pub(crate) enum OverMcp {
-    Run,
-    /// A `send` there must name its message, so a lost answer can be looked up.
-    NeedsId,
-    /// Outside the tool, with the name of what the call asked for.
-    Refuse(&'static str),
+/// The commands the MCP tool runs. One added to the table is refused until it is named here.
+pub(crate) const OVER_MCP: [&str; 9] = [
+    "peer list",
+    "peer check",
+    "send",
+    "reply",
+    "wait",
+    "show",
+    "ack",
+    "inbox",
+    "sent",
+];
+
+/// The words that name the command of a parsed line, as `peer list`.
+pub(crate) fn path(mut matches: &ArgMatches) -> String {
+    let mut words = Vec::new();
+    while let Some((word, below)) = matches.subcommand() {
+        words.push(word);
+        matches = below;
+    }
+    words.join(" ")
+}
+
+/// The tool's commands as the help lists them: name, arguments and what each does.
+pub(crate) fn over_mcp(table: &clap::Command, above: &str) -> String {
+    let mut lines = String::new();
+    for command in table.get_subcommands() {
+        let mut line = format!("{above}{}", command.get_name());
+        if OVER_MCP.contains(&line.as_str()) {
+            let arguments: String = command
+                .get_positionals()
+                .flat_map(|a| a.get_value_names().unwrap_or_default())
+                .map(|name| format!(" {name}"))
+                .collect();
+            let about = command.get_about().unwrap_or_default();
+            lines += &format!("{line}{arguments}: {about}\n");
+        }
+        line.push(' ');
+        lines += &over_mcp(command, &line);
+    }
+    lines
 }
 
 impl Mailbox {
-    /// The MCP tool runs the reading and messaging commands and `peer list` and `peer check`.
-    /// It never reads a file, and a command added to the table is refused until it is named here.
-    pub(crate) fn over_mcp(&self) -> OverMcp {
-        match self {
-            Self::Send { body, .. } | Self::Reply { body, .. } if body.message_file.is_some() => {
-                OverMcp::Refuse("--message-file")
-            }
-            Self::Send { id: None, .. } => OverMcp::NeedsId,
-            Self::Send { .. }
-            | Self::Reply { .. }
-            | Self::Wait { .. }
-            | Self::Show { .. }
-            | Self::Ack { .. }
-            | Self::Inbox { .. }
-            | Self::Sent { .. }
-            | Self::Peer(PeerCommand::List { .. } | PeerCommand::Check { .. }) => OverMcp::Run,
-            Self::Peer(PeerCommand::Add(_)) => OverMcp::Refuse("peer add"),
-            Self::Peer(PeerCommand::Discover { .. }) => OverMcp::Refuse("peer discover"),
-            Self::Peer(PeerCommand::Retire { .. }) => OverMcp::Refuse("peer retire"),
-            Self::Peer(PeerCommand::Restore { .. }) => OverMcp::Refuse("peer restore"),
-            Self::Migrate => OverMcp::Refuse("migrate"),
-            Self::Watch => OverMcp::Refuse("watch"),
-        }
-    }
-
     /// The message a command names: its `message_id`, or the `--id` of a `send`.
     pub(crate) fn message_id(&self) -> Option<&str> {
         match self {

@@ -345,6 +345,18 @@ finally:
         self.error('catalog','discover','--trust',str(trust),'--interface','lo','--seconds','1',
                    db=False,error='catalog_interface_unavailable')
 
+    def test_lan_and_bluetooth_without_an_interface_are_a_usage_error(self):
+        trust = self.tmp / 'empty-trust.json'
+        trust.write_text(json.dumps({'schema_version':1,'devices':[]}))
+        trust.chmod(0o600)
+        for words in (('discover',), ('connect','Reviewer'), ('discover','--via','bluetooth')):
+            with self.subTest(words=words):
+                refused = self.run_raw('catalog',*words,'--trust',str(trust),db=False)
+                self.assertEqual((2, ''), (refused.code, refused.stdout))
+                self.assertIn('required arguments were not provided', refused.stderr)
+                self.assertIn('--interface <INTERFACE>', refused.stderr)
+                self.assertIn('Usage: htalk catalog ' + words[0], refused.stderr)
+
     def test_endpoint_without_catalogue_metadata_refuses_write(self):
         path = self.tmp / 'expected.json'
         path.write_text(json.dumps(self.expected()))

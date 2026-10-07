@@ -89,13 +89,12 @@ pub(crate) fn registration(add: &PeerAdd) -> Result<Peer, Error> {
         validate::peer_name(&add.harness).map_err(|_| Error::code("invalid_harness_id"))?;
         return Ok(Peer::pull(&add.name, &add.harness));
     }
-    // The parser asks for these two only when --delivery native is spelled out.
-    let missing = || Error::code("invalid_arguments");
+    // The parser requires these two for native delivery.
     notify::native_peer(
         &add.name,
         add.harness.parse()?,
-        add.session.as_deref().ok_or_else(missing)?,
-        add.workspace.as_deref().ok_or_else(missing)?,
+        add.session.as_deref().unwrap_or_default(),
+        add.workspace.as_deref().unwrap_or_default(),
         add.socket.as_deref(),
         add.url.as_deref(),
     )
