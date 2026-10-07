@@ -502,11 +502,6 @@ class HtalkCase(unittest.TestCase):
         if not native_clients():
             self.skipTest("native delivery to Codex and Claude Code is not ported to this system")
 
-    def need_opencode(self):
-        """Ends a test of OpenCode peers on a system where they are not ported yet."""
-        if WINDOWS:
-            self.skipTest("OpenCode peers are not ported to this system")
-
     def peer_words(self, name, harness=None, session=None, workspace=None, *options):
         """The words that register a peer. Without a harness it is any peer the system can register: a Claude
         peer that no live session backs, or a pull peer where Claude Code delivery is not ported. `any_peer`

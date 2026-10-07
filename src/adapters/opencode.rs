@@ -461,7 +461,11 @@ fn same_directory(directory: Option<&Value>, workspace: &str) -> Result<bool, Er
     else {
         return Err(invalid());
     };
-    Ok(directory == workspace || os::resolve(Path::new(directory)).to_str() == Some(workspace))
+    Ok(directory == workspace
+        || os::same_path(
+            &os::resolve(Path::new(directory)).to_string_lossy(),
+            workspace,
+        ))
 }
 
 fn session_info(server: &Server, id: &str, workspace: &str) -> Result<Map<String, Value>, Error> {
@@ -593,6 +597,10 @@ fn saved_database() -> PathBuf {
 
 /// `str(pathlib.Path(p))`: repeated slashes and `.` parts removed.
 fn path_text(path: &Path) -> String {
+    if cfg!(windows) {
+        // Its parts again, joined by the separator of the system.
+        return crate::discovery::lossy(&path.components().collect::<PathBuf>());
+    }
     let text = path.to_string_lossy();
     let root = if text.starts_with("//") && !text.starts_with("///") {
         "//"

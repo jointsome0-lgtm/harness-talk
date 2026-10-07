@@ -285,6 +285,14 @@ OpenCode session identifiers are opaque strings beginning with `ses`; they are n
 
 Opening a database first checks its schema in a read transaction. A complete current schema needs no writer lock. New databases use schema 3. Version 0.6.1 automatically backs up and upgrades schema 1 or 2 on first use; version 0.6.0 requires explicit migration. See [migration and recovery](reference.md#database-and-peers). Update every installation sharing the mailbox: clients 0.5.1 and earlier reject schema 3.
 
+## Systems
+
+The adapter speaks HTTP and has no file of its own for a system. On Linux it is checked against a real `opencode serve`, as the top of this page records. On macOS and Windows it is checked against the loopback server of the test suite only: the `OpenCodeServer` and `OpenCodeDiscovery` tests run on both runners of `tests.yml`. No real OpenCode has run there.
+
+A workspace is saved in the form programs print. On Windows that is `C:\dir`, not the long form `\\?\C:\dir` the system resolves to, and the directory a server reports matches it whatever the case of its letters and whichever slash separates its parts. On Linux and macOS the two must be equal as text after links are resolved.
+
+OpenCode takes its data directory from the `xdg-basedir` package (`packages/core/src/global.ts`, read at commit `a697115b` of 2026-10-07): `$XDG_DATA_HOME/opencode`, or `.local/share/opencode` under the home directory, on every system. So saved metadata is read from the same place on macOS and Windows, with the home directory taken from `USERPROFILE` on Windows. This is read from the source and was not observed on a running installation there.
+
 ## Authentication
 
 When the server was started with `OPENCODE_SERVER_PASSWORD`, every route including health answers `401` without HTTP basic credentials. `htalk` reads `OPENCODE_SERVER_PASSWORD` and `OPENCODE_SERVER_USERNAME` (default `opencode`) from its own environment at request time, exactly as the server does. The password is never written to the peer row, results, notification text or logs. `peer check` reports `authenticated: true` only to say credentials were sent; a `401` is reported as `opencode_unauthorized`.

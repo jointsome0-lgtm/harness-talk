@@ -54,7 +54,8 @@ pub fn now() -> f64 {
         .as_secs_f64()
 }
 pub fn home() -> PathBuf {
-    match env::var_os("HOME") {
+    // Windows names the home directory in USERPROFILE; a HOME there belongs to some shell.
+    match env::var_os("HOME").filter(|_| !cfg!(windows)) {
         Some(value) if value.is_empty() => PathBuf::from("/"),
         Some(value) => PathBuf::from(value),
         None => env::home_dir().unwrap_or_else(|| PathBuf::from("/")),
@@ -111,13 +112,38 @@ pub fn resolve(path: &Path) -> PathBuf {
     walk(&expand_user(path), 0)
 }
 pub fn resolve_strict(path: &Path) -> io::Result<PathBuf> {
-    fs::canonicalize(expand_user(path))
+    fs::canonicalize(expand_user(path)).map(plain)
+}
+/// Windows resolves a path into its long form, `\\?\C:\dir`. Programs print and send the
+/// short one, which names the same directory.
+fn plain(path: PathBuf) -> PathBuf {
+    if !cfg!(windows) {
+        return path;
+    }
+    match path.to_str() {
+        Some(text) => match text.strip_prefix(r"\\?\UNC\") {
+            Some(share) => format!(r"\\{share}").into(),
+            None => text
+                .strip_prefix(r"\\?\")
+                .map_or(path.clone(), PathBuf::from),
+        },
+        None => path,
+    }
+}
+/// Whether two resolved paths name one place as the system compares names: on Windows either
+/// slash separates and the case of a letter does not matter.
+pub fn same_path(one: &str, other: &str) -> bool {
+    if !cfg!(windows) {
+        return one == other;
+    }
+    let fold = |text: &str| text.replace('/', "\\").to_lowercase();
+    fold(one) == fold(other)
 }
 /// Compare a native path with the canonical workspace saved by registration.
 pub fn same_workspace(directory: Option<&serde_json::Value>, workspace: &str) -> bool {
     match directory {
         Some(serde_json::Value::String(directory)) if Path::new(directory).is_absolute() => {
-            resolve(Path::new(directory)).as_os_str() == std::ffi::OsStr::new(workspace)
+            same_path(&resolve(Path::new(directory)).to_string_lossy(), workspace)
         }
         _ => false,
     }
