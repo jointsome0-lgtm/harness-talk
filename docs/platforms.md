@@ -35,7 +35,6 @@ The file is schema 3 on every system and holds nothing that one system writes an
 ## Limits to know
 
 - macOS: SQLite syncs with the ordinary call of the system, which does not make the drive write its cache. `PRAGMA fullfsync` is not switched on, so a message saved a moment before a power loss can be missing afterwards. A crash of the program or of the system without a power loss loses nothing.
-- macOS: the runner took about 19 seconds for a writer that gives up after its 5-second budget when another holds the mailbox. Whether a real Mac is that slow is not known.
 - Windows: the default mailbox is private because the profile directory is. htalk sets no access list. A `--db` somewhere else is as private as its directory.
 - Windows: Ctrl-C and Ctrl-Break end a command with exit 130. The MCP server ends a cancelled tool call at once, with no grace period, and ends its tool calls when it is killed itself.
 - Windows: a workspace is saved as `C:\dir`. A path longer than 260 characters is not supported as a workspace.

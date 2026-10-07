@@ -7,6 +7,7 @@ use crate::{
 };
 use rusqlite::{Connection, OpenFlags, Params, TransactionBehavior, params, types::Value as Sql};
 use serde_json::{Map, Value};
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use std::{fs, io, thread};
@@ -216,24 +217,35 @@ impl Drop for Registration<'_> {
     }
 }
 
+thread_local! { static LOCK_WAIT: Cell<Option<Instant>> = const { Cell::new(None) }; }
+
 /// Keep retries frequent even after prolonged lock contention.
-/// SQLite resets `attempt` for each locking event. Keep its five-second sleep
+/// SQLite resets `attempt` for each locking event. Keep its five-second
 /// budget, but cap each pause at 5 ms instead of backing off to 100 ms.
+/// The budget is time by the clock: a system that sleeps longer than it was
+/// asked to, as macOS does, would turn a count of pauses into many seconds more.
 fn wait_for_lock(attempt: i32) -> bool {
     if let Some(retry) = crate::write_turn::wait(attempt) {
         return retry;
     }
-    let (elapsed, pause) = match attempt {
-        0 => (0, 1),
-        1 => (1, 2),
-        n => (3 + (i64::from(n) - 2) * 5, 5),
+    let start = match LOCK_WAIT.get().filter(|_| attempt > 0) {
+        Some(start) => start,
+        None => {
+            let now = Instant::now();
+            LOCK_WAIT.set(Some(now));
+            now
+        }
     };
-    let remaining = 5000 - elapsed;
-    if remaining <= 0 {
+    let Some(remaining) = Duration::from_secs(5).checked_sub(start.elapsed()) else {
         return false;
-    }
-    thread::sleep(Duration::from_millis(pause.min(remaining) as u64));
-    true
+    };
+    let pause = Duration::from_millis(match attempt {
+        0 => 1,
+        1 => 2,
+        _ => 5,
+    });
+    thread::sleep(pause.min(remaining));
+    !remaining.is_zero()
 }
 
 impl Store {
