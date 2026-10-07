@@ -14,7 +14,7 @@ fn main() {
         println!("cargo::rustc-cfg=native_clients");
     }
     // `htalk mcp`: the server runs every call as a child whose process group it owns.
-    if linux || system == "macos" {
+    if linux || system == "macos" || system == "windows" {
         println!("cargo::rustc-cfg=mcp_server");
     }
     // The catalogue of profiles, where the `catalog` feature asks for it.

@@ -1,5 +1,5 @@
 //! What holds of a process group this program started, on every system that owns one.
-#![cfg(mcp_server)]
+#![cfg(all(mcp_server, unix))]
 use harness_talk::os::OwnedGroup;
 use std::time::{Duration, Instant};
 

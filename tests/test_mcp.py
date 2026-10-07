@@ -8,7 +8,7 @@ import threading
 import unittest
 import uuid
 
-from compat_support import HtalkCase, children, gone, wait_for
+from compat_support import OWN_GROUP, TERMINATE, WINDOWS, HtalkCase, children, gone, wait_for
 
 
 class McpClient:
@@ -17,7 +17,7 @@ class McpClient:
             argv or (case.argv(["mcp", "--connect", "--", *connector], False) if connector
              else case.argv(["--as", "alice", "mcp"], True)), cwd=case.tmp,
             env=case.environment(), stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True)
+            stderr=subprocess.PIPE, text=True, **OWN_GROUP)
         case.processes.append(self.process)
         self.responses = queue.Queue()
         self.sequence = 0
@@ -195,13 +195,14 @@ for line in sys.stdin:
                     started += wait_for(lambda: children(started[0]))
                 self.assertIn("result", client.request("ping"))
                 if stop == "cancel":
-                    client.process.send_signal(signal.SIGINT)
-                    self.assertIn("result", client.request("ping"))
+                    if not WINDOWS:  # Python can send Ctrl-C to no process but its own group.
+                        client.process.send_signal(signal.SIGINT)
+                        self.assertIn("result", client.request("ping"))
                     client.send("notifications/cancelled", {"requestId": 100, "reason": "test"})
                 elif stop == "eof":
                     client.close()
                 else:
-                    client.process.send_signal(signal.SIGTERM)
+                    client.process.send_signal(TERMINATE)
                     client.process.wait(timeout=15)  # stdin remains open
                     self.assertEqual(0, client.process.returncode)
                 wait_for(lambda: all(gone(pid) for pid in started))

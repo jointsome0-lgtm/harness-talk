@@ -1,6 +1,6 @@
 //! What a system other than Linux has not been given yet. A port replaces its item here with
 //! the system's own.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 use std::io;
 use std::path::Path;
 
@@ -14,9 +14,9 @@ pub fn process_exe(_root: &Path, _pid: i64) -> Option<Vec<u8>> {
 }
 
 /// A child's process group. It has no value here, so nothing that holds one can run.
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 pub enum OwnedGroup {}
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", windows)))]
 impl OwnedGroup {
     pub fn new(_pid: u32) -> io::Result<Self> {
         Err(io::ErrorKind::Unsupported.into())
