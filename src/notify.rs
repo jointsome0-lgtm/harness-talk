@@ -1,4 +1,9 @@
-use crate::{error::Failure, model::*, os};
+use crate::{
+    adapters::{Adapter, adapter},
+    error::Failure,
+    model::*,
+    os, validate,
+};
 use serde_json::{Value, json};
 use std::path::Path;
 pub fn notification(peer: &Peer, message: &Message, database: &Path) -> String {
@@ -25,24 +30,24 @@ pub fn notification(peer: &Peer, message: &Message, database: &Path) -> String {
 pub fn notify(peer: &Peer, message: &Message, database: &Path) -> Outcome {
     let body = notification(peer, message, database);
     let skip = || crate::store::skip_reason_readonly(database, &message.row.id, &peer.name);
-    let peer = match native_address(peer) {
-        Ok(peer) => peer,
-        Err(e) => return Outcome::not_submitted(e.to_string()),
-    };
-    match peer.harness {
-        Harness::Claude => crate::claude::notify(&peer, message, &body, &skip),
-        Harness::Codex => crate::codex::notify(&peer, &message.row.id, &body, &skip),
-        Harness::Opencode => crate::opencode::notify(&peer, &body, &skip),
+    match native_address(peer) {
+        Ok((adapter, peer)) => adapter.notify(&peer, message, &body, &skip),
+        Err(e) => Outcome::not_submitted(e.to_string()),
     }
 }
 pub fn dismiss(peer: &Peer, message: &Message) -> Cleanup {
     if peer.delivery == Delivery::Pull {
         return Cleanup::new(CleanupStatus::Skipped).detail("pull_only");
     }
-    match native_address(peer) {
-        Ok(peer) => crate::codex::dismiss(&peer, message),
-        Err(e) => Cleanup::new(CleanupStatus::Unsupported).detail(e.to_string()),
+    let (adapter, peer) = match native_address(peer) {
+        Ok(found) => found,
+        Err(e) => return Cleanup::new(CleanupStatus::Unsupported).detail(e.to_string()),
+    };
+    if message.row.ack_at.is_none() || peer.name != message.row.recipient {
+        return Cleanup::new(CleanupStatus::Skipped)
+            .detail("message_not_acknowledged_by_recipient");
     }
+    adapter.dismiss(&peer, message)
 }
 pub fn probe(peer: &Peer) -> Result<Value, Failure> {
     if peer.delivery == Delivery::Pull {
@@ -51,25 +56,21 @@ pub fn probe(peer: &Peer) -> Result<Value, Failure> {
             "status":"pull_only", "detail":"No native presence check; recipient must poll inbox."}),
         );
     }
-    let peer = native_address(peer)?;
-    match peer.harness {
-        Harness::Claude => crate::claude::probe(&peer),
-        Harness::Codex => crate::codex::probe(&peer),
-        Harness::Opencode => crate::opencode::probe(&peer),
-    }
+    let (adapter, peer) = native_address(peer)?;
+    adapter.probe(&peer)
 }
 
 /// The mailbox can read any harness ID; only native delivery needs a known adapter.
-fn native_address(peer: &Peer) -> Result<NativePeer, Failure> {
+fn native_address(peer: &Peer) -> Result<(&'static dyn Adapter, NativePeer), Failure> {
     if peer.delivery == Delivery::Pull {
         return Err(Failure::coded("pull_only"));
     }
-    Ok(NativePeer {
+    let harness = peer
+        .harness
+        .parse()
+        .map_err(|_| Failure::coded("adapter_unavailable"))?;
+    let address = NativePeer {
         name: peer.name.clone(),
-        harness: peer
-            .harness
-            .parse()
-            .map_err(|_| Failure::coded("adapter_unavailable"))?,
         session_id: peer
             .session_id
             .clone()
@@ -81,10 +82,11 @@ fn native_address(peer: &Peer) -> Result<NativePeer, Failure> {
         socket: peer.socket.clone(),
         url: peer.url.clone(),
         retired_at: peer.retired_at,
-    })
+    };
+    Ok((adapter(harness), address))
 }
 
-/// Validate built-in adapter addresses at registration, before storage is opened.
+/// Validate a native address at registration, before storage is opened.
 pub fn native_peer(
     name: &str,
     harness: Harness,
@@ -93,43 +95,16 @@ pub fn native_peer(
     socket: Option<&str>,
     url: Option<&str>,
 ) -> Result<Peer, crate::error::Error> {
-    use crate::{error::Error, validate};
-    let code = Error::code;
     validate::peer_name(name)?;
-    // OpenCode identifiers are opaque; the other harnesses use UUIDs.
-    let session_id = if harness == Harness::Opencode {
-        validate::opencode_session_id(session)?
-    } else {
-        validate::uuid(session)?
-    };
-    let url = if harness == Harness::Opencode {
-        if socket.is_some() {
-            return Err(code("opencode_uses_a_server_url_not_a_socket"));
-        }
-        Some(validate::opencode_url(url)?)
-    } else if url.is_some() {
-        return Err(code("url_is_only_for_opencode"));
-    } else {
-        None
-    };
-    let workspace = os::resolve_strict(Path::new(workspace))?;
-    if !workspace.is_dir() {
-        return Err(code("workspace_must_be_a_directory"));
-    }
-    let workspace = workspace.to_string_lossy().into_owned();
-    let socket = socket.map(|s| os::resolve(Path::new(s)).to_string_lossy().into_owned());
-    if harness == Harness::Claude && socket.is_some() {
-        return Err(code("claude_socket_is_discovered_from_live_identity"));
-    }
-
+    let address = adapter(harness).address(session, workspace, socket, url)?;
     Ok(Peer {
         name: name.into(),
         harness: harness.to_string(),
         delivery: Delivery::Native,
-        session_id: Some(session_id),
-        workspace: Some(workspace),
-        socket,
-        url,
+        session_id: Some(address.session_id),
+        workspace: Some(address.workspace),
+        socket: address.socket,
+        url: address.url,
         retired_at: None,
     })
 }

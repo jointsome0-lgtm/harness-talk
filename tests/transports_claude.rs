@@ -1,7 +1,7 @@
 //! Claude transport against real fixtures: a fake `claude agents --json`, session metadata in
 //! a fake HOME, and a Unix listener standing in for the messaging socket.
 use harness_talk::model::NativePeer as Peer;
-use harness_talk::{claude, error::Failure, model::*};
+use harness_talk::{adapters::claude, error::Failure, model::*};
 use serde_json::{Value, json};
 use std::{
     ffi::OsString,
@@ -62,7 +62,6 @@ impl Fixture {
     fn peer(&self) -> Peer {
         Peer {
             name: "receiver".into(),
-            harness: Harness::Claude,
             session_id: SESSION.into(),
             workspace: self.workspace(),
             socket: None,

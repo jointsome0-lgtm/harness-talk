@@ -9,11 +9,13 @@
 //! `opencode_unreachable` is reported only when
 //! the TCP connection (and TLS handshake) failed before any request byte was
 //! written; every later failure is uncertain.
+use super::{Adapter, Address, Query};
 use crate::model::NativePeer as Peer;
 use crate::{
+    compat::{self, http},
     error::{Error, Failure},
     model::*,
-    os, validate,
+    os,
 };
 use base64::Engine;
 use rusqlite::{OpenFlags, types::ValueRef};
@@ -53,17 +55,69 @@ fn coded(code: &str) -> Failure {
 fn uncertain(class: &str) -> Req {
     Req::After(Failure::coded(format!("opencode_{class}")))
 }
-fn from_error(e: Error) -> Failure {
-    match e {
-        Error::Code(c) => Failure::Coded(c),
-        Error::Value(_) => Failure::Class("ValueError"),
-        Error::Io(e) => e.into(),
-        Error::Db(e) => e.into(),
-        Error::Interrupted => Failure::Class("KeyboardInterrupt"),
-    }
-}
 fn session_id(value: &str) -> Result<String, Failure> {
-    validate::opencode_session_id(value).map_err(from_error)
+    opencode_session_id(value).map_err(compat::failure)
+}
+fn opencode_session_id(value: &str) -> Result<String, Error> {
+    if !value.starts_with("ses")
+        || value.len() < 4
+        || value.len() > 256
+        || !value
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(&c))
+    {
+        return Err(Error::code("invalid_opencode_session_id"));
+    }
+    Ok(value.to_owned())
+}
+pub fn opencode_url(value: Option<&str>) -> Result<String, Error> {
+    // url::Url uses browser-style host normalization. Check the supplied host
+    // first so shorthand, percent-encoded and IDNA lookalikes stay rejected.
+    let value = value
+        .unwrap_or("http://127.0.0.1:4096")
+        .trim_start_matches(|c: char| c <= ' ')
+        .replace(['\t', '\r', '\n'], "");
+    let invalid = || Error::code("invalid_opencode_url");
+    let (scheme, rest) = value.split_once("://").ok_or_else(invalid)?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    let scheme = scheme.to_ascii_lowercase();
+    if !matches!(scheme.as_str(), "http" | "https") || authority.contains('@') {
+        return Err(invalid());
+    }
+    let (host, port) = if let Some(bracketed) = authority.strip_prefix('[') {
+        let (host, after) = bracketed.split_once(']').ok_or_else(invalid)?;
+        (host, after.strip_prefix(':').unwrap_or(""))
+    } else {
+        authority.split_once(':').unwrap_or((authority, ""))
+    };
+    let host = host.to_ascii_lowercase();
+    if host.is_empty() {
+        return Err(invalid());
+    }
+    if host != "localhost" && !host.parse::<IpAddr>().is_ok_and(|ip| ip.is_loopback()) {
+        return Err(Error::code("opencode_url_must_be_loopback"));
+    }
+    if !port.is_empty() {
+        if !port.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(Error::Value(
+                "Port could not be cast to integer value".into(),
+            ));
+        }
+        port.parse::<u16>()
+            .map_err(|_| Error::Value("Port out of range 0-65535".into()))?;
+    }
+    let parsed = url::Url::parse(&value).map_err(|_| invalid())?;
+    if parsed.query().is_some_and(|q| !q.is_empty())
+        || parsed.fragment().is_some_and(|f| !f.is_empty())
+    {
+        return Err(invalid());
+    }
+    let rest = rest
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(rest)
+        .trim_end_matches('/');
+    Ok(format!("{scheme}://{rest}"))
 }
 
 /// Basic auth from the same environment the server reads; never persisted.
@@ -75,7 +129,7 @@ fn credentials() -> Result<Option<String>, Failure> {
     let user = env::var_os("OPENCODE_SERVER_USERNAME").filter(|u| !u.is_empty());
     let user = user.as_deref().map_or(Some("opencode"), |u| u.to_str());
     let (Some(user), Some(password)) = (user, password.to_str()) else {
-        return Err(Failure::Class("UnicodeEncodeError"));
+        return Err(compat::UNICODE_ENCODE_ERROR);
     };
     Ok(Some(format!(
         "Basic {}",
@@ -211,9 +265,9 @@ impl Write for Conn {
 fn io_class(e: &io::Error) -> &'static str {
     if let Some(inner) = e.get_ref().and_then(|x| x.downcast_ref::<ureq::Error>()) {
         return match inner {
-            ureq::Error::Timeout(_) => "TimeoutError",
+            ureq::Error::Timeout(_) => compat::TIMEOUT_ERROR.class_name(),
             ureq::Error::Io(e) => io_class(e),
-            _ => "SSLError",
+            _ => compat::SSL_ERROR.class_name(),
         };
     }
     Failure::from(io::Error::from(e.kind())).class_name()
@@ -366,7 +420,7 @@ impl<R: Read> Reader<R> {
                 Ok(n) => break n,
                 Err(e) if e.kind() == io::ErrorKind::Interrupted => {
                     if os::interrupted() {
-                        return Err("KeyboardInterrupt");
+                        return Err(compat::KEYBOARD_INTERRUPT.class_name());
                     }
                 }
                 Err(e) => return Err(io_class(&e)),
@@ -402,10 +456,10 @@ impl<R: Read> Reader<R> {
     fn framed_line(&mut self) -> Result<Vec<u8>, &'static str> {
         let line = self.readline(MAX_LINE + 1)?;
         if line.len() > MAX_LINE {
-            return Err("LineTooLong");
+            return Err(http::LINE_TOO_LONG);
         }
         if !line.ends_with(b"\n") {
-            return Err("IncompleteRead");
+            return Err(http::INCOMPLETE_READ);
         }
         Ok(line)
     }
@@ -420,7 +474,7 @@ impl<R: Read> Reader<R> {
     fn safe_read(&mut self, n: usize) -> Result<Vec<u8>, &'static str> {
         let data = self.read(n)?;
         if data.len() < n {
-            Err("IncompleteRead")
+            Err(http::INCOMPLETE_READ)
         } else {
             Ok(data)
         }
@@ -431,7 +485,7 @@ fn pending_owned(buf: &[u8], pos: usize) -> Vec<u8> {
 }
 
 fn is_py_space(c: char) -> bool {
-    validate::python_whitespace(c)
+    compat::python_whitespace(c)
 }
 fn latin1(bytes: &[u8]) -> String {
     bytes.iter().map(|b| *b as char).collect()
@@ -440,29 +494,29 @@ fn latin1(bytes: &[u8]) -> String {
 fn read_status(r: &mut Reader<impl Read>) -> Result<(String, i128), &'static str> {
     let line = r.readline(MAX_LINE + 1)?;
     if line.len() > MAX_LINE {
-        return Err("LineTooLong");
+        return Err(http::LINE_TOO_LONG);
     }
     if line.is_empty() {
-        return Err("RemoteDisconnected");
+        return Err(http::REMOTE_DISCONNECTED);
     }
     if !line.ends_with(b"\n") {
-        return Err("IncompleteRead");
+        return Err(http::INCOMPLETE_READ);
     }
     let text = latin1(&line);
     let mut words = text.split(is_py_space).filter(|w| !w.is_empty());
     let (Some(version), Some(status)) = (words.next(), words.next()) else {
-        return Err("BadStatusLine");
+        return Err(http::BAD_STATUS_LINE);
     };
     if !version.starts_with("HTTP/") {
-        return Err("BadStatusLine");
+        return Err(http::BAD_STATUS_LINE);
     }
     let status = status
         .is_ascii()
         .then(|| py_int(status.as_bytes(), 10))
         .flatten()
-        .ok_or("BadStatusLine")?;
+        .ok_or(http::BAD_STATUS_LINE)?;
     if !(100..=999).contains(&status) {
-        return Err("BadStatusLine");
+        return Err(http::BAD_STATUS_LINE);
     }
     Ok((version.to_owned(), status))
 }
@@ -473,7 +527,7 @@ fn read_header_block(r: &mut Reader<impl Read>) -> Result<Vec<u8>, &'static str>
         let line = r.framed_line()?;
         count += 1;
         if count > MAX_HEADERS {
-            return Err("HTTPException");
+            return Err(http::HTTP_EXCEPTION);
         }
         if matches!(line.as_slice(), b"\r\n" | b"\n") {
             return Ok(block);
@@ -565,7 +619,7 @@ fn read_chunked(r: &mut Reader<impl Read>, mut amt: usize) -> Result<Vec<u8>, &'
                 let size = line.split(|b| *b == b';').next().unwrap_or_default();
                 let size = py_int(size, 16)
                     .filter(|n| *n >= 0)
-                    .ok_or("IncompleteRead")?;
+                    .ok_or(http::INCOMPLETE_READ)?;
                 if size == 0 {
                     loop {
                         let line = r.framed_line()?;
@@ -597,7 +651,7 @@ fn read_response(r: &mut Reader<impl Read>) -> Result<(i128, Vec<u8>), &'static 
         read_header_block(r)?;
     };
     if !(version == "HTTP/1.0" || version == "HTTP/0.9" || version.starts_with("HTTP/1.")) {
-        return Err("UnknownProtocol");
+        return Err(http::UNKNOWN_PROTOCOL);
     }
     let headers = parse_headers(&read_header_block(r)?);
     let chunked =
@@ -660,7 +714,7 @@ struct Server {
 }
 impl Server {
     fn new(url: Option<&str>) -> Result<Self, Failure> {
-        let url = validate::opencode_url(url).map_err(from_error)?;
+        let url = opencode_url(url).map_err(compat::failure)?;
         let (scheme, rest) = url
             .split_once("://")
             .ok_or_else(|| coded("invalid_opencode_url"))?;
@@ -689,10 +743,9 @@ impl Server {
             if https { 443 } else { 80 }
         } else {
             if !port.bytes().all(|b| b.is_ascii_digit()) {
-                return Err(Failure::Class("ValueError"));
+                return Err(compat::VALUE_ERROR);
             }
-            port.parse::<u16>()
-                .map_err(|_| Failure::Class("ValueError"))?
+            port.parse::<u16>().map_err(|_| compat::VALUE_ERROR)?
         };
         Ok(Self {
             https,
@@ -749,10 +802,10 @@ impl Server {
         });
         let conn = self.connect().map_err(Req::Before)?;
         if target.bytes().any(|b| b <= b' ' || b == 0x7f) {
-            return Err(uncertain("InvalidURL"));
+            return Err(uncertain(http::INVALID_URL));
         }
         if !target.is_ascii() {
-            return Err(Req::Before(Failure::Class("UnicodeEncodeError")));
+            return Err(Req::Before(compat::UNICODE_ENCODE_ERROR));
         }
         let default_port = if self.https { 443 } else { 80 };
         let host = if self.host.contains(':') {
@@ -787,7 +840,7 @@ impl Server {
         };
         // Check after TCP/TLS setup too, immediately before the first request byte.
         if os::interrupted() {
-            return Err(Req::Before(Failure::Class("KeyboardInterrupt")));
+            return Err(Req::Before(compat::KEYBOARD_INTERRUPT));
         }
         reader
             .conn
@@ -898,6 +951,39 @@ fn runtime_status(statuses: &Map<String, Value>, id: &str) -> Result<&'static st
         .ok_or_else(invalid)
 }
 
+pub(crate) struct Opencode;
+impl Adapter for Opencode {
+    // OpenCode identifiers are opaque, and the address is a server URL, never a socket.
+    fn address(
+        &self,
+        session: &str,
+        workspace: &str,
+        socket: Option<&str>,
+        url: Option<&str>,
+    ) -> Result<Address, Error> {
+        let session_id = opencode_session_id(session)?;
+        if socket.is_some() {
+            return Err(Error::code("opencode_uses_a_server_url_not_a_socket"));
+        }
+        let url = Some(opencode_url(url)?);
+        Ok(Address {
+            session_id,
+            workspace: super::workspace(workspace)?,
+            socket: None,
+            url,
+        })
+    }
+    fn notify(&self, peer: &Peer, _message: &Message, body: &str, skip: Skip<'_>) -> Outcome {
+        notify(peer, body, skip)
+    }
+    fn probe(&self, peer: &Peer) -> Result<Value, Failure> {
+        probe(peer)
+    }
+    fn discover(&self, query: &Query<'_>) -> Found {
+        discover(query.opencode_urls, query.workspace)
+    }
+}
+
 /// Exact session and workspace on the registered server, without messaging.
 pub fn probe(peer: &Peer) -> Result<Value, Failure> {
     let server = Server::new(peer.url.as_deref())?;
@@ -926,7 +1012,7 @@ pub fn notify(peer: &Peer, body: &str, skip: Skip<'_>) -> Outcome {
         Ok((server, None)) => server,
     };
     if os::interrupted() {
-        return Outcome::not_submitted("KeyboardInterrupt");
+        return Outcome::not_submitted(compat::KEYBOARD_INTERRUPT.to_string());
     }
     let path = format!("/session/{}/prompt_async", quote(&peer.session_id, false));
     match server.request("POST", &path, Some(&peer.workspace), Some(body)) {

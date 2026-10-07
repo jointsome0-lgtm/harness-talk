@@ -5,7 +5,7 @@ mod fixture;
 
 use fixture::{Fake, session};
 use harness_talk::model::NativePeer as Peer;
-use harness_talk::{error::Failure, model::*, opencode};
+use harness_talk::{adapters::opencode, error::Failure, model::*};
 use serde_json::json;
 use std::{
     io::{BufRead, BufReader, Read},
@@ -125,7 +125,6 @@ fn environment_controls_credentials_metadata_and_trust_only() {
     let fake = Fake::start(vec![session("ses_synthetic", ws.as_str())]);
     let peer = Peer {
         name: "muse".into(),
-        harness: Harness::Opencode,
         session_id: "ses_synthetic".into(),
         workspace: ws.clone(),
         socket: None,

@@ -2,7 +2,7 @@ use crate::{
     commands::{self, Cli, Command, Mailbox, PeerCommand, mail::To},
     error::Error,
     guidance, identity,
-    model::{Delivery, Harness, NativeSession, Page, Peer},
+    model::{Delivery, NativeSession, Page, Peer},
     os,
     store::Store,
     validate,
@@ -353,15 +353,10 @@ fn failure(command: &Mailbox, context: &Context, error: &Error) -> Value {
                 if error == "peer_already_has_a_different_address" {
                     store.peer(&add.name).ok()
                 } else {
-                    let harness: Harness = add.harness.parse().ok()?;
-                    let session = add.session.as_deref()?;
-                    let session = if harness == Harness::Opencode {
-                        session.to_owned()
-                    } else {
-                        validate::uuid(session).ok()?
-                    };
+                    // The address as registration checked it a moment ago.
+                    let wanted = commands::peer::registration(add).ok()?;
                     store
-                        .session_peer(harness.as_str(), &session)
+                        .session_peer(&wanted.harness, wanted.session_id.as_deref()?)
                         .ok()
                         .flatten()
                 }
@@ -505,7 +500,7 @@ pub fn main() -> i32 {
                 eprintln!("receive uses the remote watch binding; omit --db and --as");
                 return 2;
             }
-            return match crate::receive::run(receive) {
+            return match crate::adapters::receive(receive) {
                 Ok(()) => 0,
                 Err(error) => {
                     eprintln!("htalk receive: {error}");
