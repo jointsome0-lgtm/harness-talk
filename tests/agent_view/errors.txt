@@ -71,7 +71,6 @@ catalog_unreachable
 catalog_writer_active
 claude_socket_is_discovered_from_live_identity
 codex_socket_requires_codex_discovery
-command_required
 database_backup_failed
 database_foreign_key_violation
 database_integrity_check_failed
@@ -94,7 +93,6 @@ opencode_url_must_be_loopback
 opencode_url_requires_opencode_discovery
 opencode_uses_a_server_url_not_a_socket
 peer_already_has_a_different_address
-peer_command_required
 peer_required_use_as_or_HTALK_PEER
 peer_retired
 pull_peer_has_no_native_address

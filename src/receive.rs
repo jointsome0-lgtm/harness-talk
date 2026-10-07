@@ -2,10 +2,10 @@
 //! The ledger records notification submission, never task completion.
 use crate::{
     codex,
+    commands::{Receive, ReceiveAction},
     model::{Harness, Message, NativePeer, Submission},
     validate,
 };
-use clap::ArgMatches;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -208,13 +208,15 @@ fn lock_session(session: &str, database: &Path) -> Result<File> {
     Ok(lock)
 }
 
-pub(crate) fn run(options: &ArgMatches) -> Result<()> {
-    if let Some((action, options)) = options.subcommand() {
-        return maintain(action, options);
-    }
-    let word = |name| options.get_one::<String>(name).unwrap().clone();
-    let mcp_command = options
-        .get_one::<String>("mcp_command")
+pub(crate) fn run(receive: Receive) -> Result<()> {
+    let watch = match (receive.action, receive.watch) {
+        (Some(action), _) => return maintain(&action),
+        (None, Some(watch)) => watch,
+        (None, None) => unreachable!("the parser requires the watch arguments"),
+    };
+    let mcp_command = watch
+        .mcp_command
+        .as_deref()
         .map(|value| -> Result<PathBuf> {
             let path = Path::new(value);
             if !path.is_absolute() {
@@ -224,17 +226,14 @@ pub(crate) fn run(options: &ArgMatches) -> Result<()> {
         })
         .transpose()?;
     let binding = Binding {
-        peer: word("peer"),
-        session: validate::uuid(&word("session"))?,
-        workspace: crate::os::resolve_strict(Path::new(&word("workspace")))?,
-        command: options
-            .get_many::<String>("connector")
-            .unwrap()
-            .cloned()
-            .collect(),
+        peer: watch.peer,
+        session: validate::uuid(&watch.session)?,
+        workspace: crate::os::resolve_strict(Path::new(&watch.workspace))?,
+        command: watch.connector,
         mcp_command,
-        codex_socket: options
-            .get_one::<String>("codex_socket")
+        codex_socket: watch
+            .codex_socket
+            .as_deref()
             .map(|value| -> Result<codex::rpc::BoundSocket> {
                 let path = Path::new(value);
                 if !path.is_absolute() {
@@ -248,7 +247,7 @@ pub(crate) fn run(options: &ArgMatches) -> Result<()> {
     if !binding.workspace.is_dir() {
         return Err("Workspace must be a directory".into());
     }
-    let directory = crate::os::resolve(Path::new(&word("state")));
+    let directory = crate::os::resolve(Path::new(&watch.state));
     if !directory.exists() {
         fs::DirBuilder::new().mode(0o700).create(&directory)?;
     }
@@ -334,26 +333,23 @@ fn try_lock(lock: &File, mode: i32) -> Result<bool> {
     }
 }
 
-fn maintain(action: &str, options: &ArgMatches) -> Result<()> {
-    let directory = crate::os::resolve(Path::new(options.get_one::<String>("state").unwrap()));
+fn maintain(action: &ReceiveAction) -> Result<()> {
+    let (status, state) = match action {
+        ReceiveAction::Status { state } => (true, state),
+        ReceiveAction::Rebind { state } => (false, state),
+    };
+    let directory = crate::os::resolve(Path::new(state));
     // Maintenance never initializes a directory or clears an uncertain outcome.
     let lock = state_lock(&directory, false)?;
-    let available = try_lock(
-        &lock,
-        if action == "status" {
-            libc::LOCK_SH
-        } else {
-            libc::LOCK_EX
-        },
-    )?;
-    if action == "rebind" && !available {
+    let available = try_lock(&lock, if status { libc::LOCK_SH } else { libc::LOCK_EX })?;
+    if !status && !available {
         return Err("Stop the receiver before rebinding its state".into());
     }
     let mut state: State = serde_json::from_reader(File::open(directory.join("state.json"))?)?;
     if state.version != 1 {
         return Err("Unsupported receiver state version".into());
     }
-    if action == "status" {
+    if status {
         // This is a snapshot. Never block receiver startup for a slow read-only RPC.
         drop(lock);
         let target = match state.binding.probe() {

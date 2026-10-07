@@ -1,7 +1,12 @@
 //! Published profiles on known devices. Discovery never registers or messages peers.
 mod transport;
-use crate::{error::Error, model::Peer, os, store, validate};
-use clap::{Arg, ArgMatches, Command as Cli};
+use crate::{
+    commands::{Mailbox, PeerCommand},
+    error::Error,
+    model::Peer,
+    os, store, validate,
+};
+use clap::{Args, Subcommand};
 use mdns_sd::{
     DaemonEvent, DaemonStatus, IfKind, ScopedIp, ServiceDaemon, ServiceEvent, ServiceInfo,
     UnregisterStatus,
@@ -151,18 +156,20 @@ impl Binding {
     pub(crate) fn command_scope(
         &self,
         db: &Path,
-        name: &str,
-        options: &ArgMatches,
+        command: &Mailbox,
     ) -> Result<Option<Value>, Error> {
         let allowed = |name: &str| self.profiles.iter().any(|p| p.peer_name == name);
-        match name {
-            "send" => {
-                if !allowed(required(options, "recipient")) {
+        match command {
+            Mailbox::Send { recipient, .. } => {
+                if !allowed(recipient) {
                     return Err(code("catalog_profile_not_published"));
                 }
             }
-            "show" | "ack" | "reply" | "wait" => {
-                let m = store::catalog_message(db, required(options, "message_id"), &self.sender)
+            Mailbox::Show { message_id }
+            | Mailbox::Ack { message_id }
+            | Mailbox::Reply { message_id, .. }
+            | Mailbox::Wait { message_id, .. } => {
+                let m = store::catalog_message(db, message_id, &self.sender)
                     .map_err(|_| code("catalog_conversation_unavailable"))?;
                 let other = if m.row.sender == self.sender {
                     &m.row.recipient
@@ -172,56 +179,67 @@ impl Binding {
                 if !allowed(other) {
                     return Err(code("catalog_conversation_unavailable"));
                 }
-                if name == "show" {
+                if matches!(command, Mailbox::Show { .. }) {
                     return Ok(Some(serde_json::to_value(m)?));
                 }
             }
-            "peer" => {
-                let (sub, o) = options.subcommand().unwrap();
-                if sub == "check" && !allowed(required(o, "name")) {
+            Mailbox::Peer(PeerCommand::Check { name }) => {
+                if !allowed(name) {
                     return Err(code("catalog_profile_not_published"));
                 }
-                if sub == "list" {
-                    return Ok(Some(
-                        json!({"peers":self.profiles.iter().map(|p| json!({"name":p.peer_name,"profile_id":p.profile_id,"binding_id":p.binding_id,"runtime_status":"unknown"})).collect::<Vec<_>>(),"retired_hidden":0}),
-                    ));
-                }
             }
-            "inbox" | "sent" => {
-                let sent = name == "sent";
-                let names: Vec<_> = self.profiles.iter().map(|p| p.peer_name.clone()).collect();
-                let limit = required(options, "limit")
-                    .parse::<i64>()
-                    .map_err(|_| code("limit_must_be_between_1_and_500"))?;
-                let cursor = options
-                    .get_one::<String>(if sent { "before_seq" } else { "after_seq" })
-                    .map(|s| {
-                        s.parse::<i64>()
-                            .map_err(|_| code("seq_cursor_must_be_a_positive_integer"))
-                    })
-                    .transpose()?;
-                let bodies = sent && options.get_flag("bodies");
-                let page =
-                    store::catalog_page(db, &self.sender, &names, sent, limit, cursor, bodies)?;
-                let next = page.messages.last().filter(|_| page.omitted > 0).map(|m| {
-                    format!(
-                        "htalk {} --limit {} --{} {}{}",
-                        name,
-                        limit,
-                        if sent { "before-seq" } else { "after-seq" },
-                        m["seq"],
-                        if bodies { " --bodies" } else { "" }
-                    )
-                });
-                let mut value = serde_json::to_value(page)?;
-                if let Some(next) = next {
-                    value["recovery"] = json!({"next_page":next});
-                }
-                return Ok(Some(value));
+            Mailbox::Peer(PeerCommand::List { .. }) => {
+                return Ok(Some(
+                    json!({"peers":self.profiles.iter().map(|p| json!({"name":p.peer_name,"profile_id":p.profile_id,"binding_id":p.binding_id,"runtime_status":"unknown"})).collect::<Vec<_>>(),"retired_hidden":0}),
+                ));
             }
-            _ => {}
+            Mailbox::Inbox { limit, after_seq } => {
+                return self.page(db, false, limit, after_seq.as_deref(), false);
+            }
+            Mailbox::Sent {
+                limit,
+                before_seq,
+                bodies,
+            } => return self.page(db, true, limit, before_seq.as_deref(), *bodies),
+            Mailbox::Peer(_) | Mailbox::Migrate | Mailbox::Watch => {}
         }
         Ok(None)
+    }
+
+    fn page(
+        &self,
+        db: &Path,
+        sent: bool,
+        limit: &str,
+        cursor: Option<&str>,
+        bodies: bool,
+    ) -> Result<Option<Value>, Error> {
+        let names: Vec<_> = self.profiles.iter().map(|p| p.peer_name.clone()).collect();
+        let limit = limit
+            .parse::<i64>()
+            .map_err(|_| code("limit_must_be_between_1_and_500"))?;
+        let cursor = cursor
+            .map(|s| {
+                s.parse::<i64>()
+                    .map_err(|_| code("seq_cursor_must_be_a_positive_integer"))
+            })
+            .transpose()?;
+        let page = store::catalog_page(db, &self.sender, &names, sent, limit, cursor, bodies)?;
+        let next = page.messages.last().filter(|_| page.omitted > 0).map(|m| {
+            format!(
+                "htalk {} --limit {} --{} {}{}",
+                if sent { "sent" } else { "inbox" },
+                limit,
+                if sent { "before-seq" } else { "after-seq" },
+                m["seq"],
+                if bodies { " --bodies" } else { "" }
+            )
+        });
+        let mut value = serde_json::to_value(page)?;
+        if let Some(next) = next {
+            value["recovery"] = json!({"next_page":next});
+        }
+        Ok(Some(value))
     }
 
     /// Every checked connection must reach this device, mailbox, sender and profile binding.
@@ -522,10 +540,10 @@ fn save(path: &Path, c: &Catalog) -> Result<(), Error> {
     result
 }
 
-fn publish(options: &ArgMatches, db: Option<&str>, actor: Option<&str>) -> Result<Value, Error> {
-    let path = PathBuf::from(required(options, "config"));
+fn publish(options: &Publish, db: Option<&str>, actor: Option<&str>) -> Result<Value, Error> {
+    let path = PathBuf::from(&options.config);
     let _lock = lock(&path)?;
-    let name = required(options, "peer");
+    let name = options.peer.as_str();
     validate::peer_name(name)?;
     let mut c = if path.exists() {
         load(&path)?
@@ -541,8 +559,8 @@ fn publish(options: &ArgMatches, db: Option<&str>, actor: Option<&str>) -> Resul
         Catalog {
             schema_version: 1,
             device_id: uuid::Uuid::new_v4().to_string(),
-            device_name: required(options, "device_name").into(),
-            ssh_port: *options.get_one::<u16>("ssh_port").unwrap(),
+            device_name: options.device_name.clone(),
+            ssh_port: options.ssh_port,
             mailbox_id: uuid::Uuid::new_v4().to_string(),
             generation: uuid::Uuid::new_v4().to_string(),
             database_stamp: stamp(&database)?,
@@ -561,12 +579,12 @@ fn publish(options: &ArgMatches, db: Option<&str>, actor: Option<&str>) -> Resul
         return Err(code("peer_retired"));
     }
     let id = options
-        .get_one::<String>("profile_id")
-        .cloned()
+        .profile_id
+        .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     uuid(&id)?;
-    let display_name = required(options, "name").to_owned();
-    let role = required(options, "role").to_owned();
+    let display_name = options.name.clone();
+    let role = options.role.clone();
     text(&display_name, 128)?;
     text(&role, 1024)?;
     text(&c.device_name, 128)?;
@@ -848,22 +866,22 @@ fn select_profile(
     Ok((device, route, profile))
 }
 
-fn discover(options: &ArgMatches) -> Result<(Value, Vec<Found>), Error> {
-    let t = trust(Path::new(required(options, "trust")))?;
-    if required(options, "via") == "ssh" {
-        if options.get_one::<String>("interface").is_some() {
+fn discover(options: &Browse) -> Result<(Value, Vec<Found>), Error> {
+    let t = trust(Path::new(&options.trust))?;
+    if options.via == "ssh" {
+        if options.interface.is_some() {
             return Err(code("catalog_ssh_omit_interface"));
         }
         return discover_ssh(t);
     }
-    if required(options, "via") == "tailscale" {
-        if options.get_one::<String>("interface").is_some() {
+    if options.via == "tailscale" {
+        if options.interface.is_some() {
             return Err(code("catalog_tailscale_omit_interface"));
         }
         return discover_tailscale(options, t);
     }
-    let pan = if required(options, "via") == "bluetooth" {
-        Some(Pan::read(required(options, "interface"))?)
+    let pan = if options.via == "bluetooth" {
+        Some(Pan::read(options.interface())?)
     } else {
         None
     };
@@ -927,11 +945,8 @@ fn discover_ssh(t: Trust) -> Result<(Value, Vec<Found>), Error> {
     ))
 }
 
-fn discover_tailscale(options: &ArgMatches, t: Trust) -> Result<(Value, Vec<Found>), Error> {
-    let client = TailClient::new(
-        required(options, "tailscale_binary"),
-        required(options, "tailscale_socket"),
-    )?;
+fn discover_tailscale(options: &Browse, t: Trust) -> Result<(Value, Vec<Found>), Error> {
+    let client = TailClient::new(&options.tailscale_binary, &options.tailscale_socket)?;
     let status = client.status()?;
     let unknown = status
         .peers
@@ -1011,16 +1026,16 @@ fn discover_tailscale(options: &ArgMatches, t: Trust) -> Result<(Value, Vec<Foun
 }
 
 fn discover_mdns(
-    options: &ArgMatches,
+    options: &Browse,
     t: Trust,
     pan: Option<Pan>,
 ) -> Result<(Value, Vec<Found>), Error> {
-    let d = daemon(required(options, "interface"))?;
+    let d = daemon(options.interface())?;
     let monitor = d.monitor().map_err(|_| code("catalog_mdns_unavailable"))?;
     let events = d
         .browse(SERVICE)
         .map_err(|_| code("catalog_mdns_unavailable"))?;
-    let end = Instant::now() + Duration::from_secs(*options.get_one::<u64>("seconds").unwrap());
+    let end = Instant::now() + Duration::from_secs(options.seconds);
     let mut services = BTreeMap::new();
     let mut truncated = false;
     let mut disconnected = false;
@@ -1096,7 +1111,7 @@ fn discover_mdns(
                 ScopedIp::V4(v)
                     if v.interface_ids()
                         .iter()
-                        .any(|i| i.name == required(options, "interface")) =>
+                        .any(|i| i.name == options.interface()) =>
                 {
                     Some(*v.addr())
                 }
@@ -1114,7 +1129,7 @@ fn discover_mdns(
                 }
                 let route = Route::Interface {
                     ip: *ip,
-                    interface: required(options, "interface").into(),
+                    interface: options.interface().into(),
                     pan: pan.clone(),
                 };
                 route.check()?;
@@ -1146,18 +1161,17 @@ fn discover_mdns(
         || rejected > 0
         || truncated;
     Ok((
-        json!({"devices":devices,"sources":[{"source":"mdns","interface":required(options,"interface"),"via":required(options,"via"),
+        json!({"devices":devices,"sources":[{"source":"mdns","interface":options.interface(),"via":options.via,
         "status":if partial { "partial" } else { "ok" },"rejected":rejected,"truncated":truncated}],
         "scope":"Snapshot of advertised devices on the selected interface. Unavailable sources do not prove absence; channel reachability is not agent liveness."}),
         found,
     ))
 }
 
-fn advertise(options: &ArgMatches) -> Result<(), Error> {
-    let path = Path::new(required(options, "config"));
+fn advertise(config: &str, interface: &str, seconds: u64) -> Result<(), Error> {
+    let path = Path::new(config);
     let c = load(path)?;
     current(&c)?;
-    let interface = required(options, "interface");
     let d = daemon(interface)?;
     let monitor = d.monitor().map_err(|_| code("catalog_mdns_unavailable"))?;
     let props = [("v", "1"), ("device", c.device_id.as_str())];
@@ -1195,7 +1209,6 @@ fn advertise(options: &ArgMatches) -> Result<(), Error> {
         return Err(code("catalog_mdns_announcement_unconfirmed"));
     }
     emit(&json!({"state":"advertising","device_id":c.device_id,"interface":interface}))?;
-    let seconds = *options.get_one::<u64>("seconds").unwrap();
     let end = (seconds > 0).then(|| Instant::now() + Duration::from_secs(seconds));
     let mut result = Ok(());
     while !stopped() && end.is_none_or(|end| Instant::now() < end) {
@@ -1226,74 +1239,139 @@ fn advertise(options: &ArgMatches) -> Result<(), Error> {
     result.and(removed).and(closed)
 }
 
-fn required<'a>(m: &'a ArgMatches, key: &str) -> &'a str {
-    m.get_one::<String>(key).unwrap()
-}
-fn config_arg() -> Arg {
-    Arg::new("config")
-        .long("config")
-        .required(true)
-        .help("Private catalogue JSON; each endpoint fixes its own mailbox and sender.")
-}
-fn browse_args(c: Cli) -> Cli {
-    c.arg(
-        Arg::new("trust")
-            .long("trust")
-            .required(true)
-            .help("Private list of known device IDs, mailbox bindings and pinned SSH files."),
-    )
-    .arg(
-        Arg::new("interface")
-            .long("interface")
-            .required_if_eq_any([("via", "lan"), ("via", "bluetooth")])
-            .help("Inspect only this local interface."),
-    )
-    .arg(
-        Arg::new("via")
-            .long("via")
-            .default_value("lan")
-            .value_parser(["lan", "bluetooth", "tailscale", "ssh"])
-            .help("Choose one channel; never fails over a mailbox call."),
-    )
-    .arg(
-        Arg::new("tailscale_binary")
-            .long("tailscale-binary")
-            .default_value("/usr/bin/tailscale")
-            .help("Owned Tailscale 1.102.x executable, used only with --via tailscale."),
-    )
-    .arg(
-        Arg::new("tailscale_socket")
-            .long("tailscale-socket")
-            .default_value("/var/run/tailscale/tailscaled.sock")
-            .help("Local Tailscale daemon socket, used only with --via tailscale."),
-    )
-    .arg(
-        Arg::new("seconds")
-            .long("seconds")
-            .default_value("5")
-            .value_parser(clap::value_parser!(u64).range(1..=30)),
-    )
+const CONFIG: &str = "Private catalogue JSON; each endpoint fixes its own mailbox and sender.";
+
+// The `catalog` commands.
+#[derive(Subcommand)]
+pub(crate) enum Action {
+    #[command(
+        about = "Publish an existing peer; replace a profile binding explicitly with --profile-id."
+    )]
+    Publish(Publish),
+    Unpublish {
+        #[arg(long, value_name = "config", help = CONFIG)]
+        config: String,
+        #[arg(value_name = "profile_id")]
+        profile_id: String,
+    },
+    #[command(
+        about = "Read only this endpoint's published profiles; no private session addresses."
+    )]
+    Export {
+        #[arg(long, value_name = "config", help = CONFIG)]
+        config: String,
+    },
+    #[command(about = "Fixed SSH endpoint: accepts only the exact remote command catalog or mcp.")]
+    Serve {
+        #[arg(long, value_name = "config", help = CONFIG)]
+        config: String,
+    },
+    #[command(about = "Advertise this catalogue until stopped; no standalone daemon is installed.")]
+    Advertise {
+        #[arg(long, value_name = "config", help = CONFIG)]
+        config: String,
+        #[arg(long, value_name = "interface")]
+        interface: String,
+        #[arg(
+            long,
+            value_name = "seconds",
+            default_value = "0",
+            value_parser = clap::value_parser!(u64).range(0..=86400)
+        )]
+        seconds: u64,
+    },
+    #[command(
+        about = "Fetch profiles only from known, pinned devices through the selected channel."
+    )]
+    Discover(Browse),
+    #[command(about = "Find this published profile and expose its checked MCP route on stdio.")]
+    Connect {
+        #[arg(
+            value_name = "profile",
+            help = "Canonical UUID selects only that profile identity, with no name fallback. Other inputs match display names exactly. For UUID-shaped or duplicate names, use the profile's own UUID."
+        )]
+        profile: String,
+        #[command(flatten)]
+        browse: Browse,
+    },
 }
 
-pub(crate) fn command() -> Cli {
-    Cli::new("catalog").about("Publish profiles and find known devices through pinned SSH, LAN, active Bluetooth PAN or Tailscale.")
-        .long_about("Only explicitly published profiles are exported. Device discovery is unauthenticated; profile reads and mailbox calls require pinned SSH identity and a fixed endpoint. Never launches sessions or retries messages.")
-        .subcommand_required(true)
-        .subcommand(Cli::new("publish").about("Publish an existing peer; replace a profile binding explicitly with --profile-id.")
-            .arg(config_arg()).arg(Arg::new("peer").required(true))
-            .arg(Arg::new("name").long("name").required(true)).arg(Arg::new("role").long("role").required(true))
-            .arg(Arg::new("device_name").long("device-name").default_value("htalk device"))
-            .arg(Arg::new("profile_id").long("profile-id"))
-            .arg(Arg::new("ssh_port").long("ssh-port").default_value("22").value_parser(clap::value_parser!(u16).range(1..))))
-        .subcommand(Cli::new("unpublish").arg(config_arg()).arg(Arg::new("profile_id").required(true)))
-        .subcommand(Cli::new("export").about("Read only this endpoint's published profiles; no private session addresses.").arg(config_arg()))
-        .subcommand(Cli::new("serve").about("Fixed SSH endpoint: accepts only the exact remote command catalog or mcp.").arg(config_arg()))
-        .subcommand(Cli::new("advertise").about("Advertise this catalogue until stopped; no standalone daemon is installed.")
-            .arg(config_arg()).arg(Arg::new("interface").long("interface").required(true))
-            .arg(Arg::new("seconds").long("seconds").default_value("0").value_parser(clap::value_parser!(u64).range(0..=86400))))
-        .subcommand(browse_args(Cli::new("discover").about("Fetch profiles only from known, pinned devices through the selected channel.")))
-        .subcommand(browse_args(Cli::new("connect").about("Find this published profile and expose its checked MCP route on stdio.")
-            .arg(Arg::new("profile").required(true).help("Canonical UUID selects only that profile identity, with no name fallback. Other inputs match display names exactly. For UUID-shaped or duplicate names, use the profile's own UUID."))))
+#[derive(Args)]
+pub(crate) struct Publish {
+    #[arg(long, value_name = "config", help = CONFIG)]
+    config: String,
+    #[arg(value_name = "peer")]
+    peer: String,
+    #[arg(long, value_name = "name")]
+    name: String,
+    #[arg(long, value_name = "role")]
+    role: String,
+    #[arg(long, value_name = "device_name", default_value = "htalk device")]
+    device_name: String,
+    #[arg(long, value_name = "profile_id")]
+    profile_id: Option<String>,
+    #[arg(
+        long,
+        value_name = "ssh_port",
+        default_value = "22",
+        value_parser = clap::value_parser!(u16).range(1..)
+    )]
+    ssh_port: u16,
+}
+
+// Where `discover` and `connect` look for known devices.
+#[derive(Args)]
+pub(crate) struct Browse {
+    #[arg(
+        long,
+        value_name = "trust",
+        help = "Private list of known device IDs, mailbox bindings and pinned SSH files."
+    )]
+    trust: String,
+    #[arg(
+        long,
+        value_name = "interface",
+        required_if_eq_any([("via", "lan"), ("via", "bluetooth")]),
+        help = "Inspect only this local interface."
+    )]
+    interface: Option<String>,
+    #[arg(
+        long,
+        value_name = "via",
+        default_value = "lan",
+        value_parser = ["lan", "bluetooth", "tailscale", "ssh"],
+        help = "Choose one channel; never fails over a mailbox call."
+    )]
+    via: String,
+    #[arg(
+        long,
+        value_name = "tailscale_binary",
+        default_value = "/usr/bin/tailscale",
+        help = "Owned Tailscale 1.102.x executable, used only with --via tailscale."
+    )]
+    tailscale_binary: String,
+    #[arg(
+        long,
+        value_name = "tailscale_socket",
+        default_value = "/var/run/tailscale/tailscaled.sock",
+        help = "Local Tailscale daemon socket, used only with --via tailscale."
+    )]
+    tailscale_socket: String,
+    #[arg(
+        long,
+        value_name = "seconds",
+        default_value = "5",
+        value_parser = clap::value_parser!(u64).range(1..=30)
+    )]
+    seconds: u64,
+}
+
+impl Browse {
+    /// Read by the lan and bluetooth channels. The parser asks for it only when --via is
+    /// spelled out, so the default channel without one still stops here, as before.
+    fn interface(&self) -> &str {
+        self.interface.as_deref().unwrap()
+    }
 }
 
 fn emit(v: &Value) -> Result<(), Error> {
@@ -1304,13 +1382,30 @@ fn emit(v: &Value) -> Result<(), Error> {
     Ok(())
 }
 
-pub(crate) fn run(
-    options: &ArgMatches,
-    db: Option<&str>,
-    actor: Option<&str>,
-) -> Result<(), Error> {
-    let (name, m) = options.subcommand().unwrap();
-    let signals = if matches!(name, "advertise" | "discover" | "connect") {
+/// Runs a catalogue command and gives its exit code.
+pub(crate) fn main(action: &Action, db: Option<&str>, actor: Option<&str>) -> i32 {
+    match run(action, db, actor) {
+        Ok(()) => 0,
+        Err(error) => {
+            if matches!(action, Action::Connect { .. } | Action::Serve { .. }) {
+                eprintln!("htalk catalog: {error}");
+            } else {
+                let _ = emit(&json!({"state":"error","error":error.to_string()}));
+            }
+            if matches!(error, Error::Interrupted) {
+                130
+            } else {
+                2
+            }
+        }
+    }
+}
+
+fn run(action: &Action, db: Option<&str>, actor: Option<&str>) -> Result<(), Error> {
+    let signals = if matches!(
+        action,
+        Action::Advertise { .. } | Action::Discover(_) | Action::Connect { .. }
+    ) {
         let flag = STOP
             .get_or_init(|| Arc::new(AtomicBool::new(false)))
             .clone();
@@ -1321,30 +1416,27 @@ pub(crate) fn run(
     } else {
         None
     };
-    if name != "publish" && (db.is_some() || actor.is_some()) {
+    if !matches!(action, Action::Publish(_)) && (db.is_some() || actor.is_some()) {
         return Err(code("catalog_binding_fixed_omit_db_and_as"));
     }
-    match name {
-        "publish" => emit(&publish(m, db, actor)?),
-        "unpublish" => {
-            let path = Path::new(required(m, "config"));
+    match action {
+        Action::Publish(options) => emit(&publish(options, db, actor)?),
+        Action::Unpublish { config, profile_id } => {
+            let path = Path::new(config);
             let _lock = lock(path)?;
             let mut c = load(path)?;
-            let id = required(m, "profile_id");
-            uuid(id)?;
+            uuid(profile_id)?;
             let before = c.profiles.len();
-            c.profiles.retain(|p| p.profile_id != id);
+            c.profiles.retain(|p| &p.profile_id != profile_id);
             if before == c.profiles.len() {
                 return Err(code("catalog_unknown_profile"));
             }
             save(path, &c)?;
-            emit(&json!({"state":"unpublished","profile_id":id}))
+            emit(&json!({"state":"unpublished","profile_id":profile_id}))
         }
-        "export" => emit(&serde_json::to_value(directory(Path::new(required(
-            m, "config",
-        )))?)?),
-        "serve" => {
-            let path = Path::new(required(m, "config"));
+        Action::Export { config } => emit(&serde_json::to_value(directory(Path::new(config))?)?),
+        Action::Serve { config } => {
+            let path = Path::new(config);
             match std::env::var("SSH_ORIGINAL_COMMAND").as_deref() {
                 Ok("catalog") => emit(&serde_json::to_value(directory(path)?)?),
                 Ok("mcp") => {
@@ -1355,13 +1447,16 @@ pub(crate) fn run(
                 _ => Err(code("catalog_remote_command_refused")),
             }
         }
-        "advertise" => advertise(m),
-        "discover" => emit(&discover(m)?.0),
-        "connect" => {
-            let selector = required(m, "profile");
-            text(selector, 128)?;
-            let (_, found) = discover(m)?;
-            let (device, route, profile) = select_profile(found, selector)?;
+        Action::Advertise {
+            config,
+            interface,
+            seconds,
+        } => advertise(config, interface, *seconds),
+        Action::Discover(browse) => emit(&discover(browse)?.0),
+        Action::Connect { profile, browse } => {
+            text(profile, 128)?;
+            let (_, found) = discover(browse)?;
+            let (device, route, profile) = select_profile(found, profile)?;
             let expected = Binding {
                 schema_version: 1,
                 device_id: device.device_id.clone(),
@@ -1375,6 +1470,5 @@ pub(crate) fn run(
             crate::mcp::connect_catalog(connector(&device, &route, "mcp"), expected, route)
                 .map_err(|_| code("catalog_mcp_failed"))
         }
-        _ => Err(code("invalid_arguments")),
     }
 }
