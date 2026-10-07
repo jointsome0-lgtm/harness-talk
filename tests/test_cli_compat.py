@@ -4,6 +4,7 @@ The suite runs the executable selected by HTALK_TEST_COMMAND (see compat_support
 Fake claude/codex executables, a fake Claude messaging socket and a loopback
 OpenCode server stand in for clients. No test imports the implementation.
 """
+import base64
 from contextlib import closing
 import errno
 import json
@@ -19,10 +20,12 @@ import sys
 import threading
 import time
 import unittest
+import urllib.parse
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from compat_support import MESSAGE_KEYS, PEER_KEYS, ROW_KEYS, TIMEOUT, HtalkCase, process_start, wait_for  # noqa: E402
+from compat_support import (MESSAGE_KEYS, OPENCODE_CA, PEER_KEYS, ROW_KEYS, TIMEOUT, HtalkCase,  # noqa: E402
+                            process_start, wait_for)
 
 LEGACY_V1 = """
 CREATE TABLE peers (name TEXT PRIMARY KEY, harness TEXT NOT NULL, session_id TEXT NOT NULL,
@@ -535,6 +538,10 @@ class Registration(HtalkCase):
                  ("bob", "opencode", "ses_x", work, ["--url", "http://user:secret@127.0.0.1:4096"], "invalid_opencode_url"),
                  ("bob", "opencode", "ses_x", work, ["--url", "ftp://127.0.0.1:4096"], "invalid_opencode_url"),
                  ("bob", "opencode", "ses_x", work, ["--url", "http://127.0.0.1:4096/?token=1"], "invalid_opencode_url"),
+                 *(("bob", "opencode", "ses_x", work, ["--url", "http://%s:4096" % host], "opencode_url_must_be_loopback")
+                   for host in ("127.1", "2130706433", "127.0.0.%31", "ｌｏｃａｌｈｏｓｔ", "localhost.example", "192.168.1.1")),
+                 *(("bob", "opencode", "ses_x", work, ["--url", url], "invalid_opencode_url")
+                   for url in ("http://127.0.0.1:4096\\path", "http://127.0.0.1:99999", "http://user@localhost", "http://localhost/?x")),
                  ("bob", "claude", uuid_session, str(self.tmp / "file"), [], "workspace_must_be_a_directory"))
         for name, harness, session, workspace, options, code in coded:
             with self.subTest(name=name, harness=harness, options=options):
@@ -546,6 +553,11 @@ class Registration(HtalkCase):
         for session, workspace in (("not-a-uuid", work), (uuid_session, str(self.tmp / "missing"))):
             with self.subTest(session=session, workspace=workspace):
                 self.error("peer", "add", "bob", "--harness", "claude", "--session", session, "--workspace", workspace)
+        # A loopback URL is saved as written, without the parts a request never carries.
+        for index, (url, saved) in enumerate((("HTTP://LOCALHOST:80/a/", "http://LOCALHOST:80/a"), ("http://[::1]:4096/", "http://[::1]:4096"),
+                                              (" http://127.0.0.1:4096/a\tb", "http://127.0.0.1:4096/ab"))):
+            self.assertEqual(saved, self.add_peer("url%d" % index, "opencode", None, None, "--url", url)["url"])
+            self.htalk("peer", "retire", "url%d" % index)
         self.assertEqual("a" * 64, self.add_peer("a" * 64)["name"])
         self.assertEqual(["a" * 64, "keep"], [peer["name"] for peer in self.htalk("peer", "list")["peers"]])
 
@@ -1031,6 +1043,194 @@ class Notifications(HtalkCase):
         self.assertEqual(("not_submitted", "opencode_unreachable"), (refused["submission"], refused["notification_detail"]))
 
 
+class OpenCodeServer(HtalkCase):
+    """What htalk asks of an OpenCode server and what it makes of the answers. The fake server records
+    every request; a test waits on that record, on the command's answer or on its exit."""
+
+    def setUp(self):
+        super().setUp()
+        self.session = {"id": "ses_muse", "directory": str(self.work), "time": {"created": 1, "updated": 2}}
+        self.server, self.url = self.opencode_server({"ses_muse": self.session})
+        self.fake = self.server.state
+        self.add_peer("alice")
+        self.add_peer("muse", "opencode", "ses_muse", None, "--url", self.url)
+
+    def posts(self):
+        return [request for request in self.fake["requests"] if request["method"] == "POST"]
+
+    def check(self, name="muse", env=None):
+        return self.run_raw("peer", "check", name, env=env).json
+
+    def send(self, *options, to="muse", env=None):
+        sent = self.run_raw("--as", "alice", "send", to, "--message", "Q", *options, env=env).json
+        return sent["submission"], sent["notification_detail"]
+
+    def hold(self, path):
+        """Make the server keep its answer to one path until the returned event is set."""
+        started, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def hook(method, asked):
+            if asked == path:
+                started.set()
+                release.wait(TIMEOUT)
+        self.fake["hook"] = hook
+        return started, release
+
+    def test_check_asks_for_the_exact_session_and_reads_its_state(self):
+        checked = self.htalk("peer", "check", "muse")
+        self.assertEqual({"harness", "session_id", "workspace", "url", "server_version", "runtime_status", "transport", "authenticated"},
+                         set(checked) - {"state", "name", "retired_at", "next_action", "recovery"})
+        directory = urllib.parse.urlencode({"directory": str(self.work)})
+        self.assertEqual([("GET", "/global/health", "", None), ("GET", "/session/ses_muse", directory, None),
+                          ("GET", "/session/status", directory, None)],
+                         [(r["method"], r["path"], r["query"], r["body"]) for r in self.fake["requests"]])
+        link = self.tmp / "link"
+        link.symlink_to(self.work)
+        for status, session, key, expected in (
+                ({"ses_muse": {"type": "busy"}}, {}, "runtime_status", "busy"),
+                ({"ses_muse": None, "ses_other": {"type": "odd"}}, {}, "runtime_status", "idle"),
+                ({"ses_muse": {"type": "unrecognized"}}, {}, "error", "opencode_invalid_response"),
+                ([], {}, "error", "opencode_invalid_response"),
+                ({}, {"directory": str(self.work / "elsewhere")}, "error", "recipient_identity_changed"),
+                ({}, {"directory": ""}, "error", "opencode_invalid_response"),
+                ({}, {"directory": str(link)}, "workspace", str(self.work)),
+                ({}, {"time": {"updated": 2, "archived": 3}}, "error", "recipient_session_archived"),
+                ({}, {"time": {"updated": 2, "archived": None}}, "runtime_status", "idle"),
+                ({}, {"time": []}, "error", "opencode_invalid_response"),
+                ({}, None, "error", "recipient_not_in_opencode_server")):
+            with self.subTest(status=status, session=session):
+                self.fake["status"] = status
+                self.fake["sessions"] = {} if session is None else {"ses_muse": {**self.session, **session}}
+                self.assertEqual(expected, self.check()[key])
+
+    def test_an_answer_may_be_four_mebibytes_and_no_more(self):
+        body = json.dumps({"healthy": True, "version": "large"}).encode()
+        for size, key, expected in ((4 * 1024 * 1024, "server_version", "large"), (4 * 1024 * 1024 + 1, "error", "opencode_response_too_large")):
+            answer = b"HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n" % size + body.ljust(size)
+            self.fake["hook"] = lambda method, path, answer=answer: answer if path == "/global/health" else None
+            self.assertEqual(expected, self.check()[key])
+
+    def test_the_status_of_the_post_decides_what_is_recorded(self):
+        for status, expected in ((204, ("submitted", "opencode_prompt_async_accepted")),
+                                 (404, ("not_submitted", "recipient_not_in_opencode_server")),
+                                 (401, ("not_submitted", "opencode_unauthorized")),
+                                 (409, ("not_submitted", "opencode_http_409")), (400, ("not_submitted", "opencode_http_400")),
+                                 (500, ("submission_unknown", "opencode_http_500")), (200, ("submission_unknown", "opencode_http_200")),
+                                 (302, ("submission_unknown", "opencode_http_302"))):
+            with self.subTest(status=status):
+                self.fake["prompt"] = status
+                self.assertEqual(expected, self.send())
+        self.assertEqual(8, len(self.posts()))
+
+    def test_an_answer_that_is_not_whole_leaves_the_notice_unknown(self):
+        whole = b"HTTP/1.1 400 Bad\r\nContent-Length: 3\r\n\r\n{x}"
+        cases = ((whole, ("not_submitted", "opencode_http_400")),
+                 (b"", ("submission_unknown", "opencode_connection_closed")),
+                 (b"garbage\r\n\r\n", ("submission_unknown", "opencode_invalid_response")),
+                 (b"HTTP/1.1 400 Bad\r\nContent-Length: 1000\r\n\r\n{}", ("submission_unknown", "opencode_connection_closed")))
+        for count, (answer, expected) in enumerate(cases, 1):
+            with self.subTest(answer=answer):
+                self.fake["hook"] = lambda method, path, answer=answer: answer if method == "POST" else None
+                chosen = str(uuid.uuid4())
+                self.assertEqual(expected, self.send("--id", chosen))
+                # The same send again finds the saved one, and the prompt is not posted a second time.
+                self.assertEqual(expected, self.send("--id", chosen))
+                self.assertEqual(count, len(self.posts()))
+
+    def test_a_server_that_takes_the_post_and_never_answers_leaves_the_notice_unknown(self):
+        started, release = self.hold("/session/ses_muse/prompt_async")
+        self.assertEqual(("submission_unknown", "opencode_timed_out"), self.send())
+        self.assertTrue(started.is_set())
+        self.assertEqual(1, len(self.posts()))
+
+    def test_a_failed_check_before_the_post_sends_nothing(self):
+        self.fake["sessions"] = {}
+        self.assertEqual(("not_submitted", "recipient_not_in_opencode_server"), self.send())
+        self.fake["sessions"] = {"ses_muse": {**self.session, "directory": str(self.tmp)}}
+        self.assertEqual(("not_submitted", "recipient_identity_changed"), self.send())
+        self.fake["sessions"] = {"ses_muse": self.session}
+        self.fake["hook"] = lambda method, path: b"" if path == "/global/health" else None
+        self.assertEqual(("not_submitted", "opencode_connection_closed"), self.send())
+        self.assertEqual([], self.posts())
+
+    def test_an_acknowledgment_during_the_checks_prevents_the_post(self):
+        started, release = self.hold("/session/status")
+        chosen = str(uuid.uuid4())
+        sending = self.spawn("--as", "alice", "send", "muse", "--id", chosen, "--message", "Q")
+        self.assertTrue(started.wait(TIMEOUT))
+        self.htalk("--as", "muse", "ack", chosen)
+        release.set()
+        result = self.finish(sending, code=0)
+        self.assertEqual(("not_submitted", "acknowledged_before_notification"), (result["submission"], result["notification_detail"]))
+        self.assertEqual([], self.posts())
+
+    def test_an_interrupt_during_the_checks_posts_nothing(self):
+        started, release = self.hold("/session/status")
+        chosen = str(uuid.uuid4())
+        sending = self.spawn("--as", "alice", "send", "muse", "--id", chosen, "--message", "Q")
+        self.assertTrue(started.wait(TIMEOUT))
+        sending.send_signal(signal.SIGINT)
+        # The command answers while the server still holds its last check.
+        result = self.finish(sending, code=130)
+        self.assertEqual(("interrupted", chosen), (result["state"], result["message_id"]))
+        release.set()
+        del self.fake["hook"]
+        again = self.run_raw("--as", "alice", "send", "muse", "--id", chosen, "--message", "Q").json
+        self.assertEqual((False, "submission_unknown"), (again["created"], again["submission"]))
+        self.assertEqual(3, len(self.fake["requests"]))
+        self.assertEqual([], self.posts())
+
+    def test_credentials_come_from_the_environment_and_a_proxy_is_never_used(self):
+        proxy = socket.socket()
+        self.addCleanup(proxy.close)
+        proxy.bind(("127.0.0.1", 0))
+        proxy.listen(8)
+        proxy.setblocking(False)
+        env = dict.fromkeys(("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"),
+                            "http://127.0.0.1:%d" % proxy.getsockname()[1])
+        self.assertIs(False, self.check(env=env)["authenticated"])
+        self.assertEqual({None}, {request["authorization"] for request in self.fake["requests"]})
+
+        def basic(user):
+            return "Basic " + base64.b64encode(("%s:invented-secret" % user).encode()).decode()
+        self.fake["authorization"] = basic("opencode")
+        self.assertEqual("opencode_unauthorized", self.check(env=env)["error"])
+        found = self.run_raw("peer", "discover", "--harness", "opencode", "--opencode-url", self.url, env=env).json
+        self.assertEqual("opencode_unauthorized", found["sources"][0]["error"])
+        secret = {**env, "OPENCODE_SERVER_PASSWORD": "invented-secret", "OPENCODE_SERVER_USERNAME": ""}
+        checked = self.check(env=secret)
+        self.assertIs(True, checked["authenticated"])
+        self.assertNotIn("invented-secret", json.dumps(checked))
+        self.assertEqual(("submitted", "opencode_prompt_async_accepted"), self.send(env=secret))
+        self.assertEqual(basic("opencode"), self.posts()[0]["authorization"])
+        for change, header in (({"OPENCODE_SERVER_USERNAME": "other"}, basic("other")), ({"OPENCODE_SERVER_PASSWORD": ""}, None)):
+            self.assertEqual("opencode_unauthorized", self.check(env={**secret, **change})["error"])
+            self.assertEqual(header, self.fake["requests"][-1]["authorization"])
+        asked = len(self.fake["requests"])
+        self.assertEqual("invalid_opencode_credentials", self.check(env={**env, "OPENCODE_SERVER_PASSWORD": "\udcff"})["error"])
+        self.assertEqual(asked, len(self.fake["requests"]))
+        with self.assertRaises(BlockingIOError):
+            proxy.accept()
+
+    def test_https_is_used_only_with_a_certificate_that_is_trusted(self):
+        sessions = {name: {**self.session, "id": name} for name in ("ses_number", "ses_name")}
+        server, url = self.opencode_server(sessions, tls=True)
+        (self.tmp / "ca.pem").write_text(OPENCODE_CA)
+        trusted, untrusted = {"SSL_CERT_FILE": str(self.tmp / "ca.pem")}, {"SSL_CERT_FILE": str(self.tmp / "none.pem")}
+        self.add_peer("number", "opencode", "ses_number", None, "--url", url)
+        self.add_peer("name", "opencode", "ses_name", None, "--url", url.replace("127.0.0.1", "localhost"))
+        for name in ("number", "name"):
+            self.assertEqual("1.18.30", self.check(name, env=trusted)["server_version"])
+            self.assertEqual(("submitted", "opencode_prompt_async_accepted"), self.send(to=name, env=trusted))
+        asked = len(server.state["requests"])
+        self.assertEqual(2, len([request for request in server.state["requests"] if request["method"] == "POST"]))
+        for name in ("number", "name"):
+            self.assertEqual("opencode_unreachable", self.check(name, env=untrusted)["error"])
+            self.assertEqual(("not_submitted", "opencode_unreachable"), self.send(to=name, env=untrusted))
+        self.assertEqual(asked, len(server.state["requests"]))
+
+
 class NotificationOrdering(HtalkCase):
     """Late acknowledgment, retirement and the requester's own wait at the final check."""
 
@@ -1452,6 +1652,192 @@ class Discovery(HtalkCase):
             url = "http://127.0.0.1:%d" % server.getsockname()[1]
             self.add_peer(name, "opencode", None, None, "--url", url)
             self.assertEqual((code,) * 3, (check(name), send(name), source("--harness", "opencode", "--opencode-url", url)))
+
+
+class OpenCodeDiscovery(HtalkCase):
+    """Read-only OpenCode discovery: server sources, saved metadata and per-record diagnostics."""
+    NO_SERVER = "http://127.0.0.1:abc"  # Malformed, so nothing is asked and the default server is not tried.
+    UPDATED = 1788990000000
+
+    def database(self, data):
+        return (data or self.home / ".local/share") / "opencode/opencode.db"
+
+    def saved(self, name, rows, *changes):
+        """A data home with saved rows of id, parent_id, directory, time_updated, time_archived."""
+        path = self.database(self.tmp / name)
+        path.parent.mkdir(parents=True)
+        with closing(sqlite3.connect(path)) as db, db:
+            db.execute("CREATE TABLE session (id, parent_id TEXT, directory, time_updated, time_archived INTEGER, title TEXT)")
+            db.executemany("INSERT INTO session VALUES (?, ?, ?, ?, ?, 'invented title')", rows)
+            for change in changes:
+                db.execute("UPDATE session SET " + change)
+        return self.tmp / name
+
+    def saved_source(self, data, status="ok", error=None, detail=None, **rejected):
+        return {"harness": "opencode", "source": "opencode_saved", "path": str(self.database(data)), "status": status,
+                "error": error, "detail": detail, **rejected}
+
+    def discover(self, data, *urls, workspace=None):
+        """Sessions and sources. The saved file stays byte for byte, and only a run with no usable source fails."""
+        path = self.database(data)
+        before = path.read_bytes() if path.is_file() else None
+        words = [word for url in urls or [self.NO_SERVER] for word in ("--opencode-url", url)]
+        words += ["--workspace", workspace] if workspace else []
+        result = self.run_raw("peer", "discover", "--harness", "opencode", *words, env={"XDG_DATA_HOME": str(data)})
+        self.assertIsInstance(result.json, dict, result.stdout + result.stderr)
+        sources = result.json["sources"]
+        self.assertEqual(2 if all(s["status"] == "unavailable" for s in sources) else 0, result.code, result.stdout)
+        self.assertEqual(before, path.read_bytes() if path.is_file() else None)
+        self.assertNotIn("invented title", result.stdout)
+        return result.json["sessions"], sources
+
+    def listed(self, session_id, directory, **changes):
+        session = {"id": session_id, "slug": "invented-slug", "projectID": "prj_invented", "directory": directory,
+                   "title": "invented title", "version": "1.18.30", "time": {"created": 1000000, "updated": self.UPDATED}}
+        return {**session, **changes}
+
+    def test_malformed_server_records_preserve_valid_sessions_before_and_after(self):
+        ws = str(self.work)
+        server, url = self.opencode_server({})
+        server.state["listed"] = [
+            self.listed("ses_first", ws), self.listed("bad_id", ws), self.listed("ses_bad_directory", None),
+            {"id": "ses_bad_time", "directory": ws, "time": []}, self.listed("ses_bad_status", ws), "not an object",
+            self.listed("ses_last", ws)]
+        server.state["status"] = {"ses_bad_status": {"type": "unrecognized"}, "ses_last": {"type": "retry"}}
+        sessions, sources = self.discover(self.tmp / "absent", url)
+        self.assertEqual(["ses_first", "ses_last"], [row["session_id"] for row in sessions])
+        self.assertEqual({"harness": "opencode", "source": "opencode_server", "url": url, "status": "partial", "version": "1.18.30",
+                          "error": None, "detail": "opencode_invalid_session_records", "rejected": 5}, sources[0])
+        self.assertEqual({"harness": "opencode", "session_id": "ses_last", "workspace": ws, "runtime_status": "retry",
+                          "runtime_reason": "server_status", "source": "opencode_server", "url": url,
+                          "updated_at": self.UPDATED // 1000}, sessions[1])
+        # Without a workspace, the server's own project answers: no directory parameter.
+        self.assertEqual({("GET", "")}, {(r["method"], r["query"]) for r in server.state["requests"]})
+        self.assertNotIn("invented-slug", json.dumps(sessions))
+
+    def test_discovery_is_read_only_and_separates_liveness(self):
+        ws, other = str(self.work), str(self.work / "other")
+        server, url = self.opencode_server({})
+        server.state["listed"] = [
+            self.listed("ses_invented", ws), self.listed("ses_child", ws, parentID="ses_invented"),
+            self.listed("ses_gone", ws, time={"created": 1, "updated": 2, "archived": 3}), self.listed("ses_busy", other),
+            self.listed("ses_odd_time", other, time={"created": 1, "updated": -1500})]
+        server.state["status"] = {"ses_busy": {"type": "busy"}}
+        data = self.saved("data", [("ses_invented", None, ws, self.UPDATED, None),
+                                   ("ses_saved", None, "/invented/saved", 1788980000000, None),
+                                   ("ses_archived", None, "/invented/x", 5, 6),
+                                   ("ses_subagent", "ses_saved", "/invented/saved", 7, None)])
+        with closing(socket.socket()) as unused:
+            unused.bind(("127.0.0.1", 0))
+            closed = "http://127.0.0.1:%d" % unused.getsockname()[1]
+        urls = ["http://user:invented-secret@127.0.0.1:4096", "http://127.attacker.example:4096", url, closed]
+        sessions, sources = self.discover(data, *urls)
+        text = json.dumps([sessions, sources])
+        self.assertFalse([word for word in ("invented-secret", "attacker") if word in text])
+        self.assertEqual([("opencode_server", "unavailable", "invalid_opencode_url", None),
+                          ("opencode_server", "unavailable", "opencode_url_must_be_loopback", None),
+                          ("opencode_server", "ok", None, url),
+                          ("opencode_server", "unavailable", "opencode_unreachable", closed),
+                          ("opencode_saved", "ok", None, "-")],
+                         [(s["source"], s["status"], s["error"], s.get("url", "-")) for s in sources])
+        self.assertEqual(self.saved_source(data), sources[4])
+        found = {row["session_id"]: row for row in sessions}
+        self.assertEqual(["ses_busy", "ses_invented", "ses_odd_time", "ses_saved"], sorted(found))
+        self.assertEqual(4, len(sessions))
+        self.assertEqual(("busy", "idle"), (found["ses_busy"]["runtime_status"], found["ses_invented"]["runtime_status"]))
+        self.assertEqual("opencode_server", found["ses_invented"]["source"])  # A server record wins over its saved duplicate.
+        self.assertEqual(-2, found["ses_odd_time"]["updated_at"])  # Floor division.
+        self.assertEqual({"harness": "opencode", "session_id": "ses_saved", "workspace": "/invented/saved", "runtime_status": "unknown",
+                          "runtime_reason": "saved_metadata_only", "source": "opencode_saved", "url": None,
+                          "updated_at": 1788980000}, found["ses_saved"])
+        # With a workspace, both listing requests name it, and only its sessions are reported.
+        del server.state["requests"][:]
+        sessions, _ = self.discover(data, url, workspace=ws)
+        self.assertEqual(["ses_invented"], [row["session_id"] for row in sessions])
+        scoped = [r for r in server.state["requests"] if r["path"] in ("/session", "/session/status")]
+        self.assertEqual([[ws], [ws]], [urllib.parse.parse_qs(r["query"]).get("directory") for r in scoped])
+        self.assertEqual({"GET"}, {r["method"] for r in server.state["requests"]})
+
+    def test_malformed_saved_rows_preserve_valid_addresses_and_limit_diagnostics(self):
+        ws = str(self.work)
+        data = self.saved("data", [("ses_first", None, ws, 5000, None), ("bad_id", None, ws, 4000, None),
+                                   ("ses_empty", None, "", 3000, None), (17, None, ws, 2500, None),
+                                   ("ses_last", None, ws, 2000.5, None), ("ses_older", None, ws, None, None)])
+        sessions, sources = self.discover(data)
+        self.assertEqual([("ses_first", 5), ("ses_last", None), ("ses_older", None)],
+                         [(row["session_id"], row["updated_at"]) for row in sessions])
+        self.assertEqual(self.saved_source(data, "partial", detail="opencode_invalid_saved_metadata", rejected=3), sources[-1])
+        # 51 unarchived roots: the newest 50 are read, and two of them are malformed.
+        rows = [("bad" if i == 3 else "ses_%02d" % i, None, "" if i == 7 else ws, 10000 - i, None) for i in range(51)]
+        data = self.saved("limited", rows)
+        sessions, sources = self.discover(data)
+        self.assertEqual(48, len(sessions))
+        self.assertNotIn("ses_50", [row["session_id"] for row in sessions])
+        self.assertEqual(self.saved_source(data, "partial", detail="opencode_saved_session_limit_reached", rejected=2), sources[-1])
+        data = self.saved("exact", [row for row in rows[:50] if row[0] != "bad" and row[2]])
+        self.assertEqual(self.saved_source(data), self.discover(data)[1][-1])
+
+    def test_saved_text_that_is_not_utf8_rejects_only_its_rows(self):
+        rows = [("ses_first", None, "/invented/first", 5000, None), ("ses_bad_id", None, "/invented/bad-id", 4000, None),
+                ("ses_bad_directory", None, "/invented/bad-directory", 3000, None), ("ses_last", None, "/invented/last", 2000, None)]
+        data = self.saved("data", rows, "id=CAST(x'ff' AS TEXT) WHERE id='ses_bad_id'",
+                          "directory=CAST(x'fe' AS TEXT) WHERE id='ses_bad_directory'")
+        sessions, sources = self.discover(data)
+        self.assertEqual(["ses_first", "ses_last"], [row["session_id"] for row in sessions])
+        self.assertEqual(self.saved_source(data, "partial", detail="opencode_invalid_saved_metadata", rejected=2), sources[-1])
+
+    def test_saved_noninteger_timestamps_are_absent_not_rejected(self):
+        names = ("ses_invalid_text", "ses_blob", "ses_text", "ses_float", "ses_null", "ses_integer")
+        rows = [(name, None, "/invented", updated, None) for name, updated in zip(names, (1, 2, "1234", 2000.5, None, -1500))]
+        data = self.saved("data", rows, "time_updated=CAST(x'ff' AS TEXT) WHERE id='ses_invalid_text'",
+                          "time_updated=x'fe' WHERE id='ses_blob'")
+        sessions, sources = self.discover(data)
+        self.assertEqual({name: -2 if name == "ses_integer" else None for name in names},
+                         {row["session_id"]: row["updated_at"] for row in sessions})
+        self.assertEqual(6, len(sessions))
+        self.assertEqual(self.saved_source(data), sources[-1])
+
+    def test_saved_limit_sentinel_is_existence_only_even_with_invalid_text(self):
+        # TEXT timestamps sort ahead of the malformed sentinel's leading 'a'.
+        rows = [("ses_%02d" % i, None, "/invented", "z%03d" % (51 - i), None) for i in range(51)]
+        for column in ("id", "directory", "time_updated"):
+            with self.subTest(column=column):
+                data = self.saved("sentinel-" + column, rows, "%s=CAST(x'61ff' AS TEXT) WHERE rowid=51" % column)
+                last = self.sql("SELECT rowid FROM session ORDER BY time_updated DESC LIMIT 1 OFFSET 50", path=self.database(data))
+                self.assertEqual([(51,)], last, "the sentinel must be the 51st selected row")
+                sessions, sources = self.discover(data)
+                self.assertEqual(["ses_%02d" % i for i in range(50)], [row["session_id"] for row in sessions])
+                self.assertEqual(self.saved_source(data, "partial", detail="opencode_saved_session_limit_reached"), sources[-1])
+
+    def test_saved_rejection_at_row_fifty_does_not_backfill_from_sentinel(self):
+        rows = [("ses_%02d" % i, None, "/invented", 10000 - i, None) for i in range(51)]
+        data = self.saved("data", rows, "directory=CAST(x'ff' AS TEXT) WHERE rowid=50")
+        sessions, sources = self.discover(data)
+        self.assertEqual(["ses_%02d" % i for i in range(49)], [row["session_id"] for row in sessions])
+        self.assertEqual(self.saved_source(data, "partial", detail="opencode_saved_session_limit_reached", rejected=1), sources[-1])
+
+    def test_saved_storage_failures_remain_unavailable(self):
+        corrupt, schema = self.tmp / "not-sqlite", self.tmp / "missing-schema"
+        for data in (corrupt, schema):
+            self.database(data).parent.mkdir(parents=True)
+        self.database(corrupt).write_bytes(b"invented invalid SQLite file")
+        with closing(sqlite3.connect(self.database(schema))) as db, db:
+            db.execute("CREATE TABLE unrelated (value)")
+        for data, error in ((corrupt, "opencode_saved_database_corrupt"), (schema, "opencode_saved_database_unavailable"),
+                            (self.tmp / "absent", "opencode_saved_metadata_missing")):
+            with self.subTest(error=error):
+                sessions, sources = self.discover(data)
+                self.assertEqual(([], self.saved_source(data, "unavailable", error=error)), (sessions, sources[-1]))
+
+    def test_saved_metadata_default_follows_xdg_data_home(self):
+        data = self.saved("xdg", [("ses_xdg", None, "/invented/xdg", 42000, None)])
+        sessions, sources = self.discover(data)
+        self.assertEqual((["ses_xdg"], str(self.tmp / "xdg/opencode/opencode.db")),
+                         ([row["session_id"] for row in sessions], sources[-1]["path"]))
+        # An empty XDG_DATA_HOME is no data home: the default under the home directory is read.
+        sessions, sources = self.discover("")
+        self.assertEqual(([], str(self.home / ".local/share/opencode/opencode.db"), "opencode_saved_metadata_missing"),
+                         (sessions, sources[-1]["path"], sources[-1]["error"]))
 
 
 class ContendedWrites(HtalkCase):

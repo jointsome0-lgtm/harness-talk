@@ -4,37 +4,34 @@
 //! POST /session/{id}/prompt_async, which intentionally starts a turn in the
 //! existing session. No credential is stored.
 //!
-//! The HTTP/1.1 exchange uses one connection per request, no redirects, no proxy,
-//! 5 s per socket operation and at most 4 MiB of response body.
-//! `opencode_unreachable` is reported only when
-//! the TCP connection (and TLS handshake) failed before any request byte was
-//! written; every later failure is uncertain.
+//! Each request is its own connection, with no redirect, no proxy and no second attempt,
+//! 5 s for each step of the exchange and at most 4 MiB of response body. A prompt counts as
+//! not sent only while none of its body was handed over; every later failure is uncertain.
 use super::{Adapter, Address, Query};
 use crate::model::NativePeer as Peer;
 use crate::{
     error::{Error, io_code},
     model::*,
-    os, validate,
+    os,
 };
 use base64::Engine;
 use rusqlite::{OpenFlags, types::ValueRef};
 use serde_json::{Map, Value, json};
 use std::{
+    cell::Cell,
     env, fs,
-    io::{self, Read, Write},
-    net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs},
+    io::{self, Read},
+    net::{IpAddr, ToSocketAddrs},
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
 };
 
-pub const DEFAULT_URL: &str = "http://127.0.0.1:4096";
+const DEFAULT_URL: &str = "http://127.0.0.1:4096";
 const TIMEOUT: Duration = Duration::from_secs(5);
-pub const MAX_RESPONSE: usize = 4 * 1024 * 1024;
-pub const SAVED_LIMIT: usize = 50;
+const MAX_RESPONSE: usize = 4 * 1024 * 1024;
+const SAVED_LIMIT: usize = 50;
 const STATUSES: [&str; 3] = ["idle", "busy", "retry"];
-const MAX_LINE: usize = 65536;
-const MAX_HEADERS: usize = 100;
 
 /// A request failure; `After` means the request may have reached the server.
 enum Req {
@@ -47,11 +44,6 @@ impl From<Req> for Error {
             Req::Before(f) | Req::After(f) => f,
         }
     }
-}
-/// A broken answer, as `uncertain` names it after `opencode_`.
-const INVALID_RESPONSE: &str = "invalid_response";
-fn uncertain(class: &str) -> Req {
-    Req::After(Error::code(format!("opencode_{class}")))
 }
 fn session_id(value: &str) -> Result<String, Error> {
     opencode_session_id(value)
@@ -68,7 +60,7 @@ fn opencode_session_id(value: &str) -> Result<String, Error> {
     }
     Ok(value.to_owned())
 }
-pub fn opencode_url(value: Option<&str>) -> Result<String, Error> {
+fn opencode_url(value: Option<&str>) -> Result<String, Error> {
     // url::Url uses browser-style host normalization. Check the supplied host
     // first so shorthand, percent-encoded and IDNA lookalikes stay rejected.
     let value = value
@@ -146,63 +138,6 @@ fn quote(value: &str, plus: bool) -> String {
         .collect()
 }
 
-/// `json.dumps` of a string with its default `ensure_ascii`.
-fn json_string(value: &str) -> String {
-    let mut out = String::from("\"");
-    for c in value.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            ' '..='~' => out.push(c),
-            _ => {
-                for unit in c.encode_utf16(&mut [0; 2]) {
-                    out.push_str(&format!("\\u{unit:04x}"))
-                }
-            }
-        }
-    }
-    out.push('"');
-    out
-}
-
-/// Python `int(text, radix)` for ASCII text: whitespace, sign, `0x` and digit underscores.
-fn py_int(text: &[u8], radix: u32) -> Option<i128> {
-    let text = text.trim_ascii();
-    let (negative, mut digits) = match text.first() {
-        Some(b'-') => (true, &text[1..]),
-        Some(b'+') => (false, &text[1..]),
-        _ => (false, text),
-    };
-    let mut after_prefix = false;
-    if radix == 16 && (digits.starts_with(b"0x") || digits.starts_with(b"0X")) {
-        digits = &digits[2..];
-        after_prefix = true;
-    }
-    if after_prefix && digits.first() == Some(&b'_') {
-        digits = &digits[1..];
-    }
-    if digits.is_empty()
-        || digits.first() == Some(&b'_')
-        || digits.last() == Some(&b'_')
-        || digits.windows(2).any(|w| w == b"__")
-    {
-        return None;
-    }
-    let mut value: i128 = 0;
-    for &b in digits.iter().filter(|b| **b != b'_') {
-        let digit = (b as char).to_digit(radix)?;
-        value = value
-            .saturating_mul(radix as i128)
-            .saturating_add(digit as i128);
-    }
-    Some(if negative { -value } else { value })
-}
-
 fn truthy(value: Option<&Value>) -> bool {
     match value {
         None | Some(Value::Null) => false,
@@ -225,47 +160,45 @@ fn seconds(value: Option<&Value>) -> Value {
     }
 }
 
-enum Conn {
-    Plain(TcpStream),
-    Tls(Box<ureq::unversioned::transport::TransportAdapter>),
-}
-impl Read for Conn {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self {
-            Self::Plain(s) => s.read(buf),
-            // A TLS peer that closes without close_notify ends the body, as Python's ragged-EOF rule.
-            Self::Tls(s) => match s.read(buf) {
-                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(0),
-                other => other,
-            },
+/// What a failed request is called after `opencode_`.
+fn class(error: &ureq::Error) -> &'static str {
+    use io::ErrorKind::*;
+    use ureq::{Error as E, Timeout as T};
+    match error {
+        E::Timeout(T::Resolve | T::Connect) | E::HostNotFound | E::ConnectionFailed => {
+            "unreachable"
         }
-    }
-}
-impl Write for Conn {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        match self {
-            Self::Plain(s) => s.write(buf),
-            Self::Tls(s) => s.write(buf),
-        }
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        match self {
-            Self::Plain(s) => s.flush(),
-            Self::Tls(s) => s.flush(),
-        }
+        E::Timeout(_) => "timed_out",
+        E::Io(_) if os::interrupted() => "interrupted",
+        E::Io(e) => match e.kind() {
+            ConnectionRefused | AddrNotAvailable | NetworkUnreachable | HostUnreachable => {
+                "unreachable"
+            }
+            UnexpectedEof => "connection_closed",
+            // What rustls makes of a certificate it does not trust or a broken record.
+            InvalidData => "tls_failed",
+            kind => io_code(kind),
+        },
+        E::Rustls(_) | E::Tls(_) => "tls_failed",
+        _ => "invalid_response",
     }
 }
 
-/// What a socket or TLS failure after the connection opened is called after `opencode_`.
-fn io_class(e: &io::Error) -> &'static str {
-    if let Some(inner) = e.get_ref().and_then(|x| x.downcast_ref::<ureq::Error>()) {
-        return match inner {
-            ureq::Error::Timeout(_) => "timed_out",
-            ureq::Error::Io(e) => io_class(e),
-            _ => "tls_failed",
-        };
+/// A prompt's body, which knows whether any of it was asked for. Until then the server has
+/// nothing it could act on.
+struct Prompt<'a> {
+    left: &'a [u8],
+    asked: &'a Cell<bool>,
+}
+impl Read for Prompt<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        // The last moment an interrupt still keeps the prompt from the server.
+        if !self.asked.get() && os::interrupted() {
+            return Err(io::Error::other("interrupted"));
+        }
+        self.asked.set(true);
+        self.left.read(buf)
     }
-    io_code(e.kind())
 }
 
 /// Trust roots as Python's default context loads them: SSL_CERT_FILE or the system bundle, plus SSL_CERT_DIR.
@@ -306,398 +239,6 @@ fn trust_roots() -> Vec<ureq::tls::Certificate<'static>> {
         }
     }
     roots
-}
-
-/// The open TCP stream under TLS; its socket already carries the 5 s timeouts.
-#[derive(Debug)]
-struct Tcp {
-    stream: TcpStream,
-    buffers: ureq::unversioned::transport::LazyBuffers,
-}
-impl ureq::unversioned::transport::Transport for Tcp {
-    fn buffers(&mut self) -> &mut dyn ureq::unversioned::transport::Buffers {
-        &mut self.buffers
-    }
-    fn transmit_output(
-        &mut self,
-        amount: usize,
-        _: ureq::unversioned::transport::NextTimeout,
-    ) -> Result<(), ureq::Error> {
-        use ureq::unversioned::transport::Buffers;
-        Ok(self.stream.write_all(&self.buffers.output()[..amount])?)
-    }
-    fn await_input(
-        &mut self,
-        _: ureq::unversioned::transport::NextTimeout,
-    ) -> Result<bool, ureq::Error> {
-        use ureq::unversioned::transport::Buffers;
-        let amount = self.stream.read(self.buffers.input_append_buf())?;
-        self.buffers.input_appended(amount);
-        Ok(amount > 0)
-    }
-    fn is_open(&mut self) -> bool {
-        true
-    }
-}
-
-/// TLS handshake on an open TCP stream, completed before any request byte is sent.
-fn tls(stream: TcpStream, host: &str, port: u16) -> Result<Conn, ureq::Error> {
-    use ureq::tls::{RootCerts, TlsConfig, TlsProvider};
-    use ureq::unversioned::{
-        resolver::{DefaultResolver, Resolver},
-        transport::{
-            ConnectionDetails, Connector, LazyBuffers, NextTimeout, RustlsConnector, Transport,
-            TransportAdapter, time,
-        },
-    };
-    let authority = if host.contains(':') {
-        format!("[{host}]:{port}")
-    } else {
-        format!("{host}:{port}")
-    };
-    let uri: ureq::http::Uri = format!("https://{authority}/")
-        .parse()
-        .map_err(|_| ureq::Error::ConnectionFailed)?;
-    let tls = TlsConfig::builder()
-        .provider(TlsProvider::Rustls)
-        .root_certs(RootCerts::Specific(Arc::new(trust_roots())))
-        .build();
-    let config = ureq::config::Config::builder().tls_config(tls).build();
-    let resolver = DefaultResolver::default();
-    let details = ConnectionDetails {
-        uri: &uri,
-        addrs: resolver.empty(),
-        config: &config,
-        request_level: false,
-        resolver: &resolver,
-        now: time::Instant::now(),
-        timeout: NextTimeout {
-            after: TIMEOUT.into(),
-            reason: ureq::Timeout::Connect,
-        },
-        current_time: Arc::new(time::Instant::now),
-        run_connector: Arc::new(|_: &ConnectionDetails| Err(ureq::Error::ConnectionFailed)),
-    };
-    let tcp = Tcp {
-        stream,
-        buffers: LazyBuffers::new(128 * 1024, 128 * 1024),
-    };
-    let transport = RustlsConnector::default()
-        .connect(&details, Some(tcp))?
-        .ok_or(ureq::Error::ConnectionFailed)?;
-    let mut adapter = TransportAdapter::new(transport.boxed());
-    adapter.set_timeout(NextTimeout {
-        after: TIMEOUT.into(),
-        reason: ureq::Timeout::RecvResponse,
-    });
-    Ok(Conn::Tls(Box::new(adapter)))
-}
-
-/// Buffered reads with `http.client`'s limits and exception classes.
-struct Reader<R = Conn> {
-    conn: R,
-    buf: Vec<u8>,
-    pos: usize,
-    eof: bool,
-}
-impl<R: Read> Reader<R> {
-    fn fill(&mut self) -> Result<bool, &'static str> {
-        if self.eof {
-            return Ok(false);
-        }
-        if self.pos == self.buf.len() {
-            self.buf.clear();
-            self.pos = 0;
-        }
-        let mut chunk = [0u8; 16 * 1024];
-        let n = loop {
-            match self.conn.read(&mut chunk) {
-                Ok(n) => break n,
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => {
-                    if os::interrupted() {
-                        return Err("interrupted");
-                    }
-                }
-                Err(e) => return Err(io_class(&e)),
-            }
-        };
-        if n == 0 {
-            self.eof = true;
-            return Ok(false);
-        }
-        self.buf.extend_from_slice(&chunk[..n]);
-        Ok(true)
-    }
-    fn readline(&mut self, limit: usize) -> Result<Vec<u8>, &'static str> {
-        loop {
-            let pending = &self.buf[self.pos..];
-            let end = pending.iter().position(|b| *b == b'\n').map(|i| i + 1);
-            if let Some(end) = end.filter(|e| *e <= limit) {
-                self.pos += end;
-                return Ok(pending[..end].to_vec());
-            }
-            if pending.len() >= limit {
-                self.pos += limit;
-                return Ok(pending[..limit].to_vec());
-            }
-            if !self.fill()? {
-                let line = pending_owned(&self.buf, self.pos);
-                self.pos = self.buf.len();
-                return Ok(line);
-            }
-        }
-    }
-    /// A framing line needs a real terminator; EOF is not an empty line.
-    fn framed_line(&mut self) -> Result<Vec<u8>, &'static str> {
-        let line = self.readline(MAX_LINE + 1)?;
-        if line.len() > MAX_LINE {
-            return Err(INVALID_RESPONSE);
-        }
-        if !line.ends_with(b"\n") {
-            return Err(INVALID_RESPONSE);
-        }
-        Ok(line)
-    }
-    /// Up to `n` bytes, fewer only at EOF.
-    fn read(&mut self, n: usize) -> Result<Vec<u8>, &'static str> {
-        while self.buf.len() - self.pos < n && self.fill()? {}
-        let take = n.min(self.buf.len() - self.pos);
-        let out = self.buf[self.pos..self.pos + take].to_vec();
-        self.pos += take;
-        Ok(out)
-    }
-    fn safe_read(&mut self, n: usize) -> Result<Vec<u8>, &'static str> {
-        let data = self.read(n)?;
-        if data.len() < n {
-            Err(INVALID_RESPONSE)
-        } else {
-            Ok(data)
-        }
-    }
-}
-fn pending_owned(buf: &[u8], pos: usize) -> Vec<u8> {
-    buf[pos..].to_vec()
-}
-
-fn is_py_space(c: char) -> bool {
-    validate::is_space(c)
-}
-fn latin1(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| *b as char).collect()
-}
-
-fn read_status(r: &mut Reader<impl Read>) -> Result<(String, i128), &'static str> {
-    let line = r.readline(MAX_LINE + 1)?;
-    if line.len() > MAX_LINE {
-        return Err(INVALID_RESPONSE);
-    }
-    if line.is_empty() {
-        return Err("connection_closed");
-    }
-    if !line.ends_with(b"\n") {
-        return Err(INVALID_RESPONSE);
-    }
-    let text = latin1(&line);
-    let mut words = text.split(is_py_space).filter(|w| !w.is_empty());
-    let (Some(version), Some(status)) = (words.next(), words.next()) else {
-        return Err(INVALID_RESPONSE);
-    };
-    if !version.starts_with("HTTP/") {
-        return Err(INVALID_RESPONSE);
-    }
-    let status = status
-        .is_ascii()
-        .then(|| py_int(status.as_bytes(), 10))
-        .flatten()
-        .ok_or(INVALID_RESPONSE)?;
-    if !(100..=999).contains(&status) {
-        return Err(INVALID_RESPONSE);
-    }
-    Ok((version.to_owned(), status))
-}
-
-fn read_header_block(r: &mut Reader<impl Read>) -> Result<Vec<u8>, &'static str> {
-    let (mut block, mut count) = (Vec::new(), 0);
-    loop {
-        let line = r.framed_line()?;
-        count += 1;
-        if count > MAX_HEADERS {
-            return Err(INVALID_RESPONSE);
-        }
-        if matches!(line.as_slice(), b"\r\n" | b"\n") {
-            return Ok(block);
-        }
-        block.extend_from_slice(&line);
-    }
-}
-
-/// Header fields as the `email` compat32 parser used by `http.client` reads them.
-fn parse_headers(block: &[u8]) -> Vec<(String, String)> {
-    let text = latin1(block);
-    let mut lines = Vec::new();
-    let mut start = 0;
-    let bytes = text.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'\r' if bytes.get(i + 1) == Some(&b'\n') => {
-                lines.push(&text[start..i + 2]);
-                i += 2;
-                start = i;
-            }
-            b'\r' | b'\n' => {
-                lines.push(&text[start..i + 1]);
-                i += 1;
-                start = i;
-            }
-            _ => i += 1,
-        }
-    }
-    if start < text.len() {
-        lines.push(&text[start..]);
-    }
-    let matches = |line: &str| {
-        line.starts_with("From ")
-            || line.starts_with([' ', '\t'])
-            || line
-                .find(|c: char| c == ':' || !('\x21'..='\x7e').contains(&c))
-                .is_some_and(|i| line[i..].starts_with(':'))
-    };
-    let mut out = Vec::new();
-    let mut last: Option<(String, String)> = None;
-    for line in lines.into_iter().take_while(|l| matches(l)) {
-        if line.starts_with([' ', '\t']) {
-            if let Some((_, value)) = last.as_mut() {
-                value.push_str(line);
-            }
-            continue;
-        }
-        if let Some((name, value)) = last.take() {
-            out.push((name, value.trim_end_matches(['\r', '\n']).to_owned()));
-        }
-        if line.starts_with("From ") {
-            continue;
-        }
-        match line.find(':') {
-            Some(i) if i > 0 => {
-                last = Some((
-                    line[..i].to_owned(),
-                    line[i + 1..].trim_start_matches([' ', '\t']).to_owned(),
-                ))
-            }
-            _ => continue,
-        }
-    }
-    if let Some((name, value)) = last {
-        out.push((name, value.trim_end_matches(['\r', '\n']).to_owned()));
-    }
-    out
-}
-fn header<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a str> {
-    headers
-        .iter()
-        .find(|(n, _)| n.eq_ignore_ascii_case(name))
-        .map(|(_, v)| v.as_str())
-}
-
-fn read_chunked(r: &mut Reader<impl Read>, mut amt: usize) -> Result<Vec<u8>, &'static str> {
-    let mut out = Vec::new();
-    let mut left: Option<usize> = None;
-    loop {
-        let chunk = match left {
-            Some(n) if n > 0 => n,
-            _ => {
-                if left.is_some() && r.safe_read(2)? != b"\r\n" {
-                    return Err("invalid_response");
-                }
-                let line = r.framed_line()?;
-                let size = line.split(|b| *b == b';').next().unwrap_or_default();
-                let size = py_int(size, 16)
-                    .filter(|n| *n >= 0)
-                    .ok_or(INVALID_RESPONSE)?;
-                if size == 0 {
-                    loop {
-                        let line = r.framed_line()?;
-                        if matches!(line.as_slice(), b"\r\n" | b"\n") {
-                            return Ok(out);
-                        }
-                    }
-                }
-                usize::try_from(size).unwrap_or(usize::MAX)
-            }
-        };
-        if amt <= chunk {
-            out.extend(r.safe_read(amt)?);
-            return Ok(out);
-        }
-        out.extend(r.safe_read(chunk)?);
-        amt -= chunk;
-        left = Some(0);
-    }
-}
-
-/// Read a framed response, capped at MAX_RESPONSE + 1 to detect oversized bodies.
-fn read_response(r: &mut Reader<impl Read>) -> Result<(i128, Vec<u8>), &'static str> {
-    let (version, status) = loop {
-        let (version, status) = read_status(r)?;
-        if status != 100 {
-            break (version, status);
-        }
-        read_header_block(r)?;
-    };
-    if !(version == "HTTP/1.0" || version == "HTTP/0.9" || version.starts_with("HTTP/1.")) {
-        return Err(INVALID_RESPONSE);
-    }
-    let headers = parse_headers(&read_header_block(r)?);
-    let chunked =
-        header(&headers, "transfer-encoding").is_some_and(|t| t.eq_ignore_ascii_case("chunked"));
-    let length = if status == 204 || status == 304 || (100..200).contains(&status) {
-        Some(0)
-    } else if chunked {
-        None
-    } else {
-        let mut length: Option<&str> = None;
-        for value in headers
-            .iter()
-            .filter(|(name, _)| name.eq_ignore_ascii_case("content-length"))
-            .flat_map(|(_, value)| value.split(','))
-        {
-            let value = value.trim_matches([' ', '\t']);
-            if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
-                return Err("invalid_response");
-            }
-            // Compare full values before the bounded integer conversion.
-            let value = value.trim_start_matches('0');
-            let value = if value.is_empty() { "0" } else { value };
-            if length.is_some_and(|previous| previous != value) {
-                return Err("invalid_response");
-            }
-            length = Some(value);
-        }
-        length
-            .map(|value| py_int(value.as_bytes(), 10).ok_or("invalid_response"))
-            .transpose()?
-    };
-    let amt = MAX_RESPONSE + 1;
-    let body = match length {
-        Some(0) => Vec::new(),
-        _ if chunked => read_chunked(r, amt)?,
-        Some(n) => r.safe_read(usize::try_from(n).unwrap_or(usize::MAX).min(amt))?,
-        None => r.read(amt)?,
-    };
-    Ok((status, body))
-}
-
-/// Resolver configuration must not widen the registered loopback destination.
-/// Public for `tests/opencode_transport.rs` only.
-pub fn connect_loopback<T>(
-    addrs: impl IntoIterator<Item = SocketAddr>,
-    mut connect: impl FnMut(SocketAddr) -> Option<T>,
-) -> Option<T> {
-    addrs
-        .into_iter()
-        .filter(|addr| addr.ip().is_loopback())
-        .find_map(&mut connect)
 }
 
 struct Server {
@@ -752,107 +293,131 @@ impl Server {
         })
     }
 
-    fn connect(&self) -> Result<Conn, Error> {
-        let unreachable = || Error::code("opencode_unreachable");
-        let addrs = (self.host.as_str(), self.port)
-            .to_socket_addrs()
-            .map_err(|_| unreachable())?;
-        let stream = connect_loopback(addrs, |addr| {
-            TcpStream::connect_timeout(&addr, TIMEOUT).ok()
-        })
-        .ok_or_else(unreachable)?;
-        stream
-            .set_read_timeout(Some(TIMEOUT))
-            .and_then(|_| stream.set_write_timeout(Some(TIMEOUT)))
-            .map_err(|_| unreachable())?;
-        let _ = stream.set_nodelay(true);
-        if self.https {
-            tls(stream, &self.host, self.port).map_err(|_| unreachable())
-        } else {
-            Ok(Conn::Plain(stream))
+    /// Where a request may go. Plain HTTP goes to an address of this machine by its number,
+    /// so no answer of a resolver widens it. HTTPS needs the name for the certificate, and
+    /// the certificate is then what holds it to this machine.
+    fn authorities(&self, name: &str) -> Vec<String> {
+        let Ok(found) = (self.host.as_str(), self.port).to_socket_addrs() else {
+            return Vec::new();
+        };
+        let (local, outside): (Vec<_>, Vec<_>) = found.partition(|a| a.ip().is_loopback());
+        if !self.https {
+            return local.iter().map(ToString::to_string).collect();
         }
+        if local.is_empty() || !outside.is_empty() {
+            return Vec::new();
+        }
+        vec![name.to_owned()]
+    }
+
+    /// One exchange with one address: the status and the whole body.
+    fn exchange(
+        &self,
+        uri: String,
+        name: &str,
+        auth: Option<&str>,
+        payload: Option<&str>,
+    ) -> Result<(u16, Vec<u8>), Req> {
+        use ureq::tls::{RootCerts, TlsConfig};
+        let mut config = ureq::Agent::config_builder()
+            .proxy(None)
+            .max_redirects(0)
+            .http_status_as_error(false)
+            .user_agent(ureq::config::AutoHeaderValue::None)
+            .timeout_connect(Some(TIMEOUT))
+            .timeout_send_request(Some(TIMEOUT))
+            .timeout_send_body(Some(TIMEOUT))
+            .timeout_recv_response(Some(TIMEOUT))
+            .timeout_recv_body(Some(TIMEOUT));
+        if self.https {
+            let roots = RootCerts::Specific(Arc::new(trust_roots()));
+            config = config.tls_config(TlsConfig::builder().root_certs(roots).build());
+        }
+        let agent: ureq::Agent = config.build().into();
+        let mut request = ureq::http::Request::builder()
+            .method(if payload.is_some() { "POST" } else { "GET" })
+            .uri(uri)
+            .header("Host", name)
+            .header("Accept-Encoding", "identity")
+            .header("Accept", "application/json");
+        if let Some(auth) = auth {
+            request = request.header("Authorization", auth);
+        }
+        if let Some(payload) = payload {
+            request = request
+                .header("Content-Type", "application/json")
+                .header("Content-Length", payload.len());
+        }
+        let asked = Cell::new(false);
+        let mut prompt = Prompt {
+            left: payload.unwrap_or_default().as_bytes(),
+            asked: &asked,
+        };
+        let sent = match payload {
+            Some(_) => request
+                .body(ureq::SendBody::from_reader(&mut prompt))
+                .map(|request| agent.run(request)),
+            None => request.body(()).map(|request| agent.run(request)),
+        };
+        let failed = |error: ureq::Error| {
+            let coded = |class| Error::code(format!("opencode_{class}"));
+            if asked.get() {
+                return Req::After(coded(class(&error)));
+            }
+            Req::Before(coded(match class(&error) {
+                // A handshake that failed reached no server.
+                "tls_failed" => "unreachable",
+                class => class,
+            }))
+        };
+        let mut answer = sent
+            .map_err(|_| Req::Before(Error::code("invalid_opencode_url")))?
+            .map_err(failed)?;
+        let status = answer.status().as_u16();
+        let mut raw = Vec::new();
+        let whole = answer.body_mut().as_reader();
+        whole
+            .take(MAX_RESPONSE as u64 + 1)
+            .read_to_end(&mut raw)
+            .map_err(|e| failed(e.into()))?;
+        if raw.len() > MAX_RESPONSE {
+            return Err(Req::After(Error::code("opencode_response_too_large")));
+        }
+        Ok((status, raw))
     }
 
     /// Return (status, json); JSON null and an empty body are both None.
     fn request(
         &self,
-        method: &str,
         path: &str,
         query: Option<&str>,
         body: Option<&str>,
-    ) -> Result<(i128, Option<Value>), Req> {
-        let target = format!(
-            "{}{}{}",
-            self.path,
-            path,
-            query
-                .map(|q| format!("?directory={}", quote(q, true)))
-                .unwrap_or_default()
-        );
+    ) -> Result<(u16, Option<Value>), Req> {
+        let unreachable = || Error::code("opencode_unreachable");
         let auth = credentials().map_err(Req::Before)?;
-        let payload = body.map(|text| {
-            format!(
-                "{{\"parts\": [{{\"type\": \"text\", \"text\": {}}}]}}",
-                json_string(text)
-            )
-        });
-        let conn = self.connect().map_err(Req::Before)?;
-        if target.bytes().any(|b| b <= b' ' || b == 0x7f) {
-            return Err(Req::After(Error::code("invalid_opencode_url")));
-        }
-        if !target.is_ascii() {
-            return Err(Req::Before(Error::code("invalid_opencode_url")));
-        }
-        let default_port = if self.https { 443 } else { 80 };
-        let host = if self.host.contains(':') {
-            format!("[{}]", self.host)
-        } else {
-            self.host.clone()
+        let payload =
+            body.map(|text| json!({"parts": [{"type": "text", "text": text}]}).to_string());
+        let scheme = if self.https { "https" } else { "http" };
+        let name = match self.host.contains(':') {
+            true => format!("[{}]:{}", self.host, self.port),
+            false => format!("{}:{}", self.host, self.port),
         };
-        let host = if self.port == default_port {
-            host
-        } else {
-            format!("{host}:{}", self.port)
-        };
-        let mut message =
-            format!("{method} {target} HTTP/1.1\r\nHost: {host}\r\nAccept-Encoding: identity\r\n");
-        if let Some(payload) = &payload {
-            message.push_str(&format!("Content-Length: {}\r\n", payload.len()));
+        let query = query
+            .map(|q| format!("?directory={}", quote(q, true)))
+            .unwrap_or_default();
+        let mut tried = Err(Req::Before(unreachable()));
+        for authority in self.authorities(&name) {
+            let uri = format!("{scheme}://{authority}{}{path}{query}", self.path);
+            tried = self.exchange(uri, &name, auth.as_deref(), payload.as_deref());
+            // An address that took no connection was sent nothing, so the next one is no
+            // second attempt.
+            if !matches!(&tried, Err(Req::Before(e)) if *e == unreachable()) {
+                break;
+            }
         }
-        message.push_str("Accept: application/json\r\n");
-        if let Some(auth) = &auth {
-            message.push_str(&format!("Authorization: {auth}\r\n"));
-        }
-        if payload.is_some() {
-            message.push_str("Content-Type: application/json\r\n");
-        }
-        message.push_str("\r\n");
-        message.push_str(payload.as_deref().unwrap_or(""));
-        let mut reader = Reader {
-            conn,
-            buf: Vec::new(),
-            pos: 0,
-            eof: false,
-        };
-        // Check after TCP/TLS setup too, immediately before the first request byte.
-        if os::interrupted() {
-            return Err(Req::Before(Error::Interrupted));
-        }
-        reader
-            .conn
-            .write_all(message.as_bytes())
-            .and_then(|_| reader.conn.flush())
-            .map_err(|e| uncertain(io_class(&e)))?;
-        let (status, raw) = read_response(&mut reader).map_err(uncertain)?;
-        if raw.len() > MAX_RESPONSE {
-            return Err(Req::After(Error::code("opencode_response_too_large")));
-        }
+        let (status, raw) = tried?;
         // A completely framed rejection is meaningful even when its error body is not JSON.
-        if !(200..300).contains(&status) {
-            return Ok((status, None));
-        }
-        let trimmed = raw.trim_ascii();
-        if trimmed.is_empty() {
+        if !(200..300).contains(&status) || raw.trim_ascii().is_empty() {
             return Ok((status, None));
         }
         let text = raw.strip_prefix(b"\xef\xbb\xbf".as_slice()).unwrap_or(&raw);
@@ -861,12 +426,12 @@ impl Server {
         Ok((status, if data.is_null() { None } else { Some(data) }))
     }
 
-    fn get(&self, path: &str, query: Option<&str>) -> Result<(i128, Option<Value>), Error> {
-        self.request("GET", path, query, None).map_err(Error::from)
+    fn get(&self, path: &str, query: Option<&str>) -> Result<(u16, Option<Value>), Error> {
+        self.request(path, query, None).map_err(Error::from)
     }
 }
 
-fn expect(response: (i128, Option<Value>), missing: &'static str) -> Result<Value, Error> {
+fn expect(response: (u16, Option<Value>), missing: &'static str) -> Result<Value, Error> {
     match response {
         (401, _) => Err(Error::code("opencode_unauthorized")),
         (404, _) => Err(Error::code(missing)),
@@ -980,7 +545,7 @@ impl Adapter for Opencode {
 }
 
 /// Exact session and workspace on the registered server, without messaging.
-pub fn probe(peer: &Peer) -> Result<Value, Error> {
+fn probe(peer: &Peer) -> Result<Value, Error> {
     let server = Server::new(peer.url.as_deref())?;
     let version = health(&server)?;
     let id = session_id(&peer.session_id)?;
@@ -995,7 +560,7 @@ pub fn probe(peer: &Peer) -> Result<Value, Error> {
 
 /// One prompt_async attempt after preflight. A 204 proves acceptance only;
 /// the model reading the text is established later by a reply or ack.
-pub fn notify(peer: &Peer, body: &str, skip: Skip<'_>) -> Outcome {
+fn notify(peer: &Peer, body: &str, skip: Skip<'_>) -> Outcome {
     let preflight = (|| {
         let server = Server::new(peer.url.as_deref())?;
         probe(peer)?;
@@ -1010,7 +575,7 @@ pub fn notify(peer: &Peer, body: &str, skip: Skip<'_>) -> Outcome {
         return Outcome::not_submitted(Error::Interrupted.to_string());
     }
     let path = format!("/session/{}/prompt_async", quote(&peer.session_id, false));
-    match server.request("POST", &path, Some(&peer.workspace), Some(body)) {
+    match server.request(&path, Some(&peer.workspace), Some(body)) {
         Err(Req::Before(failure)) => Outcome::not_submitted(failure.to_string()),
         Err(Req::After(failure)) => Outcome::unknown(failure.to_string()),
         Ok((204, _)) => Outcome::submitted("opencode_prompt_async_accepted"),
@@ -1230,16 +795,7 @@ fn saved_sessions(path: &Path) -> (Vec<Value>, Value) {
 /// Read-only discovery: GET requests and a read-only metadata file only; no
 /// session is created and no turn starts. A malformed URL is confined to its
 /// own source entry.
-pub fn discover(urls: Option<&[String]>, workspace: Option<&str>) -> Found {
-    discover_with(urls, workspace, None)
-}
-
-/// `discover` with an explicit saved-metadata database instead of the XDG default.
-pub fn discover_with(
-    urls: Option<&[String]>,
-    workspace: Option<&str>,
-    database: Option<&Path>,
-) -> Found {
+fn discover(urls: Option<&[String]>, workspace: Option<&str>) -> Found {
     let default = [DEFAULT_URL.to_owned()];
     let mut found = Found::default();
     let mut seen = std::collections::HashSet::new();
@@ -1252,10 +808,7 @@ pub fn discover_with(
             }
         }
     }
-    let database = database
-        .filter(|d| !d.as_os_str().is_empty())
-        .map_or_else(saved_database, Path::to_path_buf);
-    let (sessions, source) = saved_sessions(&database);
+    let (sessions, source) = saved_sessions(&saved_database());
     found.sources.push(source);
     found.sessions.extend(
         sessions

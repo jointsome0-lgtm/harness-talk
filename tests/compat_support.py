@@ -18,6 +18,7 @@ import shlex
 import signal
 import socket
 import sqlite3
+import ssl
 import subprocess
 import sys
 import tempfile
@@ -188,8 +189,47 @@ class ClaudeSocket:
         self.server.close()
 
 
+# An invented authority and a leaf it signed for 127.0.0.1 and localhost, made for these tests only.
+OPENCODE_CA = """-----BEGIN CERTIFICATE-----
+MIIBqzCCAVGgAwIBAgIUVPwnIyBgbkio+AdeII1Lh+3zp1wwCgYIKoZIzj0EAwIw
+IjEgMB4GA1UEAwwXaHRhbGsgc3ludGhldGljIHRlc3QgQ0EwIBcNMjYwOTIxMTcz
+MDQ2WhgPMjEyNjA4MjgxNzMwNDZaMCIxIDAeBgNVBAMMF2h0YWxrIHN5bnRoZXRp
+YyB0ZXN0IENBMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAElbDWoPA9on7fodE3
+nrLqvR1XB2222ypSrmnubHniReHlVWNeNla4HI9bLmgfcR9svd2V2M6vzXQpQBCd
+xQFotaNjMGEwHQYDVR0OBBYEFAt9N837vjOd25kuZEdD2VQOEcOzMB8GA1UdIwQY
+MBaAFAt9N837vjOd25kuZEdD2VQOEcOzMA8GA1UdEwEB/wQFMAMBAf8wDgYDVR0P
+AQH/BAQDAgIEMAoGCCqGSM49BAMCA0gAMEUCIBxK62Zvu5R4ZRTHKcZMRtZwRm/8
+QOaA8DLbFozQ2gMlAiEA2COOE3SHaBLN4zNyHCWbAyGvvmqIPtNmF4COtw3aO/I=
+-----END CERTIFICATE-----
+"""
+OPENCODE_LEAF = """-----BEGIN CERTIFICATE-----
+MIIBxzCCAW2gAwIBAgIUMI4Zcrd6BsE6O4vGA96CXRGDnIAwCgYIKoZIzj0EAwIw
+IjEgMB4GA1UEAwwXaHRhbGsgc3ludGhldGljIHRlc3QgQ0EwIBcNMjYwOTIxMTcz
+MDQ2WhgPMjEyNjA4MjgxNzMwNDZaMBQxEjAQBgNVBAMMCTEyNy4wLjAuMTBZMBMG
+ByqGSM49AgEGCCqGSM49AwEHA0IABEBRyeGFVaxpQyqA2KeQAJIr1lKd0EPdP6wO
+wVdn8Yaw117Mhrlwt2J3cTGwUTMMwjnQ9akPuDwlqrxbgy9k6/ijgYwwgYkwCQYD
+VR0TBAIwADALBgNVHQ8EBAMCB4AwEwYDVR0lBAwwCgYIKwYBBQUHAwEwGgYDVR0R
+BBMwEYcEfwAAAYIJbG9jYWxob3N0MB0GA1UdDgQWBBTISAN2ur0Cjr8kSnqnyhyC
+EUS5hTAfBgNVHSMEGDAWgBQLfTfN+74znduZLmRHQ9lUDhHDszAKBggqhkjOPQQD
+AgNIADBFAiEA3DJlTfHYql2pUKhglQ1UXC8gOO6IUEy0nG0gWI4t0JICICmOTQvH
+nlzPVoethsdRNpLe8hbmBiBhAb/puIdPLe9m
+-----END CERTIFICATE-----
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgDe5UrX8K+Ui2gTxm
+r1HcvURuuoazi+8b6BwiwopsSfChRANCAARAUcnhhVWsaUMqgNinkACSK9ZSndBD
+3T+sDsFXZ/GGsNdezIa5cLdid3ExsFEzDMI50PWpD7g8Jaq8W4MvZOv4
+-----END PRIVATE KEY-----
+"""
+
+
 class FakeOpenCode(BaseHTTPRequestHandler):
-    """The documented OpenCode server routes htalk uses, with invented data."""
+    """The documented OpenCode server routes htalk uses, with invented data.
+
+    Beside `sessions` and `requests`, the server's `state` may hold `status`, the answer of /session/status;
+    `listed`, the answer of GET /session; `prompt`, the status of the POST; `authorization`, the header a
+    request must carry; and `hook`, a function of the method and the path. Bytes it returns are sent in
+    place of the answer and the connection is closed, so b"" is a server that hangs up.
+    """
     def log_message(self, *args):
         pass
 
@@ -198,8 +238,11 @@ class FakeOpenCode(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            pass  # The command did not wait for this answer.
 
     def handle_request(self, method):
         state = self.server.state
@@ -208,18 +251,26 @@ class FakeOpenCode(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(length) or b"null")
         state["requests"].append({"method": method, "path": path, "query": query, "body": body,
                                   "authorization": self.headers.get("Authorization")})
+        instead = state["hook"](method, path) if "hook" in state else None
+        if instead is not None:
+            self.close_connection = True
+            return self.wfile.write(instead)
+        if state.get("authorization") not in (None, self.headers.get("Authorization")):
+            return self.answer(401, {"name": "Unauthorized"})
         parts = path.split("/")
         if (method, path) == ("GET", "/global/health"):
             return self.answer(200, {"healthy": True, "version": "1.18.30"})
         if (method, path) == ("GET", "/session/status"):
-            return self.answer(200, {})
+            return self.answer(200, state.get("status", {}))
+        if (method, path) == ("GET", "/session") and "listed" in state:
+            return self.answer(200, state["listed"])
         session = state["sessions"].get(parts[2]) if len(parts) > 2 else None
         if session is None:
             return self.answer(404, {"name": "NotFoundError"})
         if method == "GET" and len(parts) == 3:
             return self.answer(200, session)
         if method == "POST" and parts[3:] == ["prompt_async"]:
-            return self.answer(204)
+            return self.answer(state.get("prompt", 204))
         return self.answer(404, {"name": "NotFoundError"})
 
     def do_GET(self):
@@ -402,13 +453,18 @@ class HtalkCase(unittest.TestCase):
         (self.home / (".claude/sessions/%d.json" % pid)).write_text(json.dumps(saved))
         return {"CLAUDE_CODE_SESSION_ID": session_id, "CLAUDE_PID": str(pid)}
 
-    def opencode_server(self, sessions):
+    def opencode_server(self, sessions, tls=False):
         server = ThreadingHTTPServer(("127.0.0.1", 0), FakeOpenCode)
         server.state = {"requests": [], "sessions": sessions}
+        if tls:
+            (self.tmp / "leaf.pem").write_text(OPENCODE_LEAF)
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(self.tmp / "leaf.pem")
+            server.socket = context.wrap_socket(server.socket, server_side=True)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
-        return server, "http://127.0.0.1:%d" % server.server_address[1]
+        return server, "%s://127.0.0.1:%d" % ("https" if tls else "http", server.server_address[1])
 
     # Database inspection
 
