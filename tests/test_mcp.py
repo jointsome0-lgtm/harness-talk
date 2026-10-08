@@ -212,6 +212,68 @@ for line in sys.stdin:
                     client.close()
                 self.assertEqual(1, self.sql("SELECT count(*) FROM messages WHERE id=?", (request_id,))[0][0])
 
+    def test_what_a_connector_started_is_asked_to_stop_and_ends_with_the_call(self):
+        connector = self.tmp / "starts.py"
+        connector.write_text(STARTS)
+        for stop in ("complete", "cancel", "terminate"):
+            with self.subTest(stop=stop):
+                started, asked = self.tmp / ("started-" + stop), self.tmp / ("asked-" + stop)
+                client = McpClient(self, [sys.executable, str(connector), stop, str(started), str(asked)])
+                client.send("tools/call", {"name": "htalk", "arguments": {"args": ["inbox"]}}, 100)
+                descendant = wait_for(lambda: started.exists() and started.read_text(),
+                                      message="the connector to start a process")
+                if stop == "complete":
+                    while client.responses.get(timeout=15).get("id") != 100:
+                        pass
+                elif stop == "cancel":
+                    client.send("notifications/cancelled", {"requestId": 100, "reason": "test"})
+                else:
+                    client.process.send_signal(TERMINATE)
+                    client.process.wait(timeout=15)
+                    self.assertEqual(0, client.process.returncode)
+                if stop != "complete":  # A connector that has exited by itself is asked nothing.
+                    wait_for(asked.exists, message="the connector to be asked to stop before it is ended")
+                wait_for(lambda: gone(descendant), message="what the connector started to end")
+                if stop in ("complete", "cancel"):
+                    self.assertIn("result", client.request("ping"))
+                    client.close()
+
+
+# A connector that starts a process when it is called. In the cancelled call that process ignores the request
+# to stop. The connector records that it was asked, and leaves only then or when five seconds have passed.
+STARTS = """import json, signal, subprocess, sys, time
+from pathlib import Path
+stop, started, asked = sys.argv[1], Path(sys.argv[2]), Path(sys.argv[3])
+REQUEST = getattr(signal, 'SIGBREAK', signal.SIGTERM)
+STARTED = '''import signal, sys, time
+if sys.argv[1] == 'cancel':
+    signal.signal(getattr(signal, 'SIGBREAK', signal.SIGTERM), signal.SIG_IGN)
+print('ready', flush=True)
+time.sleep(20)
+'''
+signal.signal(REQUEST, lambda *_: asked.write_text('asked'))
+for line in sys.stdin:
+    frame = json.loads(line)
+    if frame['method'] == 'initialize':
+        result = {'protocolVersion': frame['params']['protocolVersion'],
+                  'capabilities': {'tools': {}},
+                  'serverInfo': {'name': 'harness-talk', 'version': 'test'}}
+        print(json.dumps({'jsonrpc': '2.0', 'id': frame['id'], 'result': result}), flush=True)
+    elif frame['method'] == 'tools/call':
+        child = subprocess.Popen([sys.executable, '-c', STARTED, stop], stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        child.stdout.readline()
+        started.write_text(str(child.pid))
+        if stop == 'complete':
+            print(json.dumps({'jsonrpc': '2.0', 'id': frame['id'], 'result': {'content': []}}), flush=True)
+            sys.exit(0)
+        sys.stdin.read()
+        until = time.monotonic() + 5
+        while not asked.exists() and time.monotonic() < until:
+            time.sleep(.01)
+        sys.exit(0)
+"""
+
 
 if __name__ == "__main__":
     unittest.main()
