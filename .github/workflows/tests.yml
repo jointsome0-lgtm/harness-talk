@@ -137,3 +137,9 @@ jobs:
           "$bin/python" -m pip install .
           "$bin/python" -m pip check
           "$bin/htalk" --version
+          # A runner has the Visual C++ runtime and a person's machine may not, so running the
+          # executable here does not show that it needs none. Its imports must not name it.
+          if [ -f "$bin/htalk.exe" ] && LC_ALL=C grep -qai vcruntime140 "$bin/htalk.exe"; then
+            echo "htalk.exe asks for the Visual C++ runtime"
+            exit 1
+          fi

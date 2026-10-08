@@ -3,3 +3,8 @@
 # The flag reaches every target and changes Linux alone: on macOS SQLite calls fsync whatever
 # it says, and on Windows the code that reads it is not built.
 LIBSQLITE3_FLAGS = "-DHAVE_FDATASYNC"
+
+# The Windows executable carries its C runtime. Left to the default it asks for VCRUNTIME140.dll,
+# which is not part of Windows: a machine without the Visual C++ redistributable cannot start it.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = ["-C", "target-feature=+crt-static"]

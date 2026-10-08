@@ -6,7 +6,7 @@ A part that is not ported answers `unsupported_on_this_platform` with exit code 
 
 | Part | Linux | macOS | Windows |
 | --- | --- | --- | --- |
-| Wheel | x86-64 and ARM64, glibc 2.28+. Runner, and live for x86-64. | ARM64 (macOS 11+) and x86-64 (10.12+). Runner: each wheel installed and run on its own architecture. | x64. Runner. No ARM64 wheel. |
+| Wheel | x86-64 and ARM64, glibc 2.28+. Runner, and live for x86-64. | ARM64 (macOS 11+) and x86-64 (10.12+). Runner: each wheel installed and run on its own architecture. | x64. Runner. No ARM64 wheel. The executable carries its C runtime, so it needs no Visual C++ redistributable. Runner: its imports do not name `VCRUNTIME140.dll`; no machine without the redistributable has run it. |
 | Source install | Runner: the source archive is rebuilt. | Runner: `pip install .` from the checkout. | Runner: `pip install .` from the checkout. |
 | Mailbox, pull peers, `send`, `reply`, `wait`, `show`, `ack`, `inbox`, `sent`, schema upgrades, Ctrl-C with exit 130 | Runner (`test_cli_compat`, `test_mail_recovery`) and live. | Runner: the same tests, and `tests/platform.rs`. | Runner: the same tests, and `tests/platform.rs`. |
 | Two writers at once | Runner (`ContendedWrites`). | Runner (`ContendedWrites`). | Runner: one of three `ContendedWrites` tests; two need a named pipe in the file tree and are skipped. |
