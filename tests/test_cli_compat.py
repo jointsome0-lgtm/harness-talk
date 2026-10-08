@@ -1976,6 +1976,17 @@ class ContendedWrites(HtalkCase):
         self.assertEqual("carol", self.finish(waiting)["name"])
         self.assertEqual([], self.sql("SELECT id FROM messages"))
 
+    def test_send_gives_up_five_seconds_after_it_finds_the_mailbox_held(self):
+        writer = self.hold("BEGIN IMMEDIATE")
+        started = time.monotonic()
+        self.error("--as", "alice", "send", "bob", "--message", "Too late", "--no-notify", error="database is locked")
+        waited = time.monotonic() - started
+        writer.rollback()
+        # The budget is five seconds by the clock, so this test asserts a duration. Its upper bound leaves
+        # room for a machine that starts a process slowly, and none for a wait that counts its pauses.
+        self.assertTrue(4.5 < waited < 10, "the send gave up after %.2f seconds" % waited)
+        self.assertEqual([], self.sql("SELECT id FROM messages"))
+
     def test_senders_that_write_at_once_lose_no_message(self):
         ids = [str(uuid.uuid4()) for _ in range(16)]
         senders = [self.spawn("--as", "alice", "send", "bob", "--id", one, "--message", "From " + one, "--no-notify")
