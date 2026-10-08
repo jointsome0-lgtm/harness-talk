@@ -1,6 +1,5 @@
 //! Windows: where the mailbox is, how its files are opened and locked, Ctrl-C and Ctrl-Break,
-//! and a child with everything it starts. A closed output is not ported yet and says below
-//! what happens until then.
+//! a child with everything it starts, and an output whose reader has gone.
 use super::home;
 use std::{
     env,
@@ -14,13 +13,18 @@ use std::{
     },
     time::{Duration, Instant},
 };
+use windows_sys::Wdk::Storage::FileSystem::{
+    FILE_PIPE_CLOSING_STATE, FILE_PIPE_LOCAL_INFORMATION, FilePipeLocalInformation,
+    NtQueryInformationFile,
+};
 use windows_sys::Win32::{
     Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0},
-    Storage::FileSystem::{LOCKFILE_EXCLUSIVE_LOCK, LockFileEx},
+    Storage::FileSystem::{FILE_TYPE_PIPE, GetFileType, LOCKFILE_EXCLUSIVE_LOCK, LockFileEx},
     System::{
         Console::{
             CTRL_BREAK_EVENT, CTRL_C_EVENT, GenerateConsoleCtrlEvent, SetConsoleCtrlHandler,
         },
+        IO::IO_STATUS_BLOCK,
         JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
             JOBOBJECT_BASIC_ACCOUNTING_INFORMATION, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
@@ -276,7 +280,24 @@ pub fn lock(file: &File) -> io::Result<()> {
     }
     Ok(())
 }
-/// Not ported: a closed output is noticed at the next write.
-pub fn hung_up<T>(_io: &T) -> bool {
-    false
+/// The other end of `io` is gone, seen without reading or writing. A pipe says so when it is
+/// asked for its state. What is no pipe, and a pipe that may not be asked, say nothing, and a
+/// closed output is then noticed at the next write.
+pub fn hung_up(io: &impl AsRawHandle) -> bool {
+    let handle = io.as_raw_handle();
+    if unsafe { GetFileType(handle) } != FILE_TYPE_PIPE {
+        return false;
+    }
+    let mut status: IO_STATUS_BLOCK = unsafe { std::mem::zeroed() };
+    let mut pipe: FILE_PIPE_LOCAL_INFORMATION = unsafe { std::mem::zeroed() };
+    let answered = unsafe {
+        NtQueryInformationFile(
+            handle,
+            &mut status,
+            (&raw mut pipe).cast(),
+            size_of::<FILE_PIPE_LOCAL_INFORMATION>() as u32,
+            FilePipeLocalInformation,
+        )
+    };
+    answered >= 0 && pipe.NamedPipeState == FILE_PIPE_CLOSING_STATE
 }
