@@ -137,9 +137,11 @@ jobs:
           "$bin/python" -m pip install .
           "$bin/python" -m pip check
           "$bin/htalk" --version
-          # A runner has the Visual C++ runtime and a person's machine may not, so running the
-          # executable here does not show that it needs none. Its imports must not name it.
-          if [ -f "$bin/htalk.exe" ] && LC_ALL=C grep -qai vcruntime140 "$bin/htalk.exe"; then
-            echo "htalk.exe asks for the Visual C++ runtime"
-            exit 1
-          fi
+      - name: Start it in a Windows that has no Visual C++ runtime
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $image = "mcr.microsoft.com/windows/nanoserver:ltsc2025"
+          foreach ($try in 1..3) { docker pull --quiet $image; if ($LASTEXITCODE -eq 0) { break } }
+          Copy-Item scripts\windows_clean_start.cmd "$env:RUNNER_TEMP\source\Scripts"
+          docker run --rm -v "$env:RUNNER_TEMP\source\Scripts:C:\htalk" $image cmd /c C:\htalk\windows_clean_start.cmd
