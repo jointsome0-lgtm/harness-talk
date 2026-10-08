@@ -510,8 +510,10 @@ class InboxWatch(HtalkCase):
         restarted.send_signal(INTERRUPT)
         self.assertEqual(130, restarted.wait(timeout=15))
 
-        # An extension crash closes the pipe, even without another arriving message.
-        idle = self.spawn("--as", "alice", "watch")
+        # An extension crash closes the pipe. Nothing waits for this peer and nothing arrives, so no
+        # failed write ends the watcher: it has to notice the closed pipe by itself.
+        self.htalk("peer", "add", "carol", "--harness", "test", "--delivery", "pull")
+        idle = self.spawn("--as", "carol", "watch")
         self.addCleanup(idle.stderr.close)
         self.assertEqual("ready", json.loads(idle.stdout.readline())["event"])
         idle.stdout.close()
