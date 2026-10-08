@@ -225,9 +225,15 @@ thread_local! { static LOCK_WAIT: Cell<Option<Instant>> = const { Cell::new(None
 /// The budget is time by the clock: a system that sleeps longer than it was
 /// asked to, as macOS does, would turn a count of pauses into many seconds more.
 fn wait_for_lock(attempt: i32) -> bool {
-    if let Some(retry) = crate::write_turn::wait(attempt) {
-        return retry;
-    }
+    let pause = match crate::write_turn::wait() {
+        Some(false) => return false,
+        Some(true) => 1,
+        None => match attempt {
+            0 => 1,
+            1 => 2,
+            _ => 5,
+        },
+    };
     let start = match LOCK_WAIT.get().filter(|_| attempt > 0) {
         Some(start) => start,
         None => {
@@ -239,12 +245,7 @@ fn wait_for_lock(attempt: i32) -> bool {
     let Some(remaining) = Duration::from_secs(5).checked_sub(start.elapsed()) else {
         return false;
     };
-    let pause = Duration::from_millis(match attempt {
-        0 => 1,
-        1 => 2,
-        _ => 5,
-    });
-    thread::sleep(pause.min(remaining));
+    thread::sleep(Duration::from_millis(pause).min(remaining));
     !remaining.is_zero()
 }
 

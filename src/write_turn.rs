@@ -36,17 +36,16 @@ pub fn started_write() {
 pub fn queued(held: bool) {
     MODE.set(if held { Mode::Heir } else { Mode::Normal });
 }
-pub fn wait(attempt: i32) -> Option<bool> {
+/// What a busy mailbox means to a send before its first write: `None` is the wait of any
+/// writer, `Some(false)` is no wait, and `Some(true)` is the same budget in pauses of one
+/// millisecond, for the send that holds the turn.
+pub fn wait() -> Option<bool> {
     match MODE.get() {
         Mode::Normal => None,
         Mode::Fresh => Some(false),
         // Nothing is written yet, so an interrupt ends the wait. Later waits record what is
         // already known, a notification's receipt among it, and are not cut short.
-        Mode::Heir if attempt >= 5000 || os::interrupted() => Some(false),
-        Mode::Heir => {
-            thread::sleep(Duration::from_millis(1));
-            Some(true)
-        }
+        Mode::Heir => Some(!os::interrupted()),
     }
 }
 
