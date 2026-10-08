@@ -12,11 +12,14 @@ use std::{
     time::{Duration, Instant},
 };
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0},
+    Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0},
     Storage::FileSystem::{LOCKFILE_EXCLUSIVE_LOCK, LockFileEx},
     System::{
         Console::{
             CTRL_BREAK_EVENT, CTRL_C_EVENT, GenerateConsoleCtrlEvent, SetConsoleCtrlHandler,
+        },
+        Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
         },
         JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -25,8 +28,9 @@ use windows_sys::Win32::{
             QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
         },
         Threading::{
-            CREATE_NEW_PROCESS_GROUP, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-            PROCESS_SET_QUOTA, PROCESS_TERMINATE, WaitForSingleObject,
+            CREATE_NEW_PROCESS_GROUP, CREATE_SUSPENDED, OpenProcess, OpenThread,
+            PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE, ResumeThread,
+            THREAD_SUSPEND_RESUME, WaitForSingleObject,
         },
     },
 };
@@ -90,12 +94,15 @@ pub fn stop_requests() -> io::Result<(tokio::signal::windows::CtrlC, Terminate)>
 }
 
 /// A child that leads a process group of its own, so that Ctrl-Break can be sent to it alone.
+/// It is created suspended and does not run until `OwnedGroup::new` has put it in a job, so
+/// nothing it starts is outside the job. Until then it ends with the handle the caller holds.
 pub trait Grouped {
     fn own_group(&mut self) -> &mut Self;
 }
 impl Grouped for tokio::process::Command {
     fn own_group(&mut self) -> &mut Self {
-        self.creation_flags(CREATE_NEW_PROCESS_GROUP)
+        self.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_SUSPENDED)
+            .kill_on_drop(true)
     }
 }
 
@@ -111,7 +118,7 @@ impl Drop for Owned {
 }
 
 /// A child and everything it starts, held in a job. The caller retains the direct Child, so
-/// the number names this child. What the child started before it entered the job is not in it.
+/// the number names this child.
 pub struct OwnedGroup {
     leader: u32,
     process: Owned,
@@ -158,7 +165,42 @@ impl OwnedGroup {
                 return Err(refused);
             }
         }
+        group.resume()?;
         Ok(group)
+    }
+
+    /// Lets the child run. It was created suspended and has the one thread it was created
+    /// with; the list of every thread of the system is where Windows names it.
+    fn resume(&self) -> io::Result<()> {
+        let threads = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
+        if threads == INVALID_HANDLE_VALUE {
+            return Err(io::Error::last_os_error());
+        }
+        let threads = Owned(threads);
+        let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
+        entry.dwSize = size_of::<THREADENTRY32>() as u32;
+        let mut resumed = false;
+        let mut more = unsafe { Thread32First(threads.0, &mut entry) };
+        while more != 0 {
+            if entry.th32OwnerProcessID == self.leader {
+                let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
+                if thread.is_null() {
+                    return Err(io::Error::last_os_error());
+                }
+                let thread = Owned(thread);
+                if unsafe { ResumeThread(thread.0) } == u32::MAX {
+                    return Err(io::Error::last_os_error());
+                }
+                resumed = true;
+            }
+            more = unsafe { Thread32Next(threads.0, &mut entry) };
+        }
+        // A child that was let run by no one would wait for ever.
+        if resumed || self.exited()? {
+            Ok(())
+        } else {
+            Err(io::Error::other("The suspended child has no thread"))
+        }
     }
 
     /// Whether the child has exited.
@@ -191,11 +233,17 @@ impl OwnedGroup {
         Ok(found.ActiveProcesses)
     }
 
-    /// Ends what still runs in the job. Windows has no request to stop, so there is no grace.
+    /// Asks a child that still runs to stop, and two seconds later ends what runs in the job.
+    /// Ctrl-Break is the one request Windows has, and it goes to the group that a living child
+    /// leads. A child that is gone or a console that is not shared leaves nothing to ask, and
+    /// the job is ended at once.
     pub async fn finish_async(&mut self) -> io::Result<()> {
         let start = Instant::now();
+        let asked = !self.exited()? && self.interrupt().is_ok();
         while self.active()? != 0 {
-            unsafe { TerminateJobObject(self.job.0, 1) };
+            if !asked || start.elapsed() >= Duration::from_secs(2) {
+                unsafe { TerminateJobObject(self.job.0, 1) };
+            }
             if start.elapsed() >= Duration::from_secs(4) {
                 return Err(io::Error::other(
                     "Owned process cleanup did not complete in four seconds",
