@@ -747,6 +747,8 @@ The lock lifecycle follows Codex's [writer ownership implementation](https://git
 
 The adapter runs `claude agents --json` and selects exactly one live record matching both session UUID and workspace. It reads only that PID's `~/.claude/sessions/PID.json` metadata, verifies the UUID and workspace again, and checks the Unix socket's type and owner. It never reads credentials.
 
+Claude Code keeps its files under `$CLAUDE_CONFIG_DIR` when that variable is set. htalk then reads `$CLAUDE_CONFIG_DIR/sessions/PID.json`, here and where it recognizes the session that runs a command. Through 0.14.0 it read `~/.claude/sessions` only and did not find such a session. The variable is the command's own: a command started without it does not find a session that was started with it, and an empty one counts as unset. The place was read from the package `2.1.295` and tried on 2026-10-09 with that version on Linux, signed out, in an empty home directory: the client made `sessions/` and the session's key file under the variable's directory, nothing in the home directory, and, with `XDG_RUNTIME_DIR` unset, its socket at `/tmp/cc-socks/PID.sock` with mode `0600`. A signed-out client writes no `PID.json`, so no notice to a session started with the variable was tried.
+
 A command run by Claude Code can omit `--as`: htalk then locates the same metadata file through the command's `CLAUDE_PID`, without running `claude`, and verifies process ancestry in `/proc`. See [peer selection](reference.md#database-and-peers) for the checks and their limits. In the 2026-09-17 checks with Claude Code `2.1.274`, every message command run by Claude Code omitted `--as` and reported `actor_source: native_session`. A detached tmux window given one session's `CLAUDE_CODE_SESSION_ID` and `CLAUDE_PID` was refused with `claude_pid_not_an_ancestor`. After `/clear`, that session had a new ID, and htalk selected no peer for it. `claude --resume` with the original ID kept that ID, and the session's peer was selected again.
 
 The frame contains `type: user`, session and message UUIDs, an honest `htalk:PEER` sender, `priority: next`, and a message pointing to the inbox. It does not assert permission classes or impersonate a native Claude peer. A successful socket write proves only that the bytes were written. The adapter does not claim the model saw them.
@@ -778,14 +780,12 @@ At this commit the path of the control socket is a symbolic link on Linux and ma
 | What htalk uses | macOS | Windows |
 | --- | --- | --- |
 | `claude agents --json` | The option is there. The fields of a row were not read. | The same. |
-| `sessions/PID.json` with `sessionId`, `cwd` and `messagingSocketPath` | In `~/.claude`, as on Linux. | The same, under the user's profile directory. |
+| `sessions/PID.json` with `sessionId`, `cwd` and `messagingSocketPath` | In `~/.claude`, or in `$CLAUDE_CONFIG_DIR`, as on Linux. | The same, under the user's profile directory. |
 | Where a session listens | A Unix socket, as on Linux: `cc-socks/PID.sock` in `$XDG_RUNTIME_DIR`, else in `$CLAUDE_CODE_TMPDIR`, else in `/tmp`. A path longer than 103 bytes becomes `/tmp/cc-socks-UID/PID.sock`. htalk builds no path and takes the one in the session file. | A named pipe, `\\.\pipe\LOCAL\cc-msg-` and 32 random hexadecimal digits. It is no file, so it has no owner to check as htalk checks a socket's. |
 | What a connection sends first | The frame. A line of authentication is accepted and not required, on Linux too. | A line `{"type":"auth","token":TOKEN}`. A connection that sends anything else first is closed. The token is `peerToken` in `sessions/PID.HASH.key`, where `HASH` is the SHA-256 of the pipe's path in lower case. |
 | `CLAUDE_PID` and `CLAUDE_CODE_SESSION_ID` in the environment of a command | Set as on Linux. | Set as on Linux. |
 
 On Windows this messaging is behind a second switch of the client, `tengu_harbor_kite_win`. Its default in the package is on. What the service sets for an account was not seen.
-
-Claude Code keeps `sessions/` under `$CLAUDE_CONFIG_DIR` when that variable is set. htalk reads `~/.claude/sessions` only, so it does not find a session that was started with the variable. That holds on Linux today. It was read and not tried.
 
 ### What a port needs in htalk
 

@@ -4,7 +4,7 @@
 //! and forgeable by the same OS account, so it is not authentication.
 use crate::{model::NativeSession, os, validate};
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 pub const MAX_DEPTH: usize = 64;
 const CLIENTS: [&[u8]; 3] = [b"claude", b"codex", b"opencode"];
@@ -29,8 +29,17 @@ fn unrecognized(reason: &'static str) -> NativeSession {
     NativeSession::Unrecognized { reason }
 }
 
+/// Where Claude Code keeps its session files: under `CLAUDE_CONFIG_DIR` when the caller has it
+/// set and not empty, else under `~/.claude`.
+pub fn claude_sessions(env: &dyn Fn(&str) -> Option<String>) -> PathBuf {
+    env("CLAUDE_CONFIG_DIR")
+        .filter(|dir| !dir.is_empty())
+        .map_or_else(|| os::home().join(".claude"), PathBuf::from)
+        .join("sessions")
+}
+
 /// Return the recognized session_id and workspace, or the first failed condition as reason.
-/// `sessions_dir` defaults to `~/.claude/sessions` and `pid` to this process.
+/// `sessions_dir` defaults to `claude_sessions` and `pid` to this process.
 pub fn claude_session(
     env: &dyn Fn(&str) -> Option<String>,
     proc_root: &Path,
@@ -58,8 +67,7 @@ pub fn claude_session(
     else {
         return unrecognized("claude_process_unavailable");
     };
-    let sessions =
-        sessions_dir.map_or_else(|| os::home().join(".claude/sessions"), Path::to_path_buf);
+    let sessions = sessions_dir.map_or_else(|| claude_sessions(env), Path::to_path_buf);
     let metadata = std::fs::read(sessions.join(format!("{claude_pid}.json")))
         .ok()
         .and_then(|bytes| String::from_utf8(bytes).ok())
