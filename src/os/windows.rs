@@ -8,7 +8,10 @@ use std::{
     io,
     os::windows::io::AsRawHandle,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::{
+        OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::{Duration, Instant},
 };
 use windows_sys::Win32::{
@@ -25,8 +28,9 @@ use windows_sys::Win32::{
             QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
         },
         Threading::{
-            CREATE_NEW_PROCESS_GROUP, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-            PROCESS_SET_QUOTA, PROCESS_TERMINATE, WaitForSingleObject,
+            CREATE_NEW_PROCESS_GROUP, GetCurrentProcess, OpenProcess,
+            PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+            WaitForSingleObject,
         },
     },
 };
@@ -95,6 +99,7 @@ pub trait Grouped {
 }
 impl Grouped for tokio::process::Command {
     fn own_group(&mut self) -> &mut Self {
+        end_with_this_process();
         self.creation_flags(CREATE_NEW_PROCESS_GROUP)
     }
 }
@@ -110,8 +115,43 @@ impl Drop for Owned {
     }
 }
 
+/// A job that ends its members when its last handle is closed, as when its holder is killed.
+fn closing_job() -> io::Result<Owned> {
+    let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
+    if job.is_null() {
+        return Err(io::Error::last_os_error());
+    }
+    let job = Owned(job);
+    let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    if unsafe {
+        SetInformationJobObject(
+            job.0,
+            JobObjectExtendedLimitInformation,
+            (&raw const limits).cast(),
+            size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+        )
+    } == 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(job)
+}
+
+/// Puts this process in such a job, once, before it starts a child. The child is born in it,
+/// so what the child starts before it has entered a job of its own still ends when this process
+/// does. Where this process can enter no job, that is not so.
+fn end_with_this_process() {
+    static JOB: OnceLock<Option<Owned>> = OnceLock::new();
+    JOB.get_or_init(|| {
+        let job = closing_job().ok()?;
+        (unsafe { AssignProcessToJobObject(job.0, GetCurrentProcess()) } != 0).then_some(job)
+    });
+}
+
 /// A child and everything it starts, held in a job. The caller retains the direct Child, so
-/// the number names this child. What the child started before it entered the job is not in it.
+/// the number names this child. What the child started before it entered the job is not in it
+/// and ends with this process.
 pub struct OwnedGroup {
     leader: u32,
     process: Owned,
@@ -126,31 +166,13 @@ impl OwnedGroup {
         if process.is_null() {
             return Err(io::Error::last_os_error());
         }
-        let process = Owned(process);
-        let job = unsafe { CreateJobObjectW(std::ptr::null(), std::ptr::null()) };
-        if job.is_null() {
-            return Err(io::Error::last_os_error());
-        }
+        // A server that is killed runs no cleanup. Its handle to the job closes with it, and
+        // that is the end of the members.
         let group = Self {
             leader: pid,
-            process,
-            job: Owned(job),
+            process: Owned(process),
+            job: closing_job()?,
         };
-        // A server that is killed runs no cleanup. Its handle to the job closes with it, and
-        // this makes that the end of the members.
-        let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = unsafe { std::mem::zeroed() };
-        limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-        if unsafe {
-            SetInformationJobObject(
-                group.job.0,
-                JobObjectExtendedLimitInformation,
-                (&raw const limits).cast(),
-                size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
-            )
-        } == 0
-        {
-            return Err(io::Error::last_os_error());
-        }
         if unsafe { AssignProcessToJobObject(group.job.0, group.process.0) } == 0 {
             let refused = io::Error::last_os_error();
             // A child that has exited enters no job, and has nothing left to stop.
@@ -191,11 +213,17 @@ impl OwnedGroup {
         Ok(found.ActiveProcesses)
     }
 
-    /// Ends what still runs in the job. Windows has no request to stop, so there is no grace.
+    /// Asks a child that still runs to stop, and two seconds later ends what runs in the job.
+    /// Ctrl-Break is the one request Windows has, and it goes to the group that a living child
+    /// leads. A child that is gone leaves nothing to ask, and where the request cannot be sent
+    /// there is nothing to wait for: the job is ended at once.
     pub async fn finish_async(&mut self) -> io::Result<()> {
         let start = Instant::now();
+        let asked = !self.exited()? && self.interrupt().is_ok();
         while self.active()? != 0 {
-            unsafe { TerminateJobObject(self.job.0, 1) };
+            if !asked || start.elapsed() >= Duration::from_secs(2) {
+                unsafe { TerminateJobObject(self.job.0, 1) };
+            }
             if start.elapsed() >= Duration::from_secs(4) {
                 return Err(io::Error::other(
                     "Owned process cleanup did not complete in four seconds",
