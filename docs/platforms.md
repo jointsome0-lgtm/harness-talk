@@ -16,7 +16,7 @@ A part that is not ported answers `unsupported_on_this_platform` with exit code 
 | OpenCode delivery and discovery | Runner and live, see [OpenCode](opencode.md). | Runner, against the test server only (`OpenCodeServer`, `OpenCodeDiscovery`). | Runner, against the test server only. |
 | Native delivery to Codex and Claude Code, their discovery, `receive` | Runner and live, see [adapters](adapters.md). | `unsupported_on_this_platform`. Runner: `tests/platform.rs`. | `unsupported_on_this_platform`. Runner: `tests/platform.rs`. |
 | The catalogue of profiles | Runner (`test_catalog`, `test_catalog_channels`). | `unsupported_on_this_platform`. Runner: `tests/platform.rs`. | `unsupported_on_this_platform`. Runner: `tests/platform.rs`. |
-| Session receivers and managed sessions of [integrations](../integrations/README.md) | Runner; live as each page says. | Nothing backs it. They read `watch`, which is ported; none was run there. | Nothing backs it. |
+| Session receivers and managed sessions of [integrations](../integrations/README.md) | Runner; live as each page says. | Runner for the JavaScript receivers of Pi and Cline, with modeled SDK calls (`test_js_watchers`). No real harness was run there. Nothing backs the others, and the managed receivers need Linux. | The same as macOS. A receiver's signal to stop ends its watcher at once there, with no request before it. |
 
 On the runners 89 contract tests run on each of the two systems. One of them, after 0.14.0, starts a process from a connector of `htalk mcp --connect` and shows it ending with the call on every system. macOS skips 29 tests and subtests, all of native delivery. Windows skips 31: the same 29 and the two that need a named pipe. Every skip prints its reason.
 

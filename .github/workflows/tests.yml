@@ -129,6 +129,11 @@ jobs:
         run: |
           cd tests
           python -B -m unittest test_cli_compat test_mcp test_mail_recovery -v
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Test JavaScript watcher lifecycle
+        run: node --experimental-vm-modules --test tests/test_js_watchers.mjs
       - name: Install from the checkout
         run: |
           python -m venv "$RUNNER_TEMP/source"

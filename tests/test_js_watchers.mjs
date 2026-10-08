@@ -279,9 +279,14 @@ for (const stubborn of [false, true]) {
       await f.shutdown();
       await closing;
       const elapsed = Date.now() - started;
-      assert.equal(child.signalCode, stubborn ? 'SIGKILL' : null);
-      if (stubborn) assert.ok(elapsed >= 1900 && elapsed < 5000, `termination took ${elapsed}ms`);
-      else assert.equal(child.exitCode, 0);
+      if (process.platform === 'win32') {
+        // Node has no request to stop there: the first signal ends the child, whatever it would do.
+        assert.equal(child.signalCode, 'SIGTERM');
+      } else {
+        assert.equal(child.signalCode, stubborn ? 'SIGKILL' : null);
+        if (stubborn) assert.ok(elapsed >= 1900 && elapsed < 5000, `termination took ${elapsed}ms`);
+        else assert.equal(child.exitCode, 0);
+      }
       assert.equal(f.notices.length, 1);
       assert.throws(() => process.kill(child.pid, 0), { code: 'ESRCH' });
     } finally {
