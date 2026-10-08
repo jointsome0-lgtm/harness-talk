@@ -2,14 +2,14 @@
 
 As of 0.14.0. A cell says whether the part is ported and what stands behind the claim. "Runner" is a test on a GitHub-hosted runner of that system, run on every pull request by `tests.yml` and on every wheel by `publish.yml`. "Live" is a dated check with real clients on a person's machine. A runner is not a person's machine: no real Codex, Claude Code or OpenCode has run on macOS or Windows.
 
-A part that is not ported answers `unsupported_on_this_platform` with exit code 2 and writes nothing. A notice to a peer whose delivery is not ported is recorded as not submitted with that code, and the message stays saved.
+A part that is not ported answers `unsupported_on_this_platform` with exit code 2 and writes nothing of its own. `peer check` opens the mailbox before it answers, and opening a schema-1/2 mailbox migrates it, as any ordinary command does. `peer discover` gives the code as the `detail` of each source it cannot ask, and exits with 2 when it could ask none. A notice to a peer whose delivery is not ported is recorded as not submitted with that code, and the message stays saved.
 
 | Part | Linux | macOS | Windows |
 | --- | --- | --- | --- |
 | Wheel | x86-64 and ARM64, glibc 2.28+. Runner, and live for x86-64. | ARM64 (macOS 11+) and x86-64 (10.12+). Runner: each wheel installed and run on its own architecture. | x64. Runner. No ARM64 wheel. The executable carries its C runtime, so it needs no Visual C++ redistributable. Runner: it is started and keeps a mailbox in a Windows container that has no such runtime. No desktop without the redistributable has run it. |
 | Source install | Runner: the source archive is rebuilt. | Runner: `pip install .` from the checkout. | Runner: `pip install .` from the checkout. |
 | Mailbox, pull peers, `send`, `reply`, `wait`, `show`, `ack`, `inbox`, `sent`, schema upgrades, Ctrl-C with exit 130 | Runner (`test_cli_compat`, `test_mail_recovery`) and live. | Runner: the same tests, and `tests/platform.rs`. | Runner: the same tests, and `tests/platform.rs`. |
-| Two writers at once | Runner (`ContendedWrites`). | Runner (`ContendedWrites`). | Runner: one of three `ContendedWrites` tests; two need a named pipe in the file tree and are skipped. |
+| Two writers at once | Runner (`ContendedWrites`). | Runner (`ContendedWrites`). | Runner: three of the five `ContendedWrites` tests that need no client; two need a named pipe in the file tree and are skipped. |
 | `watch` | Runner and live. | Runner (`InboxWatch`). | Runner (`InboxWatch`). It does not notice that its reader has gone until its next line. |
 | The MCP tool, `htalk mcp` | Runner (`test_mcp`) and live. | Runner (`test_mcp`, `tests/process_group.rs`). | Runner (`test_mcp`). |
 | `htalk mcp --connect` | Runner (`test_mcp`). | Runner (`test_mcp`). | Runner (`test_mcp`). A process the connector starts in its first moment can outlive it. |
@@ -18,7 +18,7 @@ A part that is not ported answers `unsupported_on_this_platform` with exit code 
 | The catalogue of profiles | Runner (`test_catalog`, `test_catalog_channels`). | `unsupported_on_this_platform`. Runner: `tests/platform.rs`. | `unsupported_on_this_platform`. Runner: `tests/platform.rs`. |
 | Session receivers and managed sessions of [integrations](../integrations/README.md) | Runner; live as each page says. | Nothing backs it. They read `watch`, which is ported; none was run there. | Nothing backs it. |
 
-On the runners 87 contract tests run on each of the two systems. macOS skips 29 tests and subtests, all of native delivery. Windows skips 31: the same 29 and the two that need a named pipe. Every skip prints its reason.
+On the runners 88 contract tests run on each of the two systems. macOS skips 29 tests and subtests, all of native delivery. Windows skips 31: the same 29 and the two that need a named pipe. Every skip prints its reason.
 
 ## The default mailbox
 

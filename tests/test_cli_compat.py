@@ -1981,7 +1981,6 @@ class ContendedWrites(HtalkCase):
         started = time.monotonic()
         self.error("--as", "alice", "send", "bob", "--message", "Too late", "--no-notify", error="database is locked")
         waited = time.monotonic() - started
-        print("the send gave up after %.2f seconds" % waited, file=sys.stderr)
         writer.rollback()
         # The budget is five seconds by the clock, so this test asserts a duration. Its upper bound leaves
         # room for a machine that starts a process slowly, and none for a wait that counts its pauses.
