@@ -72,7 +72,6 @@
 "Stop the receiver before rebinding its state"
 "The command was interrupted. Run it again."
 "The selected channel binding is unavailable or changed; no mailbox command was sent. Discover the profile again."
-"The suspended child could not be let run"
 "This endpoint does not accept a catalogue scope."
 "Unsupported receiver state version"
 "Use a new state directory; preserve unfinished state for inspection"

@@ -56,7 +56,7 @@ inspection failures produce errors. Two-second TERM grace and four-second cleanu
 budgets are checked between `/proc` scans; scanning and scheduler delays can
 extend elapsed cleanup time.
 
-macOS and Windows hold the group of an `htalk mcp` call in their own way, with the same two and four seconds. On macOS a signal goes to the group by its number, which the unreaped child keeps for it. On Windows the child is created suspended, put in a job and only then let run; at the end a child that still runs is sent Ctrl-Break, and the job is ended two seconds later. Bounded command capture is on Linux only.
+macOS and Windows hold the group of an `htalk mcp` call in their own way, with the same two and four seconds. On macOS a signal goes to the group by its number, which the unreaped child keeps for it. On Windows the server enters a job of its own before it starts a child, and each child is then put in a job for its call. At the end a child that still runs is sent Ctrl-Break, and what runs in its job is ended two seconds later, or at once if the request could not be sent. Bounded command capture is on Linux only.
 
 Managed Python receivers require Linux kernel 5.3 or newer, Python 3.11+ with
 `os.pidfd_open` and `signal.pidfd_send_signal`, and a mounted `/proc` readable
