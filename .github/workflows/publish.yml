@@ -141,6 +141,12 @@ jobs:
           wheel=(dist/*.whl)
           "$bin/python" -m pip install "${wheel[0]}"
           "$bin/python" -m pip check
+          # A runner has the Visual C++ runtime and a person's machine may not, so running the
+          # executable here does not show that it needs none. Its imports must not name it.
+          if [ -f "$bin/htalk.exe" ] && LC_ALL=C grep -qai vcruntime140 "$bin/htalk.exe"; then
+            echo "htalk.exe asks for the Visual C++ runtime"
+            exit 1
+          fi
           export HTALK_TEST_COMMAND="$("$bin/python" -c 'import json, shutil, sys; print(json.dumps([shutil.which("htalk", path=sys.argv[1])]))' "$bin")"
           cp tests/compat_support.py tests/test_cli_compat.py tests/test_mcp.py tests/test_mail_recovery.py "$RUNNER_TEMP/"
           cd "$RUNNER_TEMP"
