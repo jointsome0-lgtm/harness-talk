@@ -12,14 +12,11 @@ use std::{
     time::{Duration, Instant},
 };
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0},
+    Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0},
     Storage::FileSystem::{LOCKFILE_EXCLUSIVE_LOCK, LockFileEx},
     System::{
         Console::{
             CTRL_BREAK_EVENT, CTRL_C_EVENT, GenerateConsoleCtrlEvent, SetConsoleCtrlHandler,
-        },
-        Diagnostics::ToolHelp::{
-            CreateToolhelp32Snapshot, TH32CS_SNAPTHREAD, THREADENTRY32, Thread32First, Thread32Next,
         },
         JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -28,9 +25,9 @@ use windows_sys::Win32::{
             QueryInformationJobObject, SetInformationJobObject, TerminateJobObject,
         },
         Threading::{
-            CREATE_NEW_PROCESS_GROUP, CREATE_SUSPENDED, OpenProcess, OpenThread,
-            PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_TERMINATE, ResumeThread,
-            THREAD_SUSPEND_RESUME, WaitForSingleObject,
+            CREATE_NEW_PROCESS_GROUP, CREATE_SUSPENDED, OpenProcess,
+            PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA, PROCESS_SUSPEND_RESUME,
+            PROCESS_TERMINATE, WaitForSingleObject,
         },
     },
 };
@@ -106,6 +103,15 @@ impl Grouped for tokio::process::Command {
     }
 }
 
+// Lets every thread of a suspended process run. It is not in the documented API: ntdll has
+// exported it since Windows XP, and process tools resume a process with it. The documented way
+// is to list every thread of the system for the one this child has, which made each tool call
+// nine milliseconds slower on the runner.
+#[link(name = "ntdll", kind = "raw-dylib")]
+unsafe extern "system" {
+    fn NtResumeProcess(process: HANDLE) -> i32;
+}
+
 /// A handle this process owns, closed on drop.
 struct Owned(HANDLE);
 // SAFETY: a kernel handle may be used from any thread.
@@ -127,8 +133,11 @@ pub struct OwnedGroup {
 impl OwnedGroup {
     pub fn new(pid: u32) -> io::Result<Self> {
         const SYNCHRONIZE: u32 = 0x0010_0000;
-        let rights =
-            SYNCHRONIZE | PROCESS_SET_QUOTA | PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION;
+        let rights = SYNCHRONIZE
+            | PROCESS_SET_QUOTA
+            | PROCESS_TERMINATE
+            | PROCESS_QUERY_LIMITED_INFORMATION
+            | PROCESS_SUSPEND_RESUME;
         let process = unsafe { OpenProcess(rights, 0, pid) };
         if process.is_null() {
             return Err(io::Error::last_os_error());
@@ -165,42 +174,12 @@ impl OwnedGroup {
                 return Err(refused);
             }
         }
-        group.resume()?;
+        // The child was created suspended and runs from here on. One that cannot be let run
+        // ends with the job, which closes when this returns the error.
+        if unsafe { NtResumeProcess(group.process.0) } < 0 && !group.exited()? {
+            return Err(io::Error::other("The suspended child could not be let run"));
+        }
         Ok(group)
-    }
-
-    /// Lets the child run. It was created suspended and has the one thread it was created
-    /// with; the list of every thread of the system is where Windows names it.
-    fn resume(&self) -> io::Result<()> {
-        let threads = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0) };
-        if threads == INVALID_HANDLE_VALUE {
-            return Err(io::Error::last_os_error());
-        }
-        let threads = Owned(threads);
-        let mut entry: THREADENTRY32 = unsafe { std::mem::zeroed() };
-        entry.dwSize = size_of::<THREADENTRY32>() as u32;
-        let mut resumed = false;
-        let mut more = unsafe { Thread32First(threads.0, &mut entry) };
-        while more != 0 {
-            if entry.th32OwnerProcessID == self.leader {
-                let thread = unsafe { OpenThread(THREAD_SUSPEND_RESUME, 0, entry.th32ThreadID) };
-                if thread.is_null() {
-                    return Err(io::Error::last_os_error());
-                }
-                let thread = Owned(thread);
-                if unsafe { ResumeThread(thread.0) } == u32::MAX {
-                    return Err(io::Error::last_os_error());
-                }
-                resumed = true;
-            }
-            more = unsafe { Thread32Next(threads.0, &mut entry) };
-        }
-        // A child that was let run by no one would wait for ever.
-        if resumed || self.exited()? {
-            Ok(())
-        } else {
-            Err(io::Error::other("The suspended child has no thread"))
-        }
     }
 
     /// Whether the child has exited.
