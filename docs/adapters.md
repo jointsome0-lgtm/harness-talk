@@ -757,6 +757,61 @@ After discovery and socket connection, the adapter rereads the saved message sta
 
 The inspected `2.1.267` ordinary-session socket handler has no message-cancellation action. The SDK's separate `cancel_async_message` protocol does not establish support through this socket. An already accepted Claude notice cannot be withdrawn by htalk; in an earlier native case it arrived after acknowledgment within the current turn. The final database check narrows the race but cannot eliminate delivery that starts after the check and before acknowledgment.
 
+## Codex and Claude Code on macOS and Windows
+
+Native delivery, its discovery and `receive` run on Linux only, as [platforms](platforms.md) says. This section records what a port would meet. It was read on 2026-10-09 from what the two clients publish, and nothing was run: Codex from its source at commit [`99aa053`](https://github.com/openai/codex/tree/99aa05341d1564cf4ca2b463c83b607ea5d1bb3e) of 2026-10-08, Claude Code from the text inside its npm packages `2.1.295` for macOS ARM64, Windows x64 and Linux x64. No real client ran on macOS or Windows. Another version of a client can differ, and a port rests on a line here only after a live check of it.
+
+### Codex
+
+| What htalk uses | macOS | Windows |
+| --- | --- | --- |
+| `codex queue --thread UUID --message TEXT` and its receipt | The same command and the same receipt text. The source has no branch for a system here. | The same. |
+| `state_5.sqlite` | In `$CODEX_HOME`, by default `~/.codex`, moved by `sqlite_home` and `CODEX_SQLITE_HOME` as on Linux. | The same, under the user's profile directory. |
+| The control socket, `$CODEX_HOME/app-server-control/app-server-control.sock` | A Unix socket, as on Linux. | A Unix-domain socket as Windows has them, in a directory whose access list Codex checks. Rust's standard library has no stable way to connect to one there. |
+| `codex app-server --stdio` with `thread/queue/delete` | The same. | The same. |
+| Writer locks in `$CODEX_HOME/thread-writer-locks/` | The same files, locked through the standard library. macOS has no table of held locks to read. | The same files. Windows has no such table either. |
+
+At this commit the path of the control socket is a symbolic link on Linux and macOS, and the socket itself lies in `codex-daemon-UID` under the real `/tmp`. htalk checks the type and owner of what the path leads to and connects through it, so the link changes nothing for it.
+
+### Claude Code
+
+| What htalk uses | macOS | Windows |
+| --- | --- | --- |
+| `claude agents --json` | The option is there. The fields of a row were not read. | The same. |
+| `sessions/PID.json` with `sessionId`, `cwd` and `messagingSocketPath` | In `~/.claude`, as on Linux. | The same, under the user's profile directory. |
+| Where a session listens | A Unix socket, as on Linux: `cc-socks/PID.sock` in `$XDG_RUNTIME_DIR`, else in `$CLAUDE_CODE_TMPDIR`, else in `/tmp`. A path longer than 103 bytes becomes `/tmp/cc-socks-UID/PID.sock`. htalk builds no path and takes the one in the session file. | A named pipe, `\\.\pipe\LOCAL\cc-msg-` and 32 random hexadecimal digits. It is no file, so it has no owner to check as htalk checks a socket's. |
+| What a connection sends first | The frame. A line of authentication is accepted and not required, on Linux too. | A line `{"type":"auth","token":TOKEN}`. A connection that sends anything else first is closed. The token is `peerToken` in `sessions/PID.HASH.key`, where `HASH` is the SHA-256 of the pipe's path in lower case. |
+| `CLAUDE_PID` and `CLAUDE_CODE_SESSION_ID` in the environment of a command | Set as on Linux. | Set as on Linux. |
+
+On Windows this messaging is behind a second switch of the client, `tengu_harbor_kite_win`. Its default in the package is on. What the service sets for an account was not seen.
+
+Claude Code keeps `sessions/` under `$CLAUDE_CONFIG_DIR` when that variable is set. htalk reads `~/.claude/sessions` only, so it does not find a session that was started with the variable. That holds on Linux today. It was read and not tried.
+
+### What a port needs in htalk
+
+Four things are written for Linux only today:
+
+- holding the process group of a client command outside the async runtime. `os::run_command`, which runs a command with a time limit and keeps its output, does that, and so does the temporary `codex app-server --stdio`. macOS and Windows hold a group only inside the runtime, for `htalk mcp`;
+- the parent, start time and executable of a process, read from `/proc`, by which a command that Claude Code runs is recognized;
+- `os::connect_unix`, which asks for a socket with flags that macOS does not have;
+- the table of held locks, `/proc/locks`, behind discovery by writer locks.
+
+macOS needs the first three in its own terms. The rest of the Unix socket code is shared with Linux already. Discovery by writer locks has no counterpart there: a held lock could be seen only by trying to take it, and htalk takes no lock of a client.
+
+Windows needs the same three, and besides them:
+
+- a named pipe for Claude Code, with the line of authentication. Its token would be the first secret of a client that htalk reads; on Linux the adapter reads none;
+- something in place of the owner check of a socket;
+- a Unix-domain socket through Winsock for Codex's control socket, and the wait for it within a time, which the transport does with the `poll` of Unix;
+- a way to start `codex` and `claude` where npm installed them. npm puts a `.cmd` file on the path, and Rust starts such a file only when it is asked for by its full name.
+
+### Not known without a live client
+
+- Whether Claude Code on Windows takes a `type: user` frame after the line of authentication as it takes one on Linux, and who may open its pipe.
+- How each client spells `cwd` on Windows. htalk saves a workspace as `C:\dir` and compares without regard to case or to the direction of a slash.
+- Whether the messaging of Claude Code is switched on for an account on Windows.
+- The packages for Intel macOS and for Windows on ARM. They were not read.
+
 ## OpenCode
 
 OpenCode uses an explicit loopback HTTP server and opaque session IDs. The server confirms the session and workspace before one `prompt_async` POST. Read [OpenCode setup and compatibility](opencode.md) for authentication, discovery coverage and how an accepted prompt can start a turn in an idle existing session.
