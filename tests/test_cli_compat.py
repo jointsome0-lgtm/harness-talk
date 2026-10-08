@@ -953,6 +953,26 @@ class ActorSelection(HtalkCase):
         # Without recognized evidence an explicit, different Claude name works as before.
         self.assertEqual("option", self.htalk("--as", "builder", "inbox", env=native)["actor_source"])
 
+    def test_claude_sessions_are_found_where_claude_config_dir_puts_them(self):
+        session = str(uuid.uuid4())
+        native = self.native_claude(session)
+        self.add_peer("reviewer", "claude", session)
+        _, listener = self.claude_recipient("bob")
+        # A Claude Code started with CLAUDE_CONFIG_DIR keeps its session files there, not in the home directory.
+        moved = self.tmp / "claude-config"
+        (self.home / ".claude").rename(moved)
+        elsewhere = {"CLAUDE_CONFIG_DIR": str(moved)}
+        for name, there in (("without the variable", {}), ("with an empty one", {"CLAUDE_CONFIG_DIR": ""})):
+            with self.subTest(name):
+                self.error("peer", "check", "bob", env=there, error="file_not_found")
+                self.assertEqual("claude_session_metadata_unavailable",
+                                 self.error("inbox", env={**native, **there})["native_session"]["reason"])
+        self.assertEqual(listener.path, self.htalk("peer", "check", "bob", env=elsewhere)["socket"])
+        sent = self.htalk("send", "bob", "--message", "Q", env={**native, **elsewhere})
+        self.assertEqual(("reviewer", "native_session", "submitted", "claude_socket_bytes_written"),
+                         (sent["sender"], sent["actor_source"], sent["submission"], sent["notification_detail"]))
+        self.assertEqual(1, len(listener.frames()))
+
 
 class Notifications(HtalkCase):
     def test_claude_notice_is_one_frame_with_a_show_command_and_no_body(self):
