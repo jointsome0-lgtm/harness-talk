@@ -361,7 +361,12 @@ fn again(error: &std::io::Error) -> bool {
 impl Read for DeadlineStream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         loop {
-            self.stream.set_read_timeout(Some(slice(self.deadline)?))?;
+            // macOS sets no time on a socket whose other end has closed. What that end sent
+            // before is still there to read, so the wait for it is bounded another way.
+            let timed = self.stream.set_read_timeout(Some(slice(self.deadline)?));
+            if timed.is_err() {
+                poll_until(&self.stream, false, self.deadline)?;
+            }
             match self.stream.read(buf) {
                 Err(error) if again(&error) => continue,
                 result => return result,

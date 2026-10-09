@@ -28,9 +28,11 @@ impl OwnedGroup {
             Ok(group)
         } else if found != -1 {
             Err(io::Error::other("Child does not own its process group"))
-        } else if group.exited()? {
-            // A child that has exited no longer says which group it led. No other group can
-            // have its number while it is unreaped.
+        } else if unknown.raw_os_error() == Some(libc::ESRCH) {
+            // A child that has exited, or is on its way out, no longer says which group it
+            // led. No other group can have its number while it is unreaped, and a child that
+            // is not this process's to wait for is an error here.
+            group.check_anchor()?;
             Ok(group)
         } else {
             Err(unknown)
@@ -94,10 +96,12 @@ impl OwnedGroup {
             // belongs to another user reads the same, and is not told apart from them.
             // The kernel looks at the members it listed a moment before, so one that was started
             // meanwhile is missed once; the group is asked again before it is called empty.
-            // The child may have exited since it was asked, a moment ago, so it is asked again.
-            Some(libc::ESRCH | libc::EPERM) if exited || self.exited()? => {
+            Some(libc::ESRCH | libc::EPERM) if exited => {
                 Ok(unsafe { libc::kill(-self.leader, value) } != 0)
             }
+            // The child is on its way out: the kernel no longer signals it and does not say
+            // yet that it has exited. The group is not called empty before it does.
+            Some(libc::ESRCH | libc::EPERM) => Ok(false),
             _ => Err(e),
         }
     }

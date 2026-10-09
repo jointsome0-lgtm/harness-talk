@@ -181,13 +181,13 @@ def gate(name):
 
 def descendant():
     # A process of the client's that ignores a request to end and keeps the client's output open. It is on
-    # record before the client goes on, and ends by itself if nobody ends it.
+    # record before the client goes on, and ends by itself if nobody ends it, later than any test waits.
     import signal
     reader, writer = os.pipe()
     if os.fork() == 0:
         os.close(reader)
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
-        signal.alarm(30)
+        signal.alarm(90)
         log(descendant=True)
         os.close(writer)
         while True:

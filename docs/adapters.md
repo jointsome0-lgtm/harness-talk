@@ -801,6 +801,8 @@ Two stay on Linux:
 - the parent, start time and executable of a process, read from `/proc`, by which a command that Claude Code runs is recognized. On macOS such a command names its peer with `--as` or `HTALK_PEER`. How Claude Code writes the start time of its process there was not read;
 - the table of held locks, `/proc/locks`, behind discovery by writer locks. macOS has no counterpart: a held lock could be seen only by trying to take it, and htalk takes no lock of a client.
 
+Two answers of the system were seen on a macOS runner on 2026-10-09 UTC, and the port allows for both. A process that was told to end is for a while neither signalled with its group nor reported as exited. Each of forty processes that were asked without a pause showed it, for about a millisecond and at the longest for 64 ms. In that while the group is not called empty, and no error comes of it; `tests/process_group.rs` asks a group so. And a socket whose other end has closed takes no time limit, while what that end sent before can still be read. The Codex transport then waits for it with `poll`. No test forces that order of the two ends.
+
 Windows needs the first three of the four, and besides them:
 
 - a named pipe for Claude Code, with the line of authentication. Its token would be the first secret of a client that htalk reads; on Linux the adapter reads none;
