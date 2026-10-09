@@ -24,8 +24,8 @@ import urllib.parse
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from compat_support import (KEPT, LOCK_TABLE, MESSAGE_KEYS, OPENCODE_CA, PEER_KEYS, ROW_KEYS, TIMEOUT,  # noqa: E402
-                            UNSETTLED, INTERRUPT, HtalkCase, any_peer, gone, process_start, wait_for)
+from compat_support import (KEPT, LOCK_TABLE, MESSAGE_KEYS, OPENCODE_CA, PEER_KEYS, PROC, ROW_KEYS,  # noqa: E402
+                            TIMEOUT, UNSETTLED, INTERRUPT, HtalkCase, any_peer, gone, process_start, wait_for)
 
 LEGACY_V1 = """
 CREATE TABLE peers (name TEXT PRIMARY KEY, harness TEXT NOT NULL, session_id TEXT NOT NULL,
@@ -953,27 +953,52 @@ class ActorSelection(HtalkCase):
         # Without recognized evidence an explicit, different Claude name works as before.
         self.assertEqual("option", self.htalk("--as", "builder", "inbox", env=native)["actor_source"])
 
-    def test_claude_sessions_are_found_where_claude_config_dir_puts_them(self):
+    def test_a_claude_session_is_not_recognized_where_the_system_has_no_proc(self):
+        self.need_native()
+        if PROC:
+            self.skipTest("this system has a /proc, and the session of a command is recognized through it")
         session = str(uuid.uuid4())
-        native = self.native_claude(session)
         self.add_peer("reviewer", "claude", session)
-        _, listener = self.claude_recipient("bob")
-        # A Claude Code started with CLAUDE_CONFIG_DIR keeps its session files there, not in the home directory.
+        inside = {"CLAUDE_CODE_SESSION_ID": session, "CLAUDE_PID": str(os.getpid())}
+        (self.home / (".claude/sessions/%d.json" % os.getpid())).write_text(json.dumps(
+            {"pid": os.getpid(), "sessionId": session, "cwd": str(self.work)}))
+        unnamed = self.error("inbox", env=inside, error="peer_required_use_as_or_HTALK_PEER")
+        self.assertEqual("claude_process_unavailable", unnamed["native_session"]["reason"])
+        self.assertEqual("option", self.htalk("--as", "reviewer", "inbox", env=inside)["actor_source"])
+        self.assertEqual("HTALK_PEER", self.htalk("inbox", env={**inside, "HTALK_PEER": "reviewer"})["actor_source"])
+
+    def moved_claude_files(self):
+        """Puts the session files where a Claude Code started with CLAUDE_CONFIG_DIR keeps them, not in the home
+        directory. Gives the variable, and the two environments that do not lead there."""
         moved = self.tmp / "claude-config"
         (self.home / ".claude").rename(moved)
-        elsewhere = {"CLAUDE_CONFIG_DIR": str(moved)}
-        for name, there in (("without the variable", {}), ("with an empty one", {"CLAUDE_CONFIG_DIR": ""})):
+        return {"CLAUDE_CONFIG_DIR": str(moved)}, (("without the variable", {}), ("with an empty one", {"CLAUDE_CONFIG_DIR": ""}))
+
+    def test_a_notice_finds_a_claude_session_where_claude_config_dir_puts_it(self):
+        self.add_peer("reviewer")
+        _, listener = self.claude_recipient("bob")
+        elsewhere, others = self.moved_claude_files()
+        for name, there in others:
             with self.subTest(name):
                 self.error("peer", "check", "bob", env=there, error="file_not_found")
                 unsent = self.htalk("--as", "reviewer", "send", "bob", "--message", "Q", env=there, code=2)
                 self.assertEqual("not_submitted", unsent["submission"])
+        self.assertEqual(listener.path, self.htalk("peer", "check", "bob", env=elsewhere)["socket"])
+        sent = self.htalk("--as", "reviewer", "send", "bob", "--message", "Q", env=elsewhere)
+        self.assertEqual(("submitted", "claude_socket_bytes_written"), (sent["submission"], sent["notification_detail"]))
+        self.assertEqual(1, len(listener.frames()))
+
+    def test_a_command_is_recognized_where_claude_config_dir_puts_its_session(self):
+        session = str(uuid.uuid4())
+        native = self.native_claude(session)
+        self.add_peer("reviewer", "claude", session)
+        elsewhere, others = self.moved_claude_files()
+        for name, there in others:
+            with self.subTest(name):
                 self.assertEqual("claude_session_metadata_unavailable",
                                  self.error("inbox", env={**native, **there})["native_session"]["reason"])
-        self.assertEqual(listener.path, self.htalk("peer", "check", "bob", env=elsewhere)["socket"])
-        sent = self.htalk("send", "bob", "--message", "Q", env={**native, **elsewhere})
-        self.assertEqual(("reviewer", "native_session", "submitted", "claude_socket_bytes_written"),
-                         (sent["sender"], sent["actor_source"], sent["submission"], sent["notification_detail"]))
-        self.assertEqual(1, len(listener.frames()))
+        found = self.htalk("inbox", env={**native, **elsewhere})
+        self.assertEqual("native_session", found["actor_source"])
 
 
 class Notifications(HtalkCase):

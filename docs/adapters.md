@@ -741,7 +741,7 @@ If `ack` races an in-flight submission, the sender tries the same idempotent rem
 
 On Linux, default discovery also matches exclusive kernel `FLOCK` records in `/proc/locks` to owned UUID files in `$CODEX_HOME/thread-writer-locks/`. Only matching unarchived `source=cli` rows are read from the same SQLite address metadata used before notification. The result is `writer_active`; it does not distinguish an idle client from a running model turn. A lock file without a held kernel lock is ignored. No lock is acquired, released or deleted. Process environments and conversation bodies are not read.
 
-The lock lifecycle follows Codex's [writer ownership implementation](https://github.com/openai/codex/blob/main/codex-rs/rollout/src/writer_lock.rs) and [live recorder lifecycle](https://github.com/openai/codex/blob/main/codex-rs/thread-store/src/local/live_writer.rs). This is a version-specific Linux fallback, verified on ext4. Process namespaces can hide kernel records, and older clients may not use these files. Source results describe the inspected environment, not every client on the host. A socket-backed address takes precedence when both sources find the same thread and workspace.
+The lock lifecycle follows Codex's [writer ownership implementation](https://github.com/openai/codex/blob/main/codex-rs/rollout/src/writer_lock.rs) and [live recorder lifecycle](https://github.com/openai/codex/blob/main/codex-rs/thread-store/src/local/live_writer.rs). This is a version-specific Linux fallback, verified on ext4. Process namespaces can hide kernel records, and older clients may not use these files. Source results describe the inspected environment, not every client on the host. A socket-backed address takes precedence when both sources find the same thread and workspace. macOS keeps no such table, and the source `codex_writer_locks` answers `unavailable` there with `unsupported_on_this_platform`.
 
 ## Claude Code
 
@@ -749,7 +749,7 @@ The adapter runs `claude agents --json` and selects exactly one live record matc
 
 Claude Code keeps its files under `$CLAUDE_CONFIG_DIR` when that variable is set. htalk then reads `$CLAUDE_CONFIG_DIR/sessions/PID.json`, here and where it recognizes the session that runs a command. Through 0.14.0 it read `~/.claude/sessions` only and did not find such a session. The variable is the command's own: a command started without it does not find a session that was started with it, and an empty one counts as unset. The place was read from the package `2.1.295` and tried on 2026-10-08 UTC with that version on Linux, signed out, in an empty home directory: the client made `sessions/` and the session's key file under the variable's directory, nothing in the home directory, and, with `XDG_RUNTIME_DIR` unset, its socket at `/tmp/cc-socks/PID.sock` with mode `0600`. A signed-out client writes no `PID.json`, so no notice to a session started with the variable was tried.
 
-A command run by Claude Code can omit `--as`: htalk then locates the same metadata file through the command's `CLAUDE_PID`, without running `claude`, and verifies process ancestry in `/proc`. See [peer selection](reference.md#database-and-peers) for the checks and their limits. In the 2026-09-17 checks with Claude Code `2.1.274`, every message command run by Claude Code omitted `--as` and reported `actor_source: native_session`. A detached tmux window given one session's `CLAUDE_CODE_SESSION_ID` and `CLAUDE_PID` was refused with `claude_pid_not_an_ancestor`. After `/clear`, that session had a new ID, and htalk selected no peer for it. `claude --resume` with the original ID kept that ID, and the session's peer was selected again.
+A command run by Claude Code on Linux can omit `--as`: htalk then locates the same metadata file through the command's `CLAUDE_PID`, without running `claude`, and verifies process ancestry in `/proc`. macOS has no `/proc`, and a command there names its peer. See [peer selection](reference.md#database-and-peers) for the checks and their limits. In the 2026-09-17 checks with Claude Code `2.1.274`, every message command run by Claude Code omitted `--as` and reported `actor_source: native_session`. A detached tmux window given one session's `CLAUDE_CODE_SESSION_ID` and `CLAUDE_PID` was refused with `claude_pid_not_an_ancestor`. After `/clear`, that session had a new ID, and htalk selected no peer for it. `claude --resume` with the original ID kept that ID, and the session's peer was selected again.
 
 The frame contains `type: user`, session and message UUIDs, an honest `htalk:PEER` sender, `priority: next`, and a message pointing to the inbox. It does not assert permission classes or impersonate a native Claude peer. A successful socket write proves only that the bytes were written. The adapter does not claim the model saw them.
 
@@ -761,7 +761,9 @@ The inspected `2.1.267` ordinary-session socket handler has no message-cancellat
 
 ## Codex and Claude Code on macOS and Windows
 
-Native delivery, its discovery and `receive` run on Linux only, as [platforms](platforms.md) says. This section records what a port would meet. It was read on 2026-10-08 UTC from what the two clients publish, and nothing was run: Codex from its source at commit [`99aa053`](https://github.com/openai/codex/tree/99aa05341d1564cf4ca2b463c83b607ea5d1bb3e) of 2026-10-08, Claude Code from the text inside its npm packages `2.1.295` for macOS ARM64, Windows x64 and Linux x64. No real client ran on macOS or Windows. Another version of a client can differ, and a port rests on a line here only after a live check of it.
+In 0.14.0 native delivery, its discovery and `receive` run on Linux only. After 0.14.0 they run on macOS too, as [platforms](platforms.md) says, and Windows has no port. This section records what the two clients do on those systems. It was read on 2026-10-08 UTC from what they publish, and nothing was run: Codex from its source at commit [`99aa053`](https://github.com/openai/codex/tree/99aa05341d1564cf4ca2b463c83b607ea5d1bb3e) of 2026-10-08, Claude Code from the text inside its npm packages `2.1.295` for macOS ARM64, Windows x64 and Linux x64.
+
+No real client ran on macOS or Windows. The port to macOS was written from the lines below and checked on a runner against fake clients that behave as those lines say. No notice has reached a real Codex or Claude Code on a Mac, so each line about macOS here still waits for a live check, and another version of a client can differ.
 
 ### Codex
 
@@ -773,7 +775,7 @@ Native delivery, its discovery and `receive` run on Linux only, as [platforms](p
 | `codex app-server --stdio` with `thread/queue/delete` | The same. | The same. |
 | Writer locks in `$CODEX_HOME/thread-writer-locks/` | The same files, locked through the standard library. macOS has no table of held locks to read. | The same files. Windows has no such table either. |
 
-At this commit the path of the control socket is a symbolic link on Linux and macOS, and the socket itself lies in `codex-daemon-UID` under the real `/tmp`. htalk checks the type and owner of what the path leads to and connects through it, so the link changes nothing for it.
+At this commit the path of the control socket is a symbolic link on Linux and macOS, and the socket itself lies in `codex-daemon-UID` under the real `/tmp`. htalk checks the type and owner of what the path leads to and connects through it, so the link changes nothing for it. The path htalk is given must itself fit in a socket address, which is 107 bytes on Linux and 103 on macOS. Under `~/.codex` it does. A longer one fails with `os_error`.
 
 ### Claude Code
 
@@ -787,18 +789,19 @@ At this commit the path of the control socket is a symbolic link on Linux and ma
 
 On Windows this messaging is behind a second switch of the client, `tengu_harbor_kite_win`. Its default in the package is on. What the service sets for an account was not seen.
 
-### What a port needs in htalk
+### What htalk has on macOS, and what a port to Windows needs
 
-Four things are written for Linux only today:
+In 0.14.0 four things are written for Linux only. After 0.14.0 macOS has the first two in its own terms:
 
-- holding the process group of a client command outside the async runtime. `os::run_command`, which runs a command with a time limit and keeps its output, does that, and so does the temporary `codex app-server --stdio`. macOS and Windows hold a group only inside the runtime, for `htalk mcp`;
-- the parent, start time and executable of a process, read from `/proc`, by which a command that Claude Code runs is recognized;
-- `os::connect_unix`, which asks for a socket with flags that macOS does not have;
-- the table of held locks, `/proc/locks`, behind discovery by writer locks.
+- holding the process group of a client command outside the async runtime. `os::run_command`, which runs a command with a time limit and keeps its output, does that, and so does the temporary `codex app-server --stdio`. On macOS a signal goes to the group by its number, which the unreaped command keeps for it, as for `htalk mcp` there. Windows holds a group only inside the runtime, for `htalk mcp`;
+- `os::connect_unix`. Linux asks for a socket that does not block and that a child does not inherit in one call. macOS has no such call, and both are set after the socket is made, as the standard library does it.
 
-macOS needs the first three in its own terms. The rest of the Unix socket code is shared with Linux already. Discovery by writer locks has no counterpart there: a held lock could be seen only by trying to take it, and htalk takes no lock of a client.
+Two stay on Linux:
 
-Windows needs the same three, and besides them:
+- the parent, start time and executable of a process, read from `/proc`, by which a command that Claude Code runs is recognized. On macOS such a command names its peer with `--as` or `HTALK_PEER`. How Claude Code writes the start time of its process there was not read;
+- the table of held locks, `/proc/locks`, behind discovery by writer locks. macOS has no counterpart: a held lock could be seen only by trying to take it, and htalk takes no lock of a client.
+
+Windows needs the first three of the four, and besides them:
 
 - a named pipe for Claude Code, with the line of authentication. Its token would be the first secret of a client that htalk reads; on Linux the adapter reads none;
 - something in place of the owner check of a socket;
@@ -807,6 +810,7 @@ Windows needs the same three, and besides them:
 
 ### Not known without a live client
 
+- On macOS, whether a notice arrives at all. First of what it rests on: that a row of `claude agents --json` has `sessionId`, `cwd` and `pid` there, that a `type: user` frame on the socket starts a turn as on Linux, and that `codex queue` and the control socket answer as the source reads.
 - Whether Claude Code on Windows takes a `type: user` frame after the line of authentication as it takes one on Linux, and who may open its pipe.
 - How each client spells `cwd` on Windows. htalk saves a workspace as `C:\dir` and compares without regard to case or to the direction of a slash.
 - Whether the messaging of Claude Code is switched on for an account on Windows.
