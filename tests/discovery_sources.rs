@@ -40,7 +40,8 @@ impl TempDir {
             COUNTER.fetch_add(1, Ordering::Relaxed)
         ));
         fs::create_dir(&path).unwrap();
-        Self(path)
+        // Discovery gives a socket by its resolved path, and `/tmp` is a link on macOS.
+        Self(fs::canonicalize(path).unwrap())
     }
     fn path(&self) -> &Path {
         &self.0
