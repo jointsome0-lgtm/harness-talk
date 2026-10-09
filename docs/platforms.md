@@ -34,7 +34,7 @@ In 0.14.0 the runners run 87 contract tests on each of the two systems. macOS sk
 | macOS | `~/Library/Application Support/harness-talk/mail.sqlite3` |
 | Windows | `%LOCALAPPDATA%\harness-talk\mail.sqlite3` |
 
-The file is schema 3 on every system and holds nothing that one system writes and another does not. Sharing one file between two systems over a network drive was not checked.
+The file is schema 3 on every system and holds nothing that one system writes and another does not. Sharing one file between two systems over a network drive was not checked and is not supported: SQLite's locks are not reliable there. The file is not encrypted, see [reference](reference.md).
 
 ## Limits to know
 
