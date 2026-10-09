@@ -965,6 +965,8 @@ class ActorSelection(HtalkCase):
         for name, there in (("without the variable", {}), ("with an empty one", {"CLAUDE_CONFIG_DIR": ""})):
             with self.subTest(name):
                 self.error("peer", "check", "bob", env=there, error="file_not_found")
+                unsent = self.htalk("--as", "reviewer", "send", "bob", "--message", "Q", env=there, code=2)
+                self.assertEqual("not_submitted", unsent["submission"])
                 self.assertEqual("claude_session_metadata_unavailable",
                                  self.error("inbox", env={**native, **there})["native_session"]["reason"])
         self.assertEqual(listener.path, self.htalk("peer", "check", "bob", env=elsewhere)["socket"])
