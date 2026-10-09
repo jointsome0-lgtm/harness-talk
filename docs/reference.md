@@ -47,7 +47,7 @@ Admission, the optional probe and SQLite's ordinary lock waiting have separate b
 htalk recognizes a Claude Code session only when all of these hold:
 
 - `CLAUDE_CODE_SESSION_ID` is a UUID and `CLAUDE_PID` is a process ID.
-- `~/.claude/sessions/CLAUDE_PID.json` records that session ID, that PID and the process start time shown in `/proc`.
+- `~/.claude/sessions/CLAUDE_PID.json` records that session ID, that PID and the process start time shown in `/proc`. When `CLAUDE_CONFIG_DIR` is set and not empty, the file is read from `$CLAUDE_CONFIG_DIR/sessions` instead.
 - That process is an ancestor of htalk, with at most 64 processes in between.
 - `CODEX_THREAD_ID` is unset, and no process in between has a command or executable name starting with `claude`, `codex` or `opencode`.
 

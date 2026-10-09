@@ -3,7 +3,7 @@ use super::{Adapter, Address, Query};
 use crate::discovery::{address, source};
 use crate::model::NativePeer as Peer;
 use crate::os::{self, connect_unix, owned_socket, same_workspace};
-use crate::{error::Error, model::*, validate};
+use crate::{error::Error, identity, model::*, validate};
 use serde_json::{Map, Value, json};
 use std::{
     collections::HashMap,
@@ -65,7 +65,7 @@ fn invalid_agents() -> Error {
     Error::code("invalid_claude_agents_response")
 }
 
-/// `~/.claude/sessions/PID.json`, parsed but not yet verified.
+/// The session's `PID.json`, parsed but not yet verified.
 pub fn session_metadata(pid: i64) -> Result<Value, Error> {
     metadata_file(&pid.to_string())
 }
@@ -152,9 +152,8 @@ fn agents_response() -> Result<Value, Error> {
 }
 
 fn metadata_file(pid: &str) -> Result<Value, Error> {
-    let path = os::home()
-        .join(".claude/sessions")
-        .join(format!("{pid}.json"));
+    let path =
+        identity::claude_sessions(&|name| std::env::var(name).ok()).join(format!("{pid}.json"));
     let text = String::from_utf8(std::fs::read(path)?).map_err(|_| Error::invalid_utf8())?;
     Ok(serde_json::from_str(&text)?)
 }
