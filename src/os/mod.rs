@@ -2,9 +2,9 @@
 //! system or one of its facilities. `unix` holds what Linux and macOS share: signals, sockets,
 //! file locks, file ownership and descriptors. `capture` and `connect` are theirs too: a client
 //! command run within a time, and a socket connected within a time. `linux` holds owned
-//! process groups, `/proc` and the lock table. `macos` holds its own owned process groups.
-//! `windows` holds what the mailbox needs there. `unported` stands where a system has no port
-//! of a part yet; `build.rs` says which parts a system has.
+//! process groups, `/proc` and the lock table. `macos` holds its own owned process groups and
+//! what it says of a process. `windows` holds what the mailbox needs there. `unported` stands
+//! where a system has no port of a part yet; `build.rs` says which parts a system has.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod capture;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -15,7 +15,7 @@ mod linux;
 mod macos;
 #[cfg(unix)]
 mod unix;
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 mod unported;
 #[cfg(windows)]
 mod windows;
@@ -29,7 +29,7 @@ pub use linux::{
     LOCK_TABLE, OwnedGroup, PROC, member_disappeared, parse_identity, process_exe, process_stat,
 };
 #[cfg(target_os = "macos")]
-pub use macos::{LOCK_TABLE, OwnedGroup};
+pub use macos::{LOCK_TABLE, OwnedGroup, PROC, process_exe, process_stat};
 #[cfg(unix)]
 pub use unix::{
     DB_HELP, Descriptor, Grouped, Open, SSH, Socket, Stop, changed, create_private_dir, default_db,
@@ -40,7 +40,7 @@ pub use unix::{
 };
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 pub use unported::OwnedGroup;
-#[cfg(not(target_os = "linux"))]
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 pub use unported::{PROC, process_exe, process_stat};
 #[cfg(windows)]
 pub use windows::{

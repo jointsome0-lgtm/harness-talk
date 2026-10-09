@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import signal
 import socket
 import sqlite3
@@ -76,9 +77,7 @@ TERMINATE = signal.CTRL_BREAK_EVENT if WINDOWS else signal.SIGTERM
 OWN_GROUP = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if WINDOWS else {}
 
 NOT_PORTED = "unsupported_on_this_platform"
-# What only Linux has: a /proc to read a process from, and with it the recognition of the Claude Code session a
-# command runs in; and a table of held file locks, and with it the discovery of Codex sessions by their writer locks.
-PROC = sys.platform == "linux"
+# What only Linux has: a table of held file locks, and with it the discovery of Codex sessions by their writer locks.
 LOCK_TABLE = sys.platform == "linux"
 # macOS names its temporary directory at such length that the path of a socket under it does not fit in a socket
 # address. Tests are made under this one there.
@@ -108,9 +107,14 @@ def any_peer(native, pull):
 
 
 def process_start(pid):
-    """The start time field of /proc/PID/stat, as Claude Code records it."""
-    text = Path("/proc/%d/stat" % pid).read_text()
-    return text.rpartition(")")[2].split()[19]
+    """The start of a process as Claude Code records it: on Linux the start time field of /proc/PID/stat, on macOS
+    what the system's `ps` prints of it in the C locale and in UTC."""
+    if sys.platform == "linux":
+        text = Path("/proc/%d/stat" % pid).read_text()
+        return text.rpartition(")")[2].split()[19]
+    said = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True,
+                          env={**os.environ, "LC_ALL": "C", "TZ": "UTC"})
+    return said.stdout.strip()
 
 
 def children(pid):
@@ -585,13 +589,22 @@ class HtalkCase(unittest.TestCase):
     def native_claude(self, session_id, workspace=None, **metadata):
         """Environment for an htalk command run directly by this test process acting as Claude Code."""
         self.need_native()
-        if not PROC:
-            self.skipTest("recognizing the Claude Code session a command runs in is not ported to this system")
         pid = os.getpid()
         saved = {"pid": pid, "sessionId": session_id, "procStart": process_start(pid),
                  "cwd": str(workspace or self.work), "messagingSocketPath": str(self.tmp / "unused.sock"), **metadata}
         (self.home / (".claude/sessions/%d.json" % pid)).write_text(json.dumps(saved))
         return {"CLAUDE_CODE_SESSION_ID": session_id, "CLAUDE_PID": str(pid)}
+
+    def under_a_client_name(self, name):
+        """The first words of a command that runs the words after them, in a process named like a client."""
+        shim = self.tmp / name
+        if sys.platform == "darwin":
+            # macOS names a process that a script started after the interpreter, so the shell itself goes under the name.
+            shutil.copy("/bin/bash", shim)
+            return [str(shim), "-c", '"$@"\nexit $?', name]
+        shim.write_text('#!/bin/sh\n"$@"\nexit $?\n')
+        shim.chmod(0o755)
+        return [str(shim)]
 
     def opencode_server(self, sessions, tls=False):
         server = ThreadingHTTPServer(("127.0.0.1", 0), FakeOpenCode)

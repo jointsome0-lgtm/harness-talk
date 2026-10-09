@@ -1,5 +1,5 @@
 //! Cleanup for a newly spawned private process group on macOS, which has no pidfds and no
-//! `/proc`.
+//! `/proc`, and what the system says of a process there.
 //!
 //! As on Linux, the caller must retain the direct Child without polling wait/try_wait until
 //! cleanup completes. A group is numbered by its leader, and the unreaped child keeps its
@@ -7,6 +7,7 @@
 //! by one: the kernel says whether a signal to the group found a process that still runs.
 use std::{
     io,
+    path::Path,
     time::{Duration, Instant},
 };
 
@@ -146,4 +147,78 @@ impl OwnedGroup {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     }
+}
+
+/// macOS keeps no directory of its processes. The system is asked about one by its number, and
+/// the root that Linux reads under is not looked at.
+pub const PROC: &str = "";
+
+/// One record of a process. False when the system does not give it.
+fn record<T>(pid: libc::c_int, flavor: libc::c_int, into: &mut T) -> bool {
+    let size = std::mem::size_of::<T>() as libc::c_int;
+    // SAFETY: the system writes no more than `size` bytes into a record of that size.
+    unsafe { libc::proc_pidinfo(pid, flavor, 0, std::ptr::from_mut(into).cast(), size) == size }
+}
+
+/// Comm, parent PID and start time of a process, or `None` when there is no such process.
+/// The start is written as `ps -o lstart=` prints it in the C locale and in UTC, which is how
+/// Claude Code records it on macOS. The record that holds it is refused for a process of
+/// another account, and the start is empty then.
+pub fn process_stat(_root: &Path, pid: i64) -> Option<(String, i64, String)> {
+    let pid = libc::c_int::try_from(pid).ok()?;
+    let mut short: libc::proc_bsdshortinfo = unsafe { std::mem::zeroed() };
+    if !record(pid, libc::PROC_PIDT_SHORTBSDINFO, &mut short) {
+        return None;
+    }
+    let mut full: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let start = if record(pid, libc::PROC_PIDTBSDINFO, &mut full) {
+        started(full.pbi_start_tvsec)
+    } else {
+        String::new()
+    };
+    let comm: Vec<u8> = short.pbsi_comm.iter().map(|b| *b as u8).collect();
+    let comm = comm.split(|b| *b == 0).next().unwrap_or_default();
+    let comm = String::from_utf8_lossy(comm).into_owned();
+    Some((comm, i64::from(short.pbsi_ppid), start))
+}
+
+/// The file name of the executable of a process, as bytes. A process started from a script
+/// has the executable of its interpreter, and its comm is the interpreter's name too.
+pub fn process_exe(_root: &Path, pid: i64) -> Option<Vec<u8>> {
+    let pid = libc::c_int::try_from(pid).ok()?;
+    let mut path = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    // SAFETY: the system writes no more than the length of the buffer it is given.
+    let length = unsafe { libc::proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
+    path.truncate(usize::try_from(length).ok().filter(|length| *length > 0)?);
+    Some(path.rsplit(|b| *b == b'/').next().unwrap_or(&path).to_vec())
+}
+
+/// Seconds since 1970 as `Fri Oct  9 01:36:44 2026`, in UTC.
+fn started(seconds: u64) -> String {
+    const DAYS: [&str; 7] = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let (days, rest) = (seconds / 86400, seconds % 86400);
+    // The date of a day counted from 1970, in years that begin with March.
+    let shifted = days + 719_468;
+    let (era, of_era) = (shifted / 146_097, shifted % 146_097);
+    let year_of_era = (of_era - of_era / 1460 + of_era / 36_524 - of_era / 146_096) / 365;
+    let of_year = of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let shifted_month = (5 * of_year + 2) / 153;
+    let day = of_year - (153 * shifted_month + 2) / 5 + 1;
+    let month = if shifted_month < 10 {
+        shifted_month + 3
+    } else {
+        shifted_month - 9
+    };
+    let year = year_of_era + era * 400 + u64::from(month <= 2);
+    format!(
+        "{} {} {day:>2} {:02}:{:02}:{:02} {year}",
+        DAYS[(days % 7) as usize],
+        MONTHS[(month - 1) as usize],
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
 }
