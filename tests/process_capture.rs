@@ -1,5 +1,6 @@
-//! A child run to its end inside a process group this program owns, which only Linux has yet.
-#![cfg(target_os = "linux")]
+//! A child run to its end inside a process group this program owns. Built where the Codex and
+//! Claude Code adapters are, which run their client commands so; `build.rs` says where.
+#![cfg(native_clients)]
 use harness_talk::{error::Error, os};
 use std::time::{Duration, Instant};
 
@@ -27,6 +28,9 @@ fn captures_both_pipes_without_a_full_pipe_deadlock() {
     assert_eq!(result.stderr, vec![b'b'; 200000]);
 }
 
+/// The descendant is told apart from a later process of its number by `/proc`, and held by a
+/// pidfd. On macOS `test_cli_compat` shows what a client command started ending with it.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_prompt_wrapper_exit_does_not_leave_a_term_ignoring_descendant() {
     use std::{

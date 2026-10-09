@@ -76,6 +76,13 @@ TERMINATE = signal.CTRL_BREAK_EVENT if WINDOWS else signal.SIGTERM
 OWN_GROUP = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if WINDOWS else {}
 
 NOT_PORTED = "unsupported_on_this_platform"
+# What only Linux has: a /proc to read a process from, and with it the recognition of the Claude Code session a
+# command runs in; and a table of held file locks, and with it the discovery of Codex sessions by their writer locks.
+PROC = sys.platform == "linux"
+LOCK_TABLE = sys.platform == "linux"
+# macOS names its temporary directory at such length that the path of a socket under it does not fit in a socket
+# address. Tests are made under this one there.
+SHORT_TMP = "/tmp" if sys.platform == "darwin" else None
 _native_clients = None
 
 
@@ -130,6 +137,18 @@ def gone(pid):
     return False
 
 
+def command_line(pid):
+    """The words a process runs with, as bytes. Nothing when it has gone, and nothing on Windows."""
+    if sys.platform == "linux":
+        try:
+            return Path("/proc/%s/cmdline" % pid).read_bytes()
+        except OSError:
+            return b""
+    if WINDOWS:
+        return b""
+    return subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True).stdout
+
+
 def wait_for(predicate, timeout=15, message="condition"):
     """Poll a condition. Only a generous upper bound is used; nothing asserts durations."""
     deadline = time.monotonic() + timeout
@@ -160,6 +179,23 @@ def gate(name):
     while not os.path.exists(os.path.join(STATE, name + ".release")) and time.monotonic() < deadline:
         time.sleep(0.02)
 
+def descendant():
+    # A process of the client's that ignores a request to end and keeps the client's output open. It is on
+    # record before the client goes on, and ends by itself if nobody ends it.
+    import signal
+    reader, writer = os.pipe()
+    if os.fork() == 0:
+        os.close(reader)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.alarm(30)
+        log(descendant=True)
+        os.close(writer)
+        while True:
+            time.sleep(1)
+    os.close(writer)
+    os.read(reader, 1)
+    os.close(reader)
+
 try:
     with open(os.path.join(STATE, "config.json")) as source:
         config = json.load(source)
@@ -179,6 +215,8 @@ if CLIENT == "codex" and argv[:1] == ["queue"] and len(argv) == 5 and argv[1] ==
     settings = config.get("codex_queue", {})
     mode = settings.get("mode", "ok")
     if mode == "block":
+        if settings.get("descendant"):
+            descendant()
         gate("codex_queue")
         sys.exit(1)
     receipt = "Queued message %s for thread %s.\n" % (settings.get("queue_id"), argv[2])
@@ -349,7 +387,7 @@ class HtalkCase(unittest.TestCase):
             self.command = htalk_command()
         except CommandUnavailable as exc:
             self.fail(str(exc))
-        temporary = tempfile.TemporaryDirectory(prefix="htc")
+        temporary = tempfile.TemporaryDirectory(prefix="htc", dir=SHORT_TMP)
         self.addCleanup(temporary.cleanup)
         self.tmp = Path(temporary.name).resolve()
         self.home = self.tmp / "home"
@@ -469,11 +507,11 @@ class HtalkCase(unittest.TestCase):
                     pass
         # A gated fake may outlive an interrupted htalk. Kill only processes still running this test's fakes.
         for entry in self.calls():
-            try:
-                if str(self.bin).encode() in Path("/proc/%d/cmdline" % entry["pid"]).read_bytes():
+            if self.runs_fake(entry["pid"]):
+                try:
                     os.kill(entry["pid"], signal.SIGKILL)
-            except (OSError, ProcessLookupError):
-                pass
+                except OSError:
+                    pass
         for server in self.sockets:
             server.close()
 
@@ -488,6 +526,10 @@ class HtalkCase(unittest.TestCase):
         entries = [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
         return [entry for entry in entries if (client is None or entry["client"] == client)
                 and (argv is None or entry.get("argv", [])[:len(argv)] == argv)]
+
+    def runs_fake(self, pid):
+        """Whether a process still runs one of this test's fake clients."""
+        return str(self.bin).encode() in command_line(pid)
 
     def release(self, gate):
         (self.state / (gate + ".release")).touch()
@@ -543,6 +585,8 @@ class HtalkCase(unittest.TestCase):
     def native_claude(self, session_id, workspace=None, **metadata):
         """Environment for an htalk command run directly by this test process acting as Claude Code."""
         self.need_native()
+        if not PROC:
+            self.skipTest("recognizing the Claude Code session a command runs in is not ported to this system")
         pid = os.getpid()
         saved = {"pid": pid, "sessionId": session_id, "procStart": process_start(pid),
                  "cwd": str(workspace or self.work), "messagingSocketPath": str(self.tmp / "unused.sock"), **metadata}

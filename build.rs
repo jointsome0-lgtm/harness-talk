@@ -10,7 +10,7 @@ fn main() {
     let system = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let linux = system == "linux";
     // Notices into Codex and Claude Code, and `receive`.
-    if linux {
+    if linux || system == "macos" {
         println!("cargo::rustc-cfg=native_clients");
     }
     // `htalk mcp`: the server runs every call as a child whose process group it owns.

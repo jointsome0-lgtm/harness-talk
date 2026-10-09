@@ -10,6 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// macOS keeps no table of held file locks that a program can read.
+pub const LOCK_TABLE: Option<&str> = None;
+
 pub struct OwnedGroup {
     leader: i32,
 }
@@ -59,14 +62,23 @@ impl OwnedGroup {
     }
 
     // This only targets the retained wrapper, whose number is its own until it is reaped.
-    pub(crate) fn interrupt(&self) -> io::Result<()> {
-        if unsafe { libc::kill(self.leader, libc::SIGINT) } == 0 {
+    fn signal(&self, value: i32) -> io::Result<()> {
+        if unsafe { libc::kill(self.leader, value) } == 0 {
             return Ok(());
         }
         match io::Error::last_os_error() {
             e if e.raw_os_error() == Some(libc::ESRCH) => Ok(()),
             e => Err(e),
         }
+    }
+
+    pub(crate) fn interrupt(&self) -> io::Result<()> {
+        self.signal(libc::SIGINT)
+    }
+
+    // Used after a group cleanup that failed. It claims nothing of the descendants.
+    pub(crate) fn kill_leader(&self) -> io::Result<()> {
+        self.signal(libc::SIGKILL)
     }
 
     /// Signals every member that still runs. True when none does.
@@ -82,10 +94,32 @@ impl OwnedGroup {
             // belongs to another user reads the same, and is not told apart from them.
             // The kernel looks at the members it listed a moment before, so one that was started
             // meanwhile is missed once; the group is asked again before it is called empty.
-            Some(libc::ESRCH | libc::EPERM) if exited => {
+            // The child may have exited since it was asked, a moment ago, so it is asked again.
+            Some(libc::ESRCH | libc::EPERM) if exited || self.exited()? => {
                 Ok(unsafe { libc::kill(-self.leader, value) } != 0)
             }
             _ => Err(e),
+        }
+    }
+
+    /// The same as `finish_async`, for a caller outside the async runtime.
+    pub(crate) fn finish(&mut self) -> io::Result<()> {
+        let start = Instant::now();
+        loop {
+            let value = if start.elapsed() < Duration::from_secs(2) {
+                libc::SIGTERM
+            } else {
+                libc::SIGKILL
+            };
+            if self.step(value)? {
+                return Ok(());
+            }
+            if start.elapsed() >= Duration::from_secs(4) {
+                return Err(io::Error::other(
+                    "Owned process cleanup did not complete in four seconds",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
 

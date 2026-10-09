@@ -1,8 +1,8 @@
-//! A Unix stream socket connected within a time, created with the flags Linux has for it.
+//! A Unix stream socket connected within a time.
 use std::{
     io,
     os::{
-        fd::FromRawFd,
+        fd::{AsRawFd, FromRawFd},
         unix::{ffi::OsStrExt, net::UnixStream},
     },
     path::Path,
@@ -14,15 +14,8 @@ pub fn connect_unix(path: &Path, timeout: Duration) -> io::Result<UnixStream> {
     let bytes = path.as_os_str().as_bytes();
     // SAFETY: plain socket syscalls on a descriptor owned by the returned UnixStream.
     unsafe {
-        let fd = libc::socket(
-            libc::AF_UNIX,
-            libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK,
-            0,
-        );
-        if fd < 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let stream = UnixStream::from_raw_fd(fd);
+        let stream = socket()?;
+        let fd = stream.as_raw_fd();
         let mut address: libc::sockaddr_un = std::mem::zeroed();
         address.sun_family = libc::AF_UNIX as libc::sa_family_t;
         if bytes.len() >= address.sun_path.len() {
@@ -34,8 +27,8 @@ pub fn connect_unix(path: &Path, timeout: Duration) -> io::Result<UnixStream> {
         for (slot, byte) in address.sun_path.iter_mut().zip(bytes) {
             *slot = *byte as libc::c_char;
         }
-        let length =
-            (std::mem::size_of::<libc::sa_family_t>() + bytes.len() + 1) as libc::socklen_t;
+        let length = (std::mem::offset_of!(libc::sockaddr_un, sun_path) + bytes.len() + 1)
+            as libc::socklen_t;
         if libc::connect(fd, (&raw const address).cast(), length) != 0 {
             let error = io::Error::last_os_error();
             if error.raw_os_error() != Some(libc::EINPROGRESS) {
@@ -71,4 +64,31 @@ pub fn connect_unix(path: &Path, timeout: Duration) -> io::Result<UnixStream> {
         stream.set_nonblocking(false)?;
         Ok(stream)
     }
+}
+
+/// A stream socket that does not block and that a child does not inherit. Linux makes it so
+/// in one call.
+#[cfg(target_os = "linux")]
+fn socket() -> io::Result<UnixStream> {
+    let kind = libc::SOCK_STREAM | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK;
+    let fd = unsafe { libc::socket(libc::AF_UNIX, kind, 0) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(unsafe { UnixStream::from_raw_fd(fd) })
+}
+/// macOS has no such call, and sets both afterwards as its standard library does. A child that
+/// another thread starts in between inherits the socket.
+#[cfg(not(target_os = "linux"))]
+fn socket() -> io::Result<UnixStream> {
+    let fd = unsafe { libc::socket(libc::AF_UNIX, libc::SOCK_STREAM, 0) };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let stream = unsafe { UnixStream::from_raw_fd(fd) };
+    if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    stream.set_nonblocking(true)?;
+    Ok(stream)
 }

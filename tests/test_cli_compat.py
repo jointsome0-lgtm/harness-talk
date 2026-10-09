@@ -24,8 +24,8 @@ import urllib.parse
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from compat_support import (KEPT, MESSAGE_KEYS, OPENCODE_CA, PEER_KEYS, ROW_KEYS, TIMEOUT, UNSETTLED,  # noqa: E402
-                            INTERRUPT, HtalkCase, any_peer, process_start, wait_for)
+from compat_support import (KEPT, LOCK_TABLE, MESSAGE_KEYS, OPENCODE_CA, PEER_KEYS, ROW_KEYS, TIMEOUT,  # noqa: E402
+                            UNSETTLED, INTERRUPT, HtalkCase, any_peer, gone, process_start, wait_for)
 
 LEGACY_V1 = """
 CREATE TABLE peers (name TEXT PRIMARY KEY, harness TEXT NOT NULL, session_id TEXT NOT NULL,
@@ -1373,6 +1373,18 @@ class Interrupts(HtalkCase):
         self.assertEqual(1, len(self.calls("codex", ["queue"])))
         self.assertEqual([chosen], [m["id"] for m in self.htalk("--as", "bob", "inbox")["messages"]])
 
+    def test_an_interrupted_client_command_ends_with_what_it_started(self):
+        self.add_peer("alice")
+        self.codex_recipient("bob")
+        # The client has started a process that ignores a request to end and keeps the client's output open.
+        self.configure(codex_queue={"mode": "block", "descendant": True})
+        sending = self.spawn("--as", "alice", "send", "bob", "--message", "Q")
+        self.started("codex_queue")
+        (started,) = [call["pid"] for call in self.calls("codex") if call.get("descendant")]
+        self.assertFalse(gone(started))
+        self.assertEqual("saved", self.interrupt(sending)["persistence"])
+        wait_for(lambda: gone(started), message="what the client command started to end")
+
     def test_interrupted_wait_forgets_its_registration(self):
         self.add_peer("alice")
         self.add_peer("bob")
@@ -1476,16 +1488,9 @@ class ProcessRecovery(HtalkCase):
         # This gated fake exits unsuccessfully without a receipt when released.
         # Observe the late failure, without claiming to simulate late acceptance.
         child_pid = self.calls("codex", ["queue"])[0]["pid"]
-
-        def fake_is_running():
-            try:
-                return str(self.bin).encode() in Path("/proc/%d/cmdline" % child_pid).read_bytes()
-            except FileNotFoundError:
-                return False
-
-        self.assertTrue(fake_is_running(), "the blocked fake must outlive the killed sender")
+        self.assertTrue(self.runs_fake(child_pid), "the blocked fake must outlive the killed sender")
         self.release("codex_queue")
-        wait_for(lambda: not fake_is_running(), message="the orphaned fake client to exit")
+        wait_for(lambda: not self.runs_fake(child_pid), message="the orphaned fake client to exit")
         after_child = self.htalk("--as", "bob", "show", chosen)
         self.assertEqual(("submission_unknown", None, acknowledged["ack_at"]),
                          (after_child["submission"], self.kept(after_child["id"])["notification_finished_at"],
@@ -1643,6 +1648,16 @@ class Discovery(HtalkCase):
             with self.subTest(error=error):
                 self.error("peer", "discover", *words, error=error)
         self.assertFalse(self.db.parent.exists())
+
+    def test_codex_writer_locks_are_not_read_where_the_system_keeps_no_table_of_them(self):
+        self.need_native()
+        if LOCK_TABLE:
+            self.skipTest("this system keeps a table of held locks, and discovery reads it")
+        # Nothing answers on the default socket either, so no source could be asked.
+        found = self.htalk("peer", "discover", "--harness", "codex", code=2)
+        self.assertEqual([], found["sessions"])
+        self.assertEqual([("unavailable", "unsupported_on_this_platform")],
+                         [(s["status"], s["detail"]) for s in found["sources"] if s["source"] == "codex_writer_locks"])
 
     def test_a_failure_below_a_client_is_a_fixed_code(self):
         self.need_native()

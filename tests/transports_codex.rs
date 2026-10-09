@@ -21,6 +21,16 @@ use std::{
 use tungstenite::Message as Frame;
 
 static ENVIRONMENT: Mutex<()> = Mutex::new(());
+
+/// Where a fixture is made. The temporary directory of macOS has a name so long that the path
+/// of a socket under it does not fit in a socket address.
+fn short_temp() -> PathBuf {
+    if cfg!(target_os = "macos") {
+        PathBuf::from("/tmp")
+    } else {
+        std::env::temp_dir()
+    }
+}
 const QUEUE_ID: &str = "0f0e0d0c-0b0a-4908-8706-050403020100";
 
 struct Fixture {
@@ -36,8 +46,7 @@ impl Fixture {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir =
-            std::env::temp_dir().join(format!("htalk-codex-{name}-{}-{nanos}", std::process::id()));
+        let dir = short_temp().join(format!("htalk-codex-{name}-{}-{nanos}", std::process::id()));
         fs::create_dir_all(dir.join("bin")).unwrap();
         let dir = fs::canonicalize(dir).unwrap();
         let mut fixture = Self {
@@ -1266,8 +1275,10 @@ fn public_stdio_call_deadline_includes_a_backpressured_write() {
 }
 
 /// Only recorded owned fixture processes are signalled, through stable pidfds.
+#[cfg(target_os = "linux")]
 struct FixtureProcess(std::os::fd::OwnedFd);
 
+#[cfg(target_os = "linux")]
 impl FixtureProcess {
     fn capture(pid: i32) -> Self {
         use std::os::fd::FromRawFd;
@@ -1291,6 +1302,7 @@ impl FixtureProcess {
     }
 }
 
+#[cfg(target_os = "linux")]
 impl Drop for FixtureProcess {
     fn drop(&mut self) {
         use std::os::fd::AsRawFd;
@@ -1304,6 +1316,41 @@ impl Drop for FixtureProcess {
                 std::ptr::null::<libc::siginfo_t>(),
                 0,
             );
+        }
+    }
+}
+
+/// macOS has no pidfd, so there a recorded fixture process is named by its number. The system
+/// gives numbers out in order, and none comes round again within the seconds a test lasts.
+#[cfg(not(target_os = "linux"))]
+struct FixtureProcess(i32);
+
+#[cfg(not(target_os = "linux"))]
+impl FixtureProcess {
+    fn capture(pid: i32) -> Self {
+        Self(pid)
+    }
+
+    fn exited(&self) -> bool {
+        // A killed process whose parent has gone is there until the system collects it.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        // SAFETY: signal 0 only asks whether the recorded fixture process is there.
+        while unsafe { libc::kill(self.0, 0) } == 0 {
+            if Instant::now() >= deadline {
+                return false;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        true
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+impl Drop for FixtureProcess {
+    fn drop(&mut self) {
+        // SAFETY: sends KILL to the recorded fixture process, if it is still there.
+        unsafe {
+            libc::kill(self.0, libc::SIGKILL);
         }
     }
 }

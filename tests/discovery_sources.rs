@@ -27,7 +27,14 @@ impl TempDir {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .subsec_nanos();
-        let path = std::env::temp_dir().join(format!(
+        // The temporary directory of macOS has a name so long that the path of a socket under
+        // it may not fit in a socket address.
+        let temp = if cfg!(target_os = "macos") {
+            PathBuf::from("/tmp")
+        } else {
+            std::env::temp_dir()
+        };
+        let path = temp.join(format!(
             "htalk-discovery-{}-{}-{nanos}",
             std::process::id(),
             COUNTER.fetch_add(1, Ordering::Relaxed)
@@ -414,8 +421,8 @@ impl Writers {
         let line = format!(
             "{}: {kind} {pid} {:x}:{:x}:{} 0 EOF",
             self.lines.borrow().len() + 1,
-            libc::major(info.dev()),
-            libc::minor(info.dev()),
+            libc::major(info.dev() as libc::dev_t),
+            libc::minor(info.dev() as libc::dev_t),
             info.ino()
         );
         self.lines.borrow_mut().push(line);

@@ -96,7 +96,8 @@ jobs:
 
   # The gate for systems that are being ported: the program builds, the store works and what
   # is not ported there answers unsupported_on_this_platform. build.rs says what each has.
-  # Both also run the contract of the mailbox and the MCP tool against the built executable.
+  # Both also run the contract of the mailbox and the MCP tool against the built executable,
+  # and macOS the contract of delivery to Codex and Claude Code and of receive, with fake clients.
   platforms:
     env:
       RUSTUP_TOOLCHAIN: "1.98.1"
@@ -125,10 +126,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
-      - name: Test the CLI contract of the mailbox and the MCP tool
+      - name: Test the CLI contract of the mailbox, the MCP tool and native delivery
         run: |
           cd tests
-          python -B -m unittest test_cli_compat test_mcp test_mail_recovery -v
+          python -B -m unittest test_cli_compat test_mcp test_receive test_mail_recovery -v
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"

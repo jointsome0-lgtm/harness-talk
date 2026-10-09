@@ -21,13 +21,24 @@ pub(super) fn discover(sockets: Option<&[String]>) -> Found {
         .unwrap_or_else(|| vec![lossy(&default_socket())]);
     let app = app_servers(&paths, &connect);
     let held = sockets.is_none().then(|| {
-        writers(
-            &state::codex_home().join("thread-writer-locks"),
-            Path::new(os::LOCK_TABLE),
-            state::state_path,
-        )
+        let locks = state::codex_home().join("thread-writer-locks");
+        match os::LOCK_TABLE {
+            Some(table) => writers(&locks, Path::new(table), state::state_path),
+            None => no_lock_table(&locks),
+        }
     });
     with_writers(app, held)
+}
+
+/// What the writer-lock source answers on a system that keeps no table of held locks.
+fn no_lock_table(directory: &Path) -> Found {
+    Found {
+        sessions: Vec::new(),
+        sources: vec![
+            json!({"harness": "codex", "source": "codex_writer_locks", "status": "unavailable",
+            "path": lossy(directory), "detail": Error::not_ported().fixed()}),
+        ],
+    }
 }
 
 /// One JSON RPC call on a connected Codex app-server.
@@ -64,7 +75,7 @@ fn column(value: ValueRef<'_>) -> Result<Value, Error> {
 }
 
 /// Linux kernel lock evidence for native CLI threads, without taking a lock.
-/// `directory` is `$CODEX_HOME/thread-writer-locks`; `lock_table` is normally `os::LOCK_TABLE`.
+/// `directory` is `$CODEX_HOME/thread-writer-locks`; `lock_table` is normally what `os::LOCK_TABLE` names.
 pub fn writers(
     directory: &Path,
     lock_table: &Path,
