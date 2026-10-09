@@ -75,3 +75,37 @@ fn a_member_that_outlives_the_wrapper_is_stopped_and_a_group_already_gone_is_own
         assert!(child.wait().await.unwrap().success());
     });
 }
+
+#[test]
+fn a_wrapper_on_its_way_out_is_no_error_and_its_group_is_not_yet_empty() {
+    runtime().block_on(async {
+        // A wrapper that was told to end is, for a moment, neither signalled any more nor said
+        // to have exited: macOS showed that moment last for milliseconds. The group is asked
+        // without a pause, so that some question falls in it.
+        for _ in 0..10 {
+            let mut child = tokio::process::Command::new("/bin/sh")
+                .args(["-c", "echo started; exec sleep 30"])
+                .stdout(std::process::Stdio::piped())
+                .process_group(0)
+                .spawn()
+                .unwrap();
+            let leader = child.id().unwrap();
+            let mut group = OwnedGroup::new(leader).unwrap();
+            let mut line = [0; 8];
+            tokio::io::AsyncReadExt::read_exact(child.stdout.as_mut().unwrap(), &mut line)
+                .await
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                // Whose group it is can be asked anew there as well.
+                OwnedGroup::new(leader).unwrap();
+                if group.step(libc::SIGKILL).unwrap() {
+                    break;
+                }
+                assert!(Instant::now() < deadline);
+            }
+            assert!(group.exited().unwrap(), "empty while its wrapper ran");
+            child.wait().await.unwrap();
+        }
+    });
+}

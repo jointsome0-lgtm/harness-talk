@@ -30,7 +30,14 @@ impl Fixture {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let dir = std::env::temp_dir().join(format!(
+        // The temporary directory of macOS has a name so long that the path of a socket under
+        // it does not fit in a socket address.
+        let temp = if cfg!(target_os = "macos") {
+            PathBuf::from("/tmp")
+        } else {
+            std::env::temp_dir()
+        };
+        let dir = temp.join(format!(
             "htalk-claude-{name}-{}-{nanos}",
             std::process::id()
         ));

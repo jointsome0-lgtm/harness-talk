@@ -95,8 +95,9 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  # macOS and Windows have the mailbox, pull peers and the MCP tool. Each wheel is installed in a
-  # new environment on its own system and the contract of those parts runs against it.
+  # macOS and Windows have the mailbox, pull peers and the MCP tool, and macOS delivery to Codex
+  # and Claude Code with receive. Each wheel is installed in a new environment on its own system
+  # and the contract of those parts runs against it.
   build-ported:
     env:
       RUSTUP_TOOLCHAIN: "1.98.1"
@@ -147,12 +148,12 @@ jobs:
           "$bin/python" -m pip install "${wheel[0]}"
           "$bin/python" -m pip check
           export HTALK_TEST_COMMAND="$("$bin/python" -c 'import json, shutil, sys; print(json.dumps([shutil.which("htalk", path=sys.argv[1])]))' "$bin")"
-          cp tests/compat_support.py tests/test_cli_compat.py tests/test_mcp.py tests/test_mail_recovery.py "$RUNNER_TEMP/"
+          cp tests/compat_support.py tests/test_cli_compat.py tests/test_mcp.py tests/test_receive.py tests/test_mail_recovery.py "$RUNNER_TEMP/"
           cd "$RUNNER_TEMP"
           "$bin/htalk" --version
           "$bin/htalk" --help
           python -c 'import os, platform; print(platform.machine(), os.environ["HTALK_TEST_COMMAND"])'
-          python -B -m unittest test_cli_compat test_mcp test_mail_recovery -v
+          python -B -m unittest test_cli_compat test_mcp test_receive test_mail_recovery -v
       - name: Start it in a Windows that has no Visual C++ runtime
         if: runner.os == 'Windows'
         shell: pwsh

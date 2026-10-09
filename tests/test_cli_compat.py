@@ -24,8 +24,8 @@ import urllib.parse
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from compat_support import (KEPT, MESSAGE_KEYS, OPENCODE_CA, PEER_KEYS, ROW_KEYS, TIMEOUT, UNSETTLED,  # noqa: E402
-                            INTERRUPT, HtalkCase, any_peer, process_start, wait_for)
+from compat_support import (KEPT, LOCK_TABLE, MESSAGE_KEYS, OPENCODE_CA, PEER_KEYS, PROC, ROW_KEYS,  # noqa: E402
+                            TIMEOUT, UNSETTLED, INTERRUPT, HtalkCase, any_peer, gone, process_start, wait_for)
 
 LEGACY_V1 = """
 CREATE TABLE peers (name TEXT PRIMARY KEY, harness TEXT NOT NULL, session_id TEXT NOT NULL,
@@ -953,27 +953,52 @@ class ActorSelection(HtalkCase):
         # Without recognized evidence an explicit, different Claude name works as before.
         self.assertEqual("option", self.htalk("--as", "builder", "inbox", env=native)["actor_source"])
 
-    def test_claude_sessions_are_found_where_claude_config_dir_puts_them(self):
+    def test_a_claude_session_is_not_recognized_where_the_system_has_no_proc(self):
+        self.need_native()
+        if PROC:
+            self.skipTest("this system has a /proc, and the session of a command is recognized through it")
         session = str(uuid.uuid4())
-        native = self.native_claude(session)
         self.add_peer("reviewer", "claude", session)
-        _, listener = self.claude_recipient("bob")
-        # A Claude Code started with CLAUDE_CONFIG_DIR keeps its session files there, not in the home directory.
+        inside = {"CLAUDE_CODE_SESSION_ID": session, "CLAUDE_PID": str(os.getpid())}
+        (self.home / (".claude/sessions/%d.json" % os.getpid())).write_text(json.dumps(
+            {"pid": os.getpid(), "sessionId": session, "cwd": str(self.work)}))
+        unnamed = self.error("inbox", env=inside, error="peer_required_use_as_or_HTALK_PEER")
+        self.assertEqual("claude_process_unavailable", unnamed["native_session"]["reason"])
+        self.assertEqual("option", self.htalk("--as", "reviewer", "inbox", env=inside)["actor_source"])
+        self.assertEqual("HTALK_PEER", self.htalk("inbox", env={**inside, "HTALK_PEER": "reviewer"})["actor_source"])
+
+    def moved_claude_files(self):
+        """Puts the session files where a Claude Code started with CLAUDE_CONFIG_DIR keeps them, not in the home
+        directory. Gives the variable, and the two environments that do not lead there."""
         moved = self.tmp / "claude-config"
         (self.home / ".claude").rename(moved)
-        elsewhere = {"CLAUDE_CONFIG_DIR": str(moved)}
-        for name, there in (("without the variable", {}), ("with an empty one", {"CLAUDE_CONFIG_DIR": ""})):
+        return {"CLAUDE_CONFIG_DIR": str(moved)}, (("without the variable", {}), ("with an empty one", {"CLAUDE_CONFIG_DIR": ""}))
+
+    def test_a_notice_finds_a_claude_session_where_claude_config_dir_puts_it(self):
+        self.add_peer("reviewer")
+        _, listener = self.claude_recipient("bob")
+        elsewhere, others = self.moved_claude_files()
+        for name, there in others:
             with self.subTest(name):
                 self.error("peer", "check", "bob", env=there, error="file_not_found")
                 unsent = self.htalk("--as", "reviewer", "send", "bob", "--message", "Q", env=there, code=2)
                 self.assertEqual("not_submitted", unsent["submission"])
+        self.assertEqual(listener.path, self.htalk("peer", "check", "bob", env=elsewhere)["socket"])
+        sent = self.htalk("--as", "reviewer", "send", "bob", "--message", "Q", env=elsewhere)
+        self.assertEqual(("submitted", "claude_socket_bytes_written"), (sent["submission"], sent["notification_detail"]))
+        self.assertEqual(1, len(listener.frames()))
+
+    def test_a_command_is_recognized_where_claude_config_dir_puts_its_session(self):
+        session = str(uuid.uuid4())
+        native = self.native_claude(session)
+        self.add_peer("reviewer", "claude", session)
+        elsewhere, others = self.moved_claude_files()
+        for name, there in others:
+            with self.subTest(name):
                 self.assertEqual("claude_session_metadata_unavailable",
                                  self.error("inbox", env={**native, **there})["native_session"]["reason"])
-        self.assertEqual(listener.path, self.htalk("peer", "check", "bob", env=elsewhere)["socket"])
-        sent = self.htalk("send", "bob", "--message", "Q", env={**native, **elsewhere})
-        self.assertEqual(("reviewer", "native_session", "submitted", "claude_socket_bytes_written"),
-                         (sent["sender"], sent["actor_source"], sent["submission"], sent["notification_detail"]))
-        self.assertEqual(1, len(listener.frames()))
+        found = self.htalk("inbox", env={**native, **elsewhere})
+        self.assertEqual("native_session", found["actor_source"])
 
 
 class Notifications(HtalkCase):
@@ -1373,6 +1398,18 @@ class Interrupts(HtalkCase):
         self.assertEqual(1, len(self.calls("codex", ["queue"])))
         self.assertEqual([chosen], [m["id"] for m in self.htalk("--as", "bob", "inbox")["messages"]])
 
+    def test_an_interrupted_client_command_ends_with_what_it_started(self):
+        self.add_peer("alice")
+        self.codex_recipient("bob")
+        # The client has started a process that ignores a request to end and keeps the client's output open.
+        self.configure(codex_queue={"mode": "block", "descendant": True})
+        sending = self.spawn("--as", "alice", "send", "bob", "--message", "Q")
+        self.started("codex_queue")
+        (started,) = [call["pid"] for call in self.calls("codex") if call.get("descendant")]
+        self.assertFalse(gone(started))
+        self.assertEqual("saved", self.interrupt(sending)["persistence"])
+        wait_for(lambda: gone(started), message="what the client command started to end")
+
     def test_interrupted_wait_forgets_its_registration(self):
         self.add_peer("alice")
         self.add_peer("bob")
@@ -1476,16 +1513,9 @@ class ProcessRecovery(HtalkCase):
         # This gated fake exits unsuccessfully without a receipt when released.
         # Observe the late failure, without claiming to simulate late acceptance.
         child_pid = self.calls("codex", ["queue"])[0]["pid"]
-
-        def fake_is_running():
-            try:
-                return str(self.bin).encode() in Path("/proc/%d/cmdline" % child_pid).read_bytes()
-            except FileNotFoundError:
-                return False
-
-        self.assertTrue(fake_is_running(), "the blocked fake must outlive the killed sender")
+        self.assertTrue(self.runs_fake(child_pid), "the blocked fake must outlive the killed sender")
         self.release("codex_queue")
-        wait_for(lambda: not fake_is_running(), message="the orphaned fake client to exit")
+        wait_for(lambda: not self.runs_fake(child_pid), message="the orphaned fake client to exit")
         after_child = self.htalk("--as", "bob", "show", chosen)
         self.assertEqual(("submission_unknown", None, acknowledged["ack_at"]),
                          (after_child["submission"], self.kept(after_child["id"])["notification_finished_at"],
@@ -1643,6 +1673,16 @@ class Discovery(HtalkCase):
             with self.subTest(error=error):
                 self.error("peer", "discover", *words, error=error)
         self.assertFalse(self.db.parent.exists())
+
+    def test_codex_writer_locks_are_not_read_where_the_system_keeps_no_table_of_them(self):
+        self.need_native()
+        if LOCK_TABLE:
+            self.skipTest("this system keeps a table of held locks, and discovery reads it")
+        # Nothing answers on the default socket either, so no source could be asked.
+        found = self.htalk("peer", "discover", "--harness", "codex", code=2)
+        self.assertEqual([], found["sessions"])
+        self.assertEqual([("unavailable", "unsupported_on_this_platform")],
+                         [(s["status"], s["detail"]) for s in found["sources"] if s["source"] == "codex_writer_locks"])
 
     def test_a_failure_below_a_client_is_a_fixed_code(self):
         self.need_native()

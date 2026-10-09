@@ -1,9 +1,14 @@
 //! What the program asks of the operating system. Nothing outside this directory names a
 //! system or one of its facilities. `unix` holds what Linux and macOS share: signals, sockets,
-//! file locks, file ownership and descriptors. `linux` holds owned process groups, `/proc` and
-//! the lock table. `macos` holds its own owned process groups. `windows` holds what the mailbox
-//! needs there. `unported` stands where a system has no port of a part yet; `build.rs` says
-//! which parts a system has.
+//! file locks, file ownership and descriptors. `capture` and `connect` are theirs too: a client
+//! command run within a time, and a socket connected within a time. `linux` holds owned
+//! process groups, `/proc` and the lock table. `macos` holds its own owned process groups.
+//! `windows` holds what the mailbox needs there. `unported` stands where a system has no port
+//! of a part yet; `build.rs` says which parts a system has.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod capture;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod connect;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -15,20 +20,23 @@ mod unported;
 #[cfg(windows)]
 mod windows;
 
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use capture::run_command;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub use connect::connect_unix;
 #[cfg(target_os = "linux")]
 pub use linux::{
-    LOCK_TABLE, OwnedGroup, PROC, connect_unix, lock_key, member_disappeared, parse_identity,
-    process_exe, process_stat, run_command,
+    LOCK_TABLE, OwnedGroup, PROC, member_disappeared, parse_identity, process_exe, process_stat,
 };
 #[cfg(target_os = "macos")]
-pub use macos::OwnedGroup;
+pub use macos::{LOCK_TABLE, OwnedGroup};
 #[cfg(unix)]
 pub use unix::{
     DB_HELP, Descriptor, Grouped, Open, SSH, Socket, Stop, changed, create_private_dir, default_db,
     errno, file_id, hung_up, install_interrupt_handler, interrupted, is_executable, is_mine,
-    is_private, is_roots, is_socket, kill_group, links, lock, multicast_ready, open_directory,
-    others_write, owned_socket, private_umask, ready, set_nonblocking, stop_requests,
-    sync_directory, try_lock,
+    is_private, is_roots, is_socket, kill_group, links, lock, lock_key, multicast_ready,
+    open_directory, others_write, owned_socket, private_umask, ready, set_nonblocking,
+    stop_requests, sync_directory, try_lock,
 };
 #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
 pub use unported::OwnedGroup;

@@ -1,9 +1,6 @@
 //! One child run to its end with its output kept, inside a process group this program owns.
-use super::group::OwnedGroup;
-use crate::{
-    error::Error,
-    os::{Grouped, interrupted, set_nonblocking},
-};
+use super::{Grouped, OwnedGroup, interrupted, set_nonblocking};
+use crate::error::Error;
 use std::{
     io::{self, Read},
     process::{Command, Stdio},

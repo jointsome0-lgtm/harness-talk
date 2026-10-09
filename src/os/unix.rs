@@ -175,6 +175,15 @@ pub fn is_executable(m: &Metadata) -> bool {
 pub fn is_socket(m: &Metadata) -> bool {
     m.file_type().is_socket()
 }
+/// A file as a table of held locks names it: device major, device minor, inode.
+pub fn lock_key(m: &Metadata) -> (u64, u64, u64) {
+    let device = m.dev() as libc::dev_t;
+    (
+        libc::major(device) as u64,
+        libc::minor(device) as u64,
+        m.ino(),
+    )
+}
 /// Device and inode: the same file under any name.
 pub fn file_id(m: &Metadata) -> (u64, u64) {
     (m.dev(), m.ino())

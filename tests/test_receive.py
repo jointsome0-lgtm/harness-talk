@@ -1,11 +1,10 @@
 """Reconnect and crash ambiguity at the public native receiver interface."""
 import json
-from pathlib import Path
 import shutil
 import sys
 import tomllib
 import uuid
-from compat_support import HtalkCase, wait_for
+from compat_support import HtalkCase, gone, wait_for
 
 
 class NativeReceiver(HtalkCase):
@@ -93,7 +92,7 @@ class NativeReceiver(HtalkCase):
         process.terminate()
         process.communicate(timeout=15)
         self.assertEqual(0, process.returncode)
-        self.assertFalse(Path(f"/proc/{checker_pid}").exists())
+        self.assertTrue(gone(checker_pid))
         self.assertEqual(2, len(self.calls("codex", ["queue"])))
 
     def test_store_move_stops_before_native_write_and_keeps_recovery(self):
@@ -184,7 +183,7 @@ sys.stdin.read()
         wait_for(lambda: len(self.calls("codex", ["queue"])) == 2)
         first.terminate()
         connector_pid = int((self.tmp / "first-connector.pid").read_text())
-        wait_for(lambda: not Path(f"/proc/{connector_pid}").exists())
+        wait_for(lambda: gone(connector_pid))
         # Its native write is still blocked; ownership must not escape with
         # the cancelled async future while that write can still take effect.
         blocked = self.run_raw(*other_words, db=False)

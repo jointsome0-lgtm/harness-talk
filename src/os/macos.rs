@@ -10,6 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// macOS keeps no table of held file locks that a program can read.
+pub const LOCK_TABLE: Option<&str> = None;
+
 pub struct OwnedGroup {
     leader: i32,
 }
@@ -25,9 +28,11 @@ impl OwnedGroup {
             Ok(group)
         } else if found != -1 {
             Err(io::Error::other("Child does not own its process group"))
-        } else if group.exited()? {
-            // A child that has exited no longer says which group it led. No other group can
-            // have its number while it is unreaped.
+        } else if unknown.raw_os_error() == Some(libc::ESRCH) {
+            // A child that has exited, or is on its way out, no longer says which group it
+            // led. No other group can have its number while it is unreaped, and a child that
+            // is not this process's to wait for is an error here.
+            group.check_anchor()?;
             Ok(group)
         } else {
             Err(unknown)
@@ -59,14 +64,23 @@ impl OwnedGroup {
     }
 
     // This only targets the retained wrapper, whose number is its own until it is reaped.
-    pub(crate) fn interrupt(&self) -> io::Result<()> {
-        if unsafe { libc::kill(self.leader, libc::SIGINT) } == 0 {
+    fn signal(&self, value: i32) -> io::Result<()> {
+        if unsafe { libc::kill(self.leader, value) } == 0 {
             return Ok(());
         }
         match io::Error::last_os_error() {
             e if e.raw_os_error() == Some(libc::ESRCH) => Ok(()),
             e => Err(e),
         }
+    }
+
+    pub(crate) fn interrupt(&self) -> io::Result<()> {
+        self.signal(libc::SIGINT)
+    }
+
+    // Used after a group cleanup that failed. It claims nothing of the descendants.
+    pub(crate) fn kill_leader(&self) -> io::Result<()> {
+        self.signal(libc::SIGKILL)
     }
 
     /// Signals every member that still runs. True when none does.
@@ -85,7 +99,31 @@ impl OwnedGroup {
             Some(libc::ESRCH | libc::EPERM) if exited => {
                 Ok(unsafe { libc::kill(-self.leader, value) } != 0)
             }
+            // The child is on its way out: the kernel no longer signals it and does not say
+            // yet that it has exited. The group is not called empty before it does.
+            Some(libc::ESRCH | libc::EPERM) => Ok(false),
             _ => Err(e),
+        }
+    }
+
+    /// The same as `finish_async`, for a caller outside the async runtime.
+    pub(crate) fn finish(&mut self) -> io::Result<()> {
+        let start = Instant::now();
+        loop {
+            let value = if start.elapsed() < Duration::from_secs(2) {
+                libc::SIGTERM
+            } else {
+                libc::SIGKILL
+            };
+            if self.step(value)? {
+                return Ok(());
+            }
+            if start.elapsed() >= Duration::from_secs(4) {
+                return Err(io::Error::other(
+                    "Owned process cleanup did not complete in four seconds",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
 
