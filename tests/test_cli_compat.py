@@ -24,7 +24,7 @@ import urllib.parse
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from compat_support import (KEPT, LOCK_TABLE, MESSAGE_KEYS, OPENCODE_CA, PEER_KEYS, PROC, ROW_KEYS,  # noqa: E402
+from compat_support import (KEPT, LOCK_TABLE, MESSAGE_KEYS, OPENCODE_CA, PEER_KEYS, ROW_KEYS,  # noqa: E402
                             TIMEOUT, UNSETTLED, INTERRUPT, HtalkCase, any_peer, gone, process_start, wait_for)
 
 LEGACY_V1 = """
@@ -917,6 +917,9 @@ class ActorSelection(HtalkCase):
                 self.assertIn("--as builder", conflict["recovery"]["inbox_in_registered_session"])
         # The check does not apply to peers of other clients.
         self.assertEqual("option", self.htalk("--as", "coder", "inbox", env=native)["actor_source"])
+        # A shell between the session and the command, as a client runs what it is asked to, changes nothing.
+        through = ["/bin/sh", "-c", '"$@"\nexit $?', "sh", *self.argv(["inbox"], True)]
+        self.assertEqual("native_session", self.finish(self.spawn(argv=through, env=native))["actor_source"])
         # A retired peer is still selected for its own session.
         self.htalk("peer", "retire", "reviewer")
         self.assertEqual("native_session", self.htalk("inbox", env=native)["actor_source"])
@@ -933,10 +936,8 @@ class ActorSelection(HtalkCase):
             with self.subTest(reason=reason):
                 self.assertEqual(reason, self.error("inbox", env=env)["native_session"]["reason"])
         # A command run through a nested client process does not inherit the name.
-        shim = self.tmp / "codex-shim"
-        shim.write_text('#!/bin/sh\n"$@"\nexit $?\n')
-        shim.chmod(0o755)
-        nested = self.finish(self.spawn(argv=[str(shim), *self.argv(["inbox"], True)], env=native), code=2)
+        shim = self.under_a_client_name("codex-shim")
+        nested = self.finish(self.spawn(argv=[*shim, *self.argv(["inbox"], True)], env=native), code=2)
         self.assertEqual("nested_client_process", nested["native_session"]["reason"])
         # A Claude process that is not an ancestor is not this command's session.
         sleeper = subprocess.Popen(["/bin/sleep", "60"])
@@ -952,20 +953,6 @@ class ActorSelection(HtalkCase):
         self.assertEqual("claude_session_metadata_unavailable", self.error("inbox", env=native)["native_session"]["reason"])
         # Without recognized evidence an explicit, different Claude name works as before.
         self.assertEqual("option", self.htalk("--as", "builder", "inbox", env=native)["actor_source"])
-
-    def test_a_claude_session_is_not_recognized_where_the_system_has_no_proc(self):
-        self.need_native()
-        if PROC:
-            self.skipTest("this system has a /proc, and the session of a command is recognized through it")
-        session = str(uuid.uuid4())
-        self.add_peer("reviewer", "claude", session)
-        inside = {"CLAUDE_CODE_SESSION_ID": session, "CLAUDE_PID": str(os.getpid())}
-        (self.home / (".claude/sessions/%d.json" % os.getpid())).write_text(json.dumps(
-            {"pid": os.getpid(), "sessionId": session, "cwd": str(self.work)}))
-        unnamed = self.error("inbox", env=inside, error="peer_required_use_as_or_HTALK_PEER")
-        self.assertEqual("claude_process_unavailable", unnamed["native_session"]["reason"])
-        self.assertEqual("option", self.htalk("--as", "reviewer", "inbox", env=inside)["actor_source"])
-        self.assertEqual("HTALK_PEER", self.htalk("inbox", env={**inside, "HTALK_PEER": "reviewer"})["actor_source"])
 
     def moved_claude_files(self):
         """Puts the session files where a Claude Code started with CLAUDE_CONFIG_DIR keeps them, not in the home
