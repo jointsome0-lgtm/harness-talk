@@ -28,7 +28,7 @@ htalk does not run the `codex.cmd` that npm puts on the path, because a `.cmd` f
 
 A command that Claude Code runs on macOS is recognized as its session, as on Linux. htalk asks the system for the parent, the start and the executable of a process, and writes the start as `ps -o lstart=` prints it in UTC, which is how the packages of Claude Code for macOS record it. That was read from the packages, and a runner checks htalk's text against the system's own `ps`. No real Claude Code ran. A client nested in a session is seen there only when it is a program of its own, because macOS names a process that a script started after its interpreter.
 
-The runners run 97 contract tests on each of the two systems. macOS skips none. Windows skips 39: the 37 of native delivery and the two that need a named pipe. Every skip prints its reason. In 0.14.0 there were 87, of which macOS skipped 29 tests and subtests, all of native delivery, and Windows 31.
+The runners run 97 contract tests of 0.15.0 on each of the two systems. macOS skips none. Windows skips 39: the 37 of native delivery and the two that need a named pipe. After 0.15.0 there are 100. macOS skips the one that is about a system where a Codex notice is not taken back. Windows skips 32: 11 of Claude Code, 5 of the removal of a Codex notice, 4 of `receive`, 10 of the other parts of native delivery, and the two that need a named pipe. Every skip prints its reason. In 0.14.0 there were 87, of which macOS skipped 29 tests and subtests, all of native delivery, and Windows 31.
 
 ## The default mailbox
 
