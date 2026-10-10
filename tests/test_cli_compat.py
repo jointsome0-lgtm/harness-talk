@@ -24,7 +24,7 @@ import urllib.parse
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from compat_support import (KEPT, LOCK_TABLE, MESSAGE_KEYS, NOT_PORTED, OPENCODE_CA, PEER_KEYS, ROW_KEYS,  # noqa: E402
+from compat_support import (KEPT, KILLED, LOCK_TABLE, MESSAGE_KEYS, NOT_PORTED, OPENCODE_CA, PEER_KEYS, ROW_KEYS,  # noqa: E402
                             TIMEOUT, UNSETTLED, INTERRUPT, HtalkCase, any_peer, gone, native_clients, process_start,
                             wait_for)
 
@@ -1506,7 +1506,7 @@ class ProcessRecovery(HtalkCase):
     def kill(self, process):
         process.kill()
         process.communicate(timeout=10)
-        self.assertEqual(-signal.SIGKILL, process.returncode)
+        self.assertEqual(KILLED, process.returncode)
 
     def send_words(self, chosen, body="Question?"):
         return ("--as", "alice", "send", "bob", "--id", chosen, "--message", body)
@@ -1519,6 +1519,8 @@ class ProcessRecovery(HtalkCase):
         return results
 
     def test_sigkill_during_notification_preserves_unknown_and_polling_recovery(self):
+        # Where only the command is ported, it ends with a killed sender and no removal waits for its receipt.
+        self.need_native("the removal of a Codex notice")
         self.configure(codex_queue={"mode": "block"})
         chosen = str(uuid.uuid4())
         sending = self.spawn(*self.send_words(chosen))
@@ -1627,6 +1629,7 @@ class ProcessRecovery(HtalkCase):
                             self.assertIn(result["submission"], ("not_submitted", "submission_unknown"))
 
     def test_lookup_retry_and_ack_can_race_an_unfinished_notification(self):
+        self.need_native("the removal of a Codex notice")
         self.configure(codex_queue={"mode": "block"})
         chosen = str(uuid.uuid4())
         sending = self.spawn(*self.send_words(chosen))

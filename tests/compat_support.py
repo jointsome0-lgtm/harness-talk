@@ -74,6 +74,8 @@ WINDOWS = os.name == "nt"
 # process this fixture starts there does, is sent Ctrl-Break for either request.
 INTERRUPT = signal.CTRL_BREAK_EVENT if WINDOWS else signal.SIGINT
 TERMINATE = signal.CTRL_BREAK_EVENT if WINDOWS else signal.SIGTERM
+# What a process returns that was ended with no request to stop.
+KILLED = 1 if WINDOWS else -signal.SIGKILL
 OWN_GROUP = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if WINDOWS else {}
 
 NOT_PORTED = "unsupported_on_this_platform"
