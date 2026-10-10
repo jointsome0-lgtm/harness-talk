@@ -3,7 +3,7 @@
 //! harness only through `adapter()` and `all()`.
 #[cfg(native_clients)]
 pub mod claude;
-#[cfg(native_clients)]
+#[cfg(codex_command)]
 pub mod codex;
 pub mod opencode;
 
@@ -63,11 +63,11 @@ impl Harness {
 }
 pub(crate) fn adapter(harness: Harness) -> &'static dyn Adapter {
     match harness {
-        #[cfg(native_clients)]
+        #[cfg(codex_command)]
         Harness::Codex => &codex::Codex,
         #[cfg(native_clients)]
         Harness::Claude => &claude::Claude,
-        #[cfg(not(native_clients))]
+        #[cfg(not(codex_command))]
         Harness::Codex => &NotPorted(Harness::Codex),
         #[cfg(not(native_clients))]
         Harness::Claude => &NotPorted(Harness::Claude),
@@ -125,13 +125,18 @@ impl Adapter for NotPorted {
         Err(Error::not_ported())
     }
     fn discover(&self, _: &Query<'_>) -> Found {
-        Found {
-            sessions: Vec::new(),
-            sources: vec![
-                serde_json::json!({"harness": self.0.as_str(), "status": "unavailable",
-                "detail": Error::not_ported().fixed()}),
-            ],
-        }
+        nothing_to_ask(self.0)
+    }
+}
+/// What `peer discover` gets of a harness whose discovery is not ported.
+#[cfg(not(native_clients))]
+fn nothing_to_ask(harness: Harness) -> Found {
+    Found {
+        sessions: Vec::new(),
+        sources: vec![
+            serde_json::json!({"harness": harness.as_str(), "status": "unavailable",
+            "detail": Error::not_ported().fixed()}),
+        ],
     }
 }
 

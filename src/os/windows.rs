@@ -1,5 +1,6 @@
 //! Windows: where the mailbox is, how its files are opened and locked, Ctrl-C and Ctrl-Break,
-//! a child with everything it starts, and an output whose reader has gone.
+//! a child with everything it starts, and an output whose reader has gone. `launch` runs a
+//! client command there.
 use super::home;
 use std::{
     env,
@@ -38,6 +39,14 @@ use windows_sys::Win32::{
         },
     },
 };
+
+/// What the system answers for a file that is not there, under the names the program asks by.
+pub mod errno {
+    pub const ENOENT: i32 = 2;
+    pub const ENOTDIR: i32 = 3;
+    pub const EBADF: i32 = 6;
+    pub const ELOOP: i32 = 1921;
+}
 
 pub const DB_HELP: &str = "Shared SQLite file. Default: HTALK_DB, then $XDG_DATA_HOME/harness-talk/mail.sqlite3, then %LOCALAPPDATA%\\harness-talk\\mail.sqlite3. Only peer add creates a missing file.";
 
@@ -145,7 +154,7 @@ fn closing_job() -> io::Result<Owned> {
 /// Puts this process in such a job, once, before it starts a child. The child is born in it,
 /// so what the child starts before it has entered a job of its own still ends when this process
 /// does. Where this process can enter no job, that is not so.
-fn end_with_this_process() {
+pub(super) fn end_with_this_process() {
     static JOB: OnceLock<Option<Owned>> = OnceLock::new();
     JOB.get_or_init(|| {
         let job = closing_job().ok()?;
@@ -215,6 +224,21 @@ impl OwnedGroup {
             return Err(io::Error::last_os_error());
         }
         Ok(found.ActiveProcesses)
+    }
+
+    /// Ends what runs in the job at once, and waits for it to be gone.
+    pub(super) fn end(&self) -> io::Result<()> {
+        let start = Instant::now();
+        while self.active()? != 0 {
+            unsafe { TerminateJobObject(self.job.0, 1) };
+            if start.elapsed() >= Duration::from_secs(4) {
+                return Err(io::Error::other(
+                    "Owned process cleanup did not complete in four seconds",
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        Ok(())
     }
 
     /// Asks a child that still runs to stop, and two seconds later ends what runs in the job.

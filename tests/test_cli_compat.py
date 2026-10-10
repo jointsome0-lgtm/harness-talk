@@ -24,8 +24,9 @@ import urllib.parse
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from compat_support import (KEPT, LOCK_TABLE, MESSAGE_KEYS, OPENCODE_CA, PEER_KEYS, ROW_KEYS,  # noqa: E402
-                            TIMEOUT, UNSETTLED, INTERRUPT, HtalkCase, any_peer, gone, process_start, wait_for)
+from compat_support import (KEPT, KILLED, LOCK_TABLE, MESSAGE_KEYS, NOT_PORTED, OPENCODE_CA, PEER_KEYS, ROW_KEYS,  # noqa: E402
+                            TIMEOUT, UNSETTLED, INTERRUPT, HtalkCase, any_peer, gone, native_clients, process_start,
+                            wait_for)
 
 LEGACY_V1 = """
 CREATE TABLE peers (name TEXT PRIMARY KEY, harness TEXT NOT NULL, session_id TEXT NOT NULL,
@@ -1044,6 +1045,7 @@ class Notifications(HtalkCase):
 
 
     def test_codex_acknowledgment_removes_only_its_confirmed_notice(self):
+        self.need_native("the removal of a Codex notice")
         self.add_peer("alice")
         bob = self.codex_recipient("bob")
         queue_id = str(uuid.uuid4())
@@ -1397,6 +1399,48 @@ class Interrupts(HtalkCase):
         self.assertEqual("saved", self.interrupt(sending)["persistence"])
         wait_for(lambda: gone(started), message="what the client command started to end")
 
+    def test_a_client_command_that_outlives_its_limit_is_ended_with_what_it_started(self):
+        self.add_peer("alice")
+        self.codex_recipient("bob")
+        self.configure(codex_queue={"mode": "block", "descendant": True})
+        # The limit is twenty seconds, and the fake client would wait longer.
+        late = self.htalk("--as", "alice", "send", "bob", "--message", "Q", code=2)
+        self.assertEqual(("submission_unknown", "command_timed_out"), (late["submission"], late["notification_detail"]))
+        (client,) = [call["pid"] for call in self.calls("codex", ["queue"])]
+        (started,) = [call["pid"] for call in self.calls("codex") if call.get("descendant")]
+        wait_for(lambda: gone(client) and gone(started), message="the client command and what it started to end")
+
+    def test_a_notice_reaches_the_client_command_with_its_line_breaks_and_quotes(self):
+        # The notice names the mailbox, so this one makes it carry quotes and what a command line treats specially.
+        self.db = self.tmp / "it's 100% of ^this & more" / "mail.sqlite3"
+        self.add_peer("alice")
+        bob = self.codex_recipient("bob")
+        queue_id = str(uuid.uuid4())
+        self.configure(codex_queue={"mode": "ok", "queue_id": queue_id})
+        sent = self.htalk("--as", "alice", "send", "bob", "--message", "Q")
+        self.assertEqual(("submitted", "codex_cli_queued:" + queue_id), (sent["submission"], sent["notification_detail"]))
+        (call,) = self.calls("codex", ["queue"])
+        self.assertEqual(["queue", "--thread", bob["session_id"], "--message"], call["argv"][:-1])
+        lines = call["argv"][-1].split("\n")
+        self.assertEqual(("[harness-talk peer notification; message %s]" % sent["id"], 4), (lines[0], len(lines)))
+        self.assertEqual("htalk --db %s --as bob show %s" % (shlex.quote(str(self.db)), sent["id"]), lines[2])
+        self.assertNotIn("\r", call["argv"][-1])
+
+    def test_a_codex_notice_stays_queued_where_its_removal_is_not_ported(self):
+        if native_clients():
+            self.skipTest("this system takes a Codex notice back, and other tests see it do so")
+        self.add_peer("alice")
+        self.codex_recipient("bob")
+        self.configure(codex_queue={"mode": "ok", "queue_id": str(uuid.uuid4())})
+        sent = self.htalk("--as", "alice", "send", "bob", "--message", "Q")
+        acked = self.htalk("--as", "bob", "ack", sent["id"])
+        self.assertEqual({"status": "unsupported", "detail": NOT_PORTED}, acked["notification_cleanup"])
+        self.assertIsNotNone(acked["ack_at"])
+        self.assertEqual(["queue"], [call["argv"][0] for call in self.calls("codex")])
+        found = self.htalk("peer", "discover", "--harness", "codex", code=2)
+        self.assertEqual(([], [{"harness": "codex", "status": "unavailable", "detail": NOT_PORTED}]),
+                         (found["sessions"], found["sources"]))
+
     def test_interrupted_wait_forgets_its_registration(self):
         self.add_peer("alice")
         self.add_peer("bob")
@@ -1410,6 +1454,7 @@ class Interrupts(HtalkCase):
         self.assertEqual("saved", self.recover(result["recovery"]["show"])["state"])
 
     def test_interrupted_ack_keeps_the_read_mark_and_offers_cleanup_retry(self):
+        self.need_native("the removal of a Codex notice")
         self.add_peer("alice")
         self.codex_recipient("bob")
         queue_id = str(uuid.uuid4())
@@ -1430,6 +1475,7 @@ class Interrupts(HtalkCase):
         self.assertEqual(1, len(self.calls("codex", ["queue"])))
 
     def test_interrupted_ack_returns_while_the_client_still_holds_the_removal(self):
+        self.need_native("the removal of a Codex notice")
         self.add_peer("alice")
         self.codex_recipient("bob")
         self.configure(codex_queue={"mode": "ok", "queue_id": str(uuid.uuid4())}, codex_app_server={"mode": "block"})
@@ -1460,7 +1506,7 @@ class ProcessRecovery(HtalkCase):
     def kill(self, process):
         process.kill()
         process.communicate(timeout=10)
-        self.assertEqual(-signal.SIGKILL, process.returncode)
+        self.assertEqual(KILLED, process.returncode)
 
     def send_words(self, chosen, body="Question?"):
         return ("--as", "alice", "send", "bob", "--id", chosen, "--message", body)
@@ -1473,6 +1519,8 @@ class ProcessRecovery(HtalkCase):
         return results
 
     def test_sigkill_during_notification_preserves_unknown_and_polling_recovery(self):
+        # Where only the command is ported, it ends with a killed sender and no removal waits for its receipt.
+        self.need_native("the removal of a Codex notice")
         self.configure(codex_queue={"mode": "block"})
         chosen = str(uuid.uuid4())
         sending = self.spawn(*self.send_words(chosen))
@@ -1581,6 +1629,7 @@ class ProcessRecovery(HtalkCase):
                             self.assertIn(result["submission"], ("not_submitted", "submission_unknown"))
 
     def test_lookup_retry_and_ack_can_race_an_unfinished_notification(self):
+        self.need_native("the removal of a Codex notice")
         self.configure(codex_queue={"mode": "block"})
         chosen = str(uuid.uuid4())
         sending = self.spawn(*self.send_words(chosen))

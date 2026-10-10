@@ -3,12 +3,14 @@
 //! file locks, file ownership and descriptors. `capture` and `connect` are theirs too: a client
 //! command run within a time, and a socket connected within a time. `linux` holds owned
 //! process groups, `/proc` and the lock table. `macos` holds its own owned process groups and
-//! what it says of a process. `windows` holds what the mailbox needs there. `unported` stands
+//! what it says of a process. `windows` holds what the mailbox needs there, and `launch` a client command run within a time. `unported` stands
 //! where a system has no port of a part yet; `build.rs` says which parts a system has.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod capture;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod connect;
+#[cfg(windows)]
+mod launch;
 #[cfg(target_os = "linux")]
 mod linux;
 #[cfg(target_os = "macos")]
@@ -24,6 +26,8 @@ mod windows;
 pub use capture::run_command;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub use connect::connect_unix;
+#[cfg(windows)]
+pub use launch::run_command;
 #[cfg(target_os = "linux")]
 pub use linux::{
     LOCK_TABLE, OwnedGroup, PROC, member_disappeared, parse_identity, process_exe, process_stat,
@@ -44,7 +48,7 @@ pub use unported::OwnedGroup;
 pub use unported::{PROC, process_exe, process_stat};
 #[cfg(windows)]
 pub use windows::{
-    DB_HELP, Grouped, Open, OwnedGroup, create_private_dir, default_db, hung_up,
+    DB_HELP, Grouped, Open, OwnedGroup, create_private_dir, default_db, errno, hung_up,
     install_interrupt_handler, interrupted, lock, open_directory, private_umask, stop_requests,
     sync_directory,
 };
@@ -151,7 +155,10 @@ pub fn same_path(one: &str, other: &str) -> bool {
 pub fn same_workspace(directory: Option<&serde_json::Value>, workspace: &str) -> bool {
     match directory {
         Some(serde_json::Value::String(directory)) if Path::new(directory).is_absolute() => {
-            same_path(&resolve(Path::new(directory)).to_string_lossy(), workspace)
+            same_path(
+                &plain(resolve(Path::new(directory))).to_string_lossy(),
+                workspace,
+            )
         }
         _ => false,
     }

@@ -74,6 +74,8 @@ WINDOWS = os.name == "nt"
 # process this fixture starts there does, is sent Ctrl-Break for either request.
 INTERRUPT = signal.CTRL_BREAK_EVENT if WINDOWS else signal.SIGINT
 TERMINATE = signal.CTRL_BREAK_EVENT if WINDOWS else signal.SIGTERM
+# What a process returns that was ended with no request to stop.
+KILLED = 1 if WINDOWS else -signal.SIGKILL
 OWN_GROUP = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if WINDOWS else {}
 
 NOT_PORTED = "unsupported_on_this_platform"
@@ -82,23 +84,29 @@ LOCK_TABLE = sys.platform == "linux"
 # macOS names its temporary directory at such length that the path of a socket under it does not fit in a socket
 # address. Tests are made under this one there.
 SHORT_TMP = "/tmp" if sys.platform == "darwin" else None
-_native_clients = None
+_ported = {}
+
+
+def ported(harness):
+    """Whether the htalk under test registers a native peer of this harness on this system. It is asked once."""
+    if harness not in _ported and sys.platform == "linux":
+        # Linux has them. Were that to break, the tests of it must fail and not be skipped.
+        _ported[harness] = True
+    if harness not in _ported:
+        with tempfile.TemporaryDirectory(prefix="htp") as directory:
+            asked = subprocess.run([*htalk_command(), "--db", os.path.join(directory, "probe.sqlite3"), "peer", "add",
+                                    "probe", "--harness", harness, "--session", str(uuid.uuid4()),
+                                    "--workspace", directory], capture_output=True, text=True, timeout=TIMEOUT,
+                                   env={**({"SYSTEMROOT": os.environ["SYSTEMROOT"]} if WINDOWS else {}),
+                                        "PATH": os.defpath, "HOME": directory})
+        _ported[harness] = NOT_PORTED not in asked.stdout
+    return _ported[harness]
 
 
 def native_clients():
-    """Whether the htalk under test delivers to Codex and Claude Code on this system. It is asked once."""
-    global _native_clients
-    if _native_clients is None and sys.platform == "linux":
-        # Linux has them. Were that to break, the tests of it must fail and not be skipped.
-        _native_clients = True
-    if _native_clients is None:
-        with tempfile.TemporaryDirectory(prefix="htp") as directory:
-            asked = subprocess.run([*htalk_command(), "--db", os.path.join(directory, "probe.sqlite3"), "peer", "add",
-                                    "probe", "--harness", "claude", "--session", str(uuid.uuid4()),
-                                    "--workspace", directory], capture_output=True, text=True, timeout=TIMEOUT,
-                                   env={"PATH": os.defpath, "HOME": directory})
-        _native_clients = NOT_PORTED not in asked.stdout
-    return _native_clients
+    """Whether the htalk under test has all of native delivery here: Claude Code, and Codex by every route with
+    its discovery, the removal of a notice and `receive`. Claude Code is the one asked, as it is ported last."""
+    return ported("claude")
 
 
 def any_peer(native, pull):
@@ -164,6 +172,32 @@ def wait_for(predicate, timeout=15, message="condition"):
     raise AssertionError("timed out waiting for " + message)
 
 
+# What `npm install -g @openai/codex` puts on the path on Windows, as npm's cmd-shim writes it, and a script in the
+# place of the package's own that runs the fake client below.
+NPM_SHIM = r'''@ECHO off
+GOTO start
+:find_dp0
+SET dp0=%~dp0
+EXIT /b
+:start
+SETLOCAL
+CALL :find_dp0
+
+IF EXIST "%dp0%\node.exe" (
+  SET "_prog=%dp0%\node.exe"
+) ELSE (
+  SET "_prog=node"
+  SET PATHEXT=%PATHEXT:;.JS;=;%
+)
+
+endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\node_modules\@openai\codex\bin\codex.js" %*
+'''
+NPM_SCRIPT = '''#!/usr/bin/env node
+const { spawnSync } = require("node:child_process");
+const ran = spawnSync(@PYTHON@, ["-B", @FAKE@, ...process.argv.slice(2)], { stdio: "inherit" });
+process.exit(ran.status === null ? 1 : ran.status);
+'''
+
 # One script serves as claude, codex and opencode. It records each invocation and
 # follows STATE/config.json. It never contacts a real client.
 FAKE_CLIENT = r'''#!@PYTHON@ -B
@@ -186,6 +220,12 @@ def gate(name):
 def descendant():
     # A process of the client's that ignores a request to end and keeps the client's output open. It is on
     # record before the client goes on, and ends by itself if nobody ends it, later than any test waits.
+    # Windows has no such request to ignore: there it is a process that holds the output and waits.
+    if os.name == "nt":
+        import subprocess
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(90)"], stdout=sys.stdout, stderr=sys.stderr)
+        log(descendant=True, pid=child.pid)
+        return
     import signal
     reader, writer = os.pipe()
     if os.fork() == 0:
@@ -409,6 +449,13 @@ class HtalkCase(unittest.TestCase):
             script.write_text(FAKE_CLIENT.replace("@PYTHON@", sys.executable).replace("@CLIENT@", repr(client))
                               .replace("@STATE@", repr(str(self.state))))
             script.chmod(0o755)
+        if WINDOWS:
+            # As npm installs Codex: a `.cmd` on the path that starts `node` with a script of the package.
+            script = self.bin / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+            script.parent.mkdir(parents=True)
+            script.write_text(NPM_SCRIPT.replace("@PYTHON@", json.dumps(sys.executable))
+                              .replace("@FAKE@", json.dumps(str(self.bin / "codex"))))
+            (self.bin / "codex.cmd").write_text(NPM_SHIM, newline="\r\n")
         self.config = {}
         self.claude_rows = []
         self.sockets = []
@@ -543,10 +590,20 @@ class HtalkCase(unittest.TestCase):
 
     # Registration
 
-    def need_native(self):
-        """Ends a test of Codex or Claude Code delivery on a system that has no port of it."""
+    def need_native(self, part="native delivery to Codex and Claude Code"):
+        """Ends a test of Codex or Claude Code delivery on a system that has no port of it, or of a named part
+        of the Codex adapter where only its installed command is ported."""
         if not native_clients():
-            self.skipTest("native delivery to Codex and Claude Code is not ported to this system")
+            self.skipTest("%s is not ported to this system" % part)
+
+    def need_codex(self):
+        """Ends a test of a notice through the installed Codex command where that is not ported, or where the
+        fake client cannot be installed as npm installs the real one."""
+        if not ported("codex"):
+            self.skipTest("delivery to Codex is not ported to this system")
+        if WINDOWS and not shutil.which("node"):
+            self.assertNotIn("CI", os.environ, "the runner must have node, which the installed Codex command runs under")
+            self.skipTest("node is not installed, and npm's Codex command runs under it")
 
     def peer_words(self, name, harness=None, session=None, workspace=None, *options):
         """The words that register a peer. Without a harness it is any peer the system can register: a Claude
@@ -555,8 +612,10 @@ class HtalkCase(unittest.TestCase):
         if harness is None and not (native_clients() or session or workspace or options):
             return ["peer", "add", name, "--harness", "claude", "--delivery", "pull"]
         harness = harness or "claude"
-        if harness != "opencode":
-            self.need_native()
+        if harness == "codex" and "--socket" not in options:
+            self.need_codex()
+        elif harness != "opencode":
+            self.need_native("an app server's socket" if harness == "codex" else "delivery to Claude Code")
         session = session or ("ses_" + uuid.uuid4().hex if harness == "opencode" else str(uuid.uuid4()))
         return ["peer", "add", name, "--harness", harness, "--session", session,
                 "--workspace", str(workspace or self.work), *options]

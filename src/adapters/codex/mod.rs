@@ -1,9 +1,16 @@
 //! Codex notification, queue-receipt cleanup and probing.
 //!
+//! Where only the installed command is ported, a notice goes through `codex queue` and the
+//! rest answers that it is not ported: an app server's socket, discovery, the removal of a
+//! notice and `receive`.
+//!
 //! Only fixed htalk codes and exception-class names leave this module as details, so foreign
 //! error text, paths and credentials never reach the shared database or command output.
+#[cfg(native_clients)]
 pub mod discovery;
+#[cfg(native_clients)]
 pub(crate) mod receive;
+#[cfg(native_clients)]
 pub mod rpc;
 pub mod state;
 
@@ -11,6 +18,7 @@ use super::{Adapter, Address, Query};
 use crate::model::NativePeer as Peer;
 use crate::os::{self, same_workspace};
 use crate::{error::Error, model::*, validate};
+#[cfg(native_clients)]
 use rpc::Rpc;
 use serde_json::{Value, json};
 use std::{path::Path, sync::OnceLock, time::Duration};
@@ -31,6 +39,9 @@ impl Adapter for Codex {
         if url.is_some() {
             return Err(Error::code("url_is_only_for_opencode"));
         }
+        if socket.is_some() && cfg!(not(native_clients)) {
+            return Err(Error::not_ported());
+        }
         Ok(Address {
             session_id,
             workspace: super::workspace(workspace)?,
@@ -47,8 +58,13 @@ impl Adapter for Codex {
     fn probe(&self, peer: &Peer) -> Result<Value, Error> {
         probe(peer)
     }
+    #[cfg(native_clients)]
     fn discover(&self, query: &Query<'_>) -> Found {
         discovery::discover(query.codex_sockets)
+    }
+    #[cfg(not(native_clients))]
+    fn discover(&self, _: &Query<'_>) -> Found {
+        super::nothing_to_ask(super::Harness::Codex)
     }
 }
 
@@ -59,6 +75,7 @@ pub fn notify(peer: &Peer, message_id: &str, body: &str, skip: Skip<'_>) -> Outc
     }
 }
 
+#[cfg(native_clients)]
 /// Keep receiver ownership in its captured store. CLI writes also pin that store;
 /// an explicit server remains the delivery authority for socket writes.
 pub(crate) fn notify_in_store(
@@ -87,8 +104,15 @@ pub(crate) fn notify_in_store(
     }
 }
 
+/// The removal needs the client's app server, which is not ported here.
+#[cfg(not(native_clients))]
+pub fn dismiss(_: &Peer, _: &Message) -> Cleanup {
+    Cleanup::new(CleanupStatus::Unsupported).detail(Error::not_ported().fixed())
+}
+
 /// Delete only this message's saved Codex queue receipt. The caller has checked that its
 /// recipient acknowledged it.
+#[cfg(native_clients)]
 pub fn dismiss(peer: &Peer, message: &Message) -> Cleanup {
     let row = &message.row;
     let socket = socket(peer);
@@ -158,14 +182,18 @@ pub fn dismiss(peer: &Peer, message: &Message) -> Cleanup {
 pub fn probe(peer: &Peer) -> Result<Value, Error> {
     match socket(peer) {
         None => saved_identity(peer),
+        #[cfg(native_clients)]
         Some(path) => {
             let mut rpc = Rpc::connect_unix(path)?;
             check_live(&mut rpc, peer)
         }
+        #[cfg(not(native_clients))]
+        Some(_) => Err(Error::not_ported()),
     }
 }
 
 /// Inspect only the selected listener and ensure it survived the identity read.
+#[cfg(native_clients)]
 pub(crate) fn probe_bound(peer: &Peer, bound: &rpc::BoundSocket) -> Result<Value, Error> {
     let mut rpc = Rpc::connect_bound(bound)?;
     let value = check_live(&mut rpc, peer)?;
@@ -180,6 +208,13 @@ fn socket(peer: &Peer) -> Option<&Path> {
         .map(Path::new)
 }
 
+/// An app server's socket is not ported here, and `peer add` registers no such peer.
+#[cfg(not(native_clients))]
+fn notify_socket(_: &Peer, _: &Path, _: &str, _: &str, _: Skip<'_>, _: Option<&()>) -> Outcome {
+    Outcome::not_submitted(Error::not_ported().fixed())
+}
+
+#[cfg(native_clients)]
 fn notify_socket(
     peer: &Peer,
     path: &Path,
@@ -287,6 +322,7 @@ fn notify_cli(peer: &Peer, body: &str, skip: Skip<'_>, database: Option<&Path>) 
 }
 
 /// The live app-server address must be the registered thread, workspace and a loaded status.
+#[cfg(native_clients)]
 fn check_live(rpc: &mut Rpc, peer: &Peer) -> Result<Value, Error> {
     let result = rpc.call(
         "thread/read",
