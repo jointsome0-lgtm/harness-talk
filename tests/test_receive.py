@@ -8,6 +8,10 @@ from compat_support import HtalkCase, gone, wait_for
 
 
 class NativeReceiver(HtalkCase):
+    def setUp(self):
+        super().setUp()
+        self.need_native("`receive`")
+
     def test_current_mail_is_checked_and_unanswered_ack_is_still_work(self):
         peer = self.codex_recipient("alice")
         self.htalk("peer", "add", "bob", "--harness", "generic", "--delivery", "pull")

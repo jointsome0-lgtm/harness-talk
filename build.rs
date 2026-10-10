@@ -4,14 +4,19 @@ use std::env;
 
 fn main() {
     println!("cargo::rerun-if-changed=build.rs");
-    for part in ["native_clients", "mcp_server", "catalog"] {
+    for part in ["native_clients", "codex_command", "mcp_server", "catalog"] {
         println!("cargo::rustc-check-cfg=cfg({part})");
     }
     let system = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     let linux = system == "linux";
-    // Notices into Codex and Claude Code, and `receive`.
+    // Notices into Codex and Claude Code by every route, their discovery, and `receive`.
     if linux || system == "macos" {
         println!("cargo::rustc-cfg=native_clients");
+    }
+    // A notice into Codex through its installed command, where nothing else of the two
+    // clients is ported.
+    if linux || system == "macos" || system == "windows" {
+        println!("cargo::rustc-cfg=codex_command");
     }
     // `htalk mcp`: the server runs every call as a child whose process group it owns.
     if linux || system == "macos" || system == "windows" {

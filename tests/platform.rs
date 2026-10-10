@@ -125,21 +125,27 @@ fn native_delivery_that_is_not_ported_answers_one_code_and_writes_nothing() {
     let temp = Temp::new();
     let db = temp.0.join("data").join("mail.sqlite3");
     let workspace = temp.0.to_str().unwrap();
-    for harness in ["codex", "claude"] {
-        let (code, refused) = htalk(
-            &db,
-            &[
-                "peer",
-                "add",
-                "native",
-                "--harness",
-                harness,
-                "--session",
-                "6f0c1a52-3b7e-4d19-9c58-2e4a7b1d0f36",
-                "--workspace",
-                workspace,
-            ],
-        );
+    // Where a notice goes into Codex through its installed command, only a Codex peer of an
+    // app server's socket is refused.
+    let socket: &[&str] = if cfg!(codex_command) {
+        &["--codex-socket", "app-server.sock"]
+    } else {
+        &[]
+    };
+    for (harness, more) in [("codex", socket), ("claude", &[])] {
+        let mut words = vec![
+            "peer",
+            "add",
+            "native",
+            "--harness",
+            harness,
+            "--session",
+            "6f0c1a52-3b7e-4d19-9c58-2e4a7b1d0f36",
+            "--workspace",
+            workspace,
+        ];
+        words.extend(more);
+        let (code, refused) = htalk(&db, &words);
         assert_eq!(
             (2, "error", "unsupported_on_this_platform"),
             (
