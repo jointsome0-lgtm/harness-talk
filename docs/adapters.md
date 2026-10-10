@@ -785,7 +785,7 @@ The inspected `2.1.267` ordinary-session socket handler has no message-cancellat
 
 ## Codex and Claude Code on macOS and Windows
 
-Through 0.14.0 native delivery, its discovery and `receive` ran on Linux only. Since 0.15.0 they run on macOS too, as [platforms](platforms.md) says, and Windows has no port. This section records what the two clients do on those systems. It was read on 2026-10-08 UTC from what they publish, and nothing was run: Codex from its source at commit [`99aa053`](https://github.com/openai/codex/tree/99aa05341d1564cf4ca2b463c83b607ea5d1bb3e) of 2026-10-08, Claude Code from the text inside its npm packages `2.1.295` for macOS ARM64, Windows x64 and Linux x64.
+Through 0.14.0 native delivery, its discovery and `receive` ran on Linux only. Since 0.15.0 they run on macOS too, as [platforms](platforms.md) says. Through 0.15.0 Windows has no port, and after it one route into Codex, [recorded below](#codex-on-windows-through-its-installed-command). This section records what the two clients do on those systems. It was read on 2026-10-08 UTC from what they publish, and nothing was run: Codex from its source at commit [`99aa053`](https://github.com/openai/codex/tree/99aa05341d1564cf4ca2b463c83b607ea5d1bb3e) of 2026-10-08, Claude Code from the text inside its npm packages `2.1.295` for macOS ARM64, Windows x64 and Linux x64.
 
 No real client ran on macOS or Windows. The port to macOS was written from the lines below and checked on a runner against fake clients that behave as those lines say. No notice has reached a real Codex or Claude Code on a Mac, so each line about macOS here still waits for a live check, and another version of a client can differ.
 
@@ -830,12 +830,27 @@ Two answers of the system were seen on a macOS runner on 2026-10-09 UTC, and the
 
 Three more were seen there on the same day, about what the system says of a process. The record that has the start of a process is refused for a process of another account, as the first process is, while its parent, its name and the path of its executable are given. htalk needs the start of the session's own process only. The start as htalk writes it equalled what `ps -o lstart=` printed, for each of thirteen processes, and the contract tests compare the two on every run. And a process that a script started has the name and the executable of its interpreter, one started through a link has the name of the link's target, and a copy of the shell under another name has that name. So a client nested in a session is seen on macOS only when it is a program of its own.
 
-Windows needs the first three of the four, and besides them:
+Windows has the first of the four for a command with a time limit, since the port below: the command is held in a job. For all of native delivery it needs the other two of the first three, and besides them:
 
 - a named pipe for Claude Code, with the line of authentication. Its token would be the first secret of a client that htalk reads; on Linux the adapter reads none;
 - something in place of the owner check of a socket;
 - a Unix-domain socket through Winsock for Codex's control socket, and the wait for it within a time, which the transport does with the `poll` of Unix;
-- a way to start `codex` and `claude` where npm installed them. npm puts a `.cmd` file on the path, and Rust starts such a file only when it is asked for by its full name.
+- a way to start `claude` where npm installed it. npm puts a `.cmd` file on the path, and Rust starts such a file only when it is asked for by its full name. For `codex` the port below has one.
+
+### Codex on Windows through its installed command
+
+After 0.15.0, and in no release yet. One route is ported: `codex queue --thread UUID --message TEXT` after the read of `state_5.sqlite`, both as on Linux. The control socket, `codex app-server --stdio` with the removal of a notice, discovery and `receive` are not, and answer `unsupported_on_this_platform`.
+
+What it was written from was read on 2026-10-10 UTC in the npm package `@openai/codex` 0.162.1, and nothing was run:
+
+- the package names one command, `codex`, as `bin/codex.js`. On Windows npm makes `codex.cmd` for it, and the last line of that file starts `node.exe` beside it, or else `node` from the path, with `"%dp0%\node_modules\@openai\codex\bin\codex.js"` and the arguments;
+- `bin/codex.js` starts the compiled `codex.exe` of the package for the system, `@openai/codex-win32-x64` on x64, with the same arguments, and ends with its status.
+
+A `.cmd` file is run by `cmd.exe`, which takes no argument with a line break, and a notice is several lines. So htalk reads the `.cmd` and does not run it. In each directory of `PATH`, in order, a `codex.exe` is started itself. Otherwise the first quoted piece of `codex.cmd` that begins with `%dp0%\` or `%~dp0\` and ends in `js` is taken as the script, and `node.exe` is started with it: the one beside the `.cmd`, then the first on the path. When the file has no such piece, the script is absent, or there is no `node.exe`, the notice is not submitted and its detail is `file_not_found`. Another installer's wrapper, a `.ps1` or a `.bat`, is not read.
+
+The command and everything it starts are put in a job, as the connector of `htalk mcp --connect` is there. At the limit of twenty seconds, or at Ctrl-C, the job is ended, and the notice is saved as `submission_unknown` with `command_timed_out` or the command ends with exit 130. In the moment between the start of the command and its entry into the job, a process it starts can be outside the job; it then ends with htalk at the latest.
+
+The runner checks this against a fake client installed as above: the `.cmd` as npm's cmd-shim writes it, and a script in the place of `bin/codex.js` that runs the fake. The notice arrives with its line breaks and with the quotes of a mailbox path that has them. No real Codex ran on Windows, so whether `codex queue` there takes the notice and prints the receipt as the source reads is still to be seen, as is how the client spells `cwd` in `state_5.sqlite`: htalk compares it with the saved workspace without regard to case, to the direction of a slash or to a leading `\\?\`.
 
 ### Not known without a live client
 

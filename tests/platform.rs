@@ -128,7 +128,7 @@ fn native_delivery_that_is_not_ported_answers_one_code_and_writes_nothing() {
     // Where a notice goes into Codex through its installed command, only a Codex peer of an
     // app server's socket is refused.
     let socket: &[&str] = if cfg!(codex_command) {
-        &["--codex-socket", "app-server.sock"]
+        &["--socket", "app-server.sock"]
     } else {
         &[]
     };

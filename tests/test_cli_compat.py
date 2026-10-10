@@ -24,8 +24,9 @@ import urllib.parse
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from compat_support import (KEPT, LOCK_TABLE, MESSAGE_KEYS, OPENCODE_CA, PEER_KEYS, ROW_KEYS,  # noqa: E402
-                            TIMEOUT, UNSETTLED, INTERRUPT, HtalkCase, any_peer, gone, process_start, wait_for)
+from compat_support import (KEPT, LOCK_TABLE, MESSAGE_KEYS, NOT_PORTED, OPENCODE_CA, PEER_KEYS, ROW_KEYS,  # noqa: E402
+                            TIMEOUT, UNSETTLED, INTERRUPT, HtalkCase, any_peer, gone, native_clients, process_start,
+                            wait_for)
 
 LEGACY_V1 = """
 CREATE TABLE peers (name TEXT PRIMARY KEY, harness TEXT NOT NULL, session_id TEXT NOT NULL,
@@ -1424,6 +1425,21 @@ class Interrupts(HtalkCase):
         self.assertEqual(("[harness-talk peer notification; message %s]" % sent["id"], 4), (lines[0], len(lines)))
         self.assertEqual("htalk --db %s --as bob show %s" % (shlex.quote(str(self.db)), sent["id"]), lines[2])
         self.assertNotIn("\r", call["argv"][-1])
+
+    def test_a_codex_notice_stays_queued_where_its_removal_is_not_ported(self):
+        if native_clients():
+            self.skipTest("this system takes a Codex notice back, and other tests see it do so")
+        self.add_peer("alice")
+        self.codex_recipient("bob")
+        self.configure(codex_queue={"mode": "ok", "queue_id": str(uuid.uuid4())})
+        sent = self.htalk("--as", "alice", "send", "bob", "--message", "Q")
+        acked = self.htalk("--as", "bob", "ack", sent["id"])
+        self.assertEqual({"status": "unsupported", "detail": NOT_PORTED}, acked["notification_cleanup"])
+        self.assertIsNotNone(acked["ack_at"])
+        self.assertEqual(["queue"], [call["argv"][0] for call in self.calls("codex")])
+        found = self.htalk("peer", "discover", "--harness", "codex", code=2)
+        self.assertEqual(([], [{"harness": "codex", "status": "unavailable", "detail": NOT_PORTED}]),
+                         (found["sessions"], found["sources"]))
 
     def test_interrupted_wait_forgets_its_registration(self):
         self.add_peer("alice")
