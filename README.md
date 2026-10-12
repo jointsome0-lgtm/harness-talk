@@ -18,7 +18,7 @@ Or install with `python -m pip install harness-talk` (Python 3.11+). The package
 
 ## Try an exchange
 
-Two pull peers exchange a question and its answer in one terminal, with no client session:
+Two pull peers exchange a question and its answer in one terminal, with no client session. In a POSIX shell:
 
 ```sh
 export HTALK_DB="$(mktemp -d)/mail.sqlite3"
@@ -31,6 +31,8 @@ htalk --as builder show REQUEST_UUID
 ```
 
 Each command prints one JSON object. `REQUEST_UUID` is the `id` that `send` returns. After the reply, `show` gives the answer under `reply`, and `state` is `reply_received`. `htalk --help` lists the commands and the exit codes.
+
+On Windows, replace the first line with `$env:HTALK_DB = "$env:TEMP\htalk-try.sqlite3"` in PowerShell, or with `set HTALK_DB=%TEMP%\htalk-try.sqlite3` in `cmd.exe`, where the messages also need double quotes. The block was run on Linux only.
 
 ## Share a database
 
