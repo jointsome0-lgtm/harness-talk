@@ -2,35 +2,45 @@
 
 Exchange messages between local agents, including Codex, Claude Code and OpenCode sessions. htalk saves requests and replies in a shared SQLite inbox and can notify the recipient through its client. Either participant can ask, answer now or return later.
 
-For Linux and mutually trusted sessions. Mailbox processes share one trusted OS account on the mailbox host; a remote client can connect through restricted SSH. Peer names identify routes, not authenticated users. The package name is `harness-talk`; the command is `htalk`.
+For mutually trusted sessions. Mailbox processes share one trusted OS account on the mailbox host; a remote client can connect through restricted SSH. Peer names identify routes, not authenticated users. Incoming peer messages do not grant permission to act.
 
-The [roadmap](ROADMAP.md) tracks the planned releases and their completion criteria.
+Runs on Linux, macOS and Windows. Linux has every part; [what works on which system](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/platforms.md) names what the other two have and how each part was checked.
 
-Beyond the three native clients:
-
-- [Session receivers](integrations/README.md) for Pi, Oh My Pi, Hermes, OpenClaw, Agent Zero, Cline, OpenHands, Copilot CLI and Gemini CLI read a shared `htalk watch` stream. Kilo uses the OpenCode adapter. The installed wheel supplies `htalk`; the receivers are files of the matching source archive or checkout.
-- Managed sessions for [Goose](integrations/goose.md), [Letta Code](integrations/letta.md) and the [Antigravity SDK](integrations/antigravity.md) share owner-task binding, same-session restart and explicit recovery. They do not attach to existing TUI or IDE windows.
-- The [MCP mailbox tool](integrations/mcp.md) gives a client with MCP support the same message commands over stdio. Tool access and automatic session notification are documented separately for each harness.
-- Two devices can share one mailbox through the [MCP-over-SSH route](integrations/ssh.md), with a [Codex receiver](integrations/remote.md) for a worker on another device and a [Linux user service](integrations/ssh-service.md) for a reverse SSH route.
-
-Each release has its upgrade note under [docs/releases](docs/releases/). [0.15.0](docs/releases/0.15.0.md) brings notices into Codex and Claude Code to macOS, checked on hosted runners against fake clients only. [0.14.0](docs/releases/0.14.0.md) adds macOS and Windows and changes nothing on Linux. [0.13.0](docs/releases/0.13.0.md) changes error codes, the keys of a successful result and the text of the help, once; the mailbox stays on schema 3 and needs no migration. Stop mailbox writers and receivers before updating the CLI and their matching adapter files.
-
-## Install and share a database
+## Install
 
 With [uv](https://docs.astral.sh/uv/getting-started/installation/):
 
 ```sh
 uv tool install harness-talk
+```
+
+Or install with `python -m pip install harness-talk` (Python 3.11+). The package name is `harness-talk`; the command is `htalk`. [Systems and builds](#systems-and-builds) has the wheels, the source build and what each system has.
+
+## Try an exchange
+
+Two pull peers exchange a question and its answer in one terminal, with no client session. In a POSIX shell:
+
+```sh
+export HTALK_DB="$(mktemp -d)/mail.sqlite3"
+htalk peer add builder --harness generic --delivery pull
+htalk peer add reviewer --harness generic --delivery pull
+htalk --as builder send reviewer --message 'Which case needs another test?'
+htalk --as reviewer inbox
+htalk --as reviewer reply REQUEST_UUID --message 'Test recovery after interruption.'
+htalk --as builder show REQUEST_UUID
+```
+
+Each command prints one JSON object. `REQUEST_UUID` is the `id` that `send` returns. After the reply, `show` gives the answer under `reply`, and `state` is `reply_received`. `htalk --help` lists the commands and the exit codes.
+
+On Windows, replace the first line with `$env:HTALK_DB = "$env:TEMP\htalk-try.sqlite3"` in PowerShell, or with `set HTALK_DB=%TEMP%\htalk-try.sqlite3` in `cmd.exe`, where the messages also need double quotes. The block was run on Linux only.
+
+## Share a database
+
+```sh
 export HTALK_DB=/absolute/shared/directory/mail.sqlite3
 ```
 
-Or install with `python -m pip install harness-talk` (Python 3.11+). htalk is a Rust executable, distributed as a Python package. Wheels for Linux x86-64 and ARM64 (glibc 2.28+), macOS ARM64 and x86-64, and Windows x64 include the compiled executable and SQLite; installing a matching wheel needs no Rust compiler. The same two install lines work on all three systems. macOS and Windows have the mailbox, pull peers, the MCP tool and OpenCode delivery. Since 0.15.0 macOS also has notices into Codex and Claude Code and `htalk receive`; Windows has neither in 0.15.0, and the catalogue is Linux only. After 0.15.0 the source has a notice into Codex on Windows through its installed command. On both systems all of it was checked on hosted runners, not with real clients: no notice has reached a real Codex or Claude Code on a Mac. [What works on which system](docs/platforms.md) has the table. The installed `htalk` runs without Python. Source installs require Rust 1.88+, a C compiler and a linker; see [development](docs/development.md).
-
 Set the same `HTALK_DB` in both sessions. Both must be able to run `htalk` and write the database directory. Only `peer add` creates the file; other commands report `database_not_found` for a wrong path. `--db PATH` overrides the environment; without either, the mailbox is `~/.local/share/harness-talk/mail.sqlite3` on Linux, `~/Library/Application Support/harness-talk/mail.sqlite3` on macOS and `%LOCALAPPDATA%\harness-talk\mail.sqlite3` on Windows; [storage defaults](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/reference.md#database-and-peers) are documented separately. On Windows set the variable with `set HTALK_DB=...` or `$env:HTALK_DB = "..."`.
-
-A mailbox on schema 1 or 2 is backed up and upgraded to schema 3 by the first command that opens it; see [migration and recovery](docs/reference.md#database-and-peers). Update every htalk installation that uses the mailbox.
-
-Errors carry fixed codes, listed in the [reference](docs/reference.md#error-codes). Parse JSON fields and codes, not prose: a file or database failure of the mailbox itself is answered in the system's words.
 
 ## Find and register the participants
 
@@ -63,10 +73,7 @@ htalk --as helper inbox
 
 `--harness` is a label such as `generic`, `hermes` or `openclaw`; a label does not install an integration. Pull peers need no native session or workspace and reject address flags. Messages to them are saved with `notification_detail: pull_only` and exit 0, without a notification attempt. The agent must run `inbox` to get its work. It can send and reply to native peers normally. `peer check` reports the delivery mode and does not establish that a pull agent is running.
 
-To find owner-published profiles through a pinned SSH IPv4 address, LAN/Wi-Fi,
-an active Bluetooth PAN or private Tailscale, use the opt-in [profile catalogue](docs/catalog.md). Known devices are authenticated through pinned
-SSH; choose a profile by name and use its checked MCP connection. Reachable
-profiles keep `runtime_status: unknown` until separate runtime evidence exists.
+To find owner-published profiles through a pinned SSH IPv4 address, LAN/Wi-Fi, an active Bluetooth PAN or private Tailscale, use the opt-in [profile catalogue](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/catalog.md). Known devices are authenticated through pinned SSH; choose a profile by name and use its checked MCP connection. Reachable profiles keep `runtime_status: unknown` until separate runtime evidence exists.
 
 ## Ask, answer and recover
 
@@ -122,6 +129,29 @@ htalk --as builder send reviewer --id REQUEST_UUID \
   --message 'A different question?'
 ```
 
+## Other clients and devices
+
+Beyond the three native clients:
+
+- [Session receivers](https://github.com/jointsome0-lgtm/harness-talk/blob/main/integrations/README.md) for Pi, Oh My Pi, Hermes, OpenClaw, Agent Zero, Cline, OpenHands, Copilot CLI and Gemini CLI read a shared `htalk watch` stream. Kilo uses the OpenCode adapter. The installed wheel supplies `htalk`; the receivers are files of the matching source archive or checkout.
+- Managed sessions for [Goose](https://github.com/jointsome0-lgtm/harness-talk/blob/main/integrations/goose.md), [Letta Code](https://github.com/jointsome0-lgtm/harness-talk/blob/main/integrations/letta.md) and the [Antigravity SDK](https://github.com/jointsome0-lgtm/harness-talk/blob/main/integrations/antigravity.md) share owner-task binding, same-session restart and explicit recovery. They do not attach to existing TUI or IDE windows.
+- The [MCP mailbox tool](https://github.com/jointsome0-lgtm/harness-talk/blob/main/integrations/mcp.md) gives a client with MCP support the same message commands over stdio. Tool access and automatic session notification are documented separately for each harness.
+- Two devices can share one mailbox through the [MCP-over-SSH route](https://github.com/jointsome0-lgtm/harness-talk/blob/main/integrations/ssh.md), with a [Codex receiver](https://github.com/jointsome0-lgtm/harness-talk/blob/main/integrations/remote.md) for a worker on another device and a [Linux user service](https://github.com/jointsome0-lgtm/harness-talk/blob/main/integrations/ssh-service.md) for a reverse SSH route.
+
+## Systems and builds
+
+htalk is a Rust executable, distributed as a Python package. Wheels for Linux x86-64 and ARM64 (glibc 2.28+), macOS ARM64 and x86-64, and Windows x64 include the compiled executable and SQLite; installing a matching wheel needs no Rust compiler. The installed `htalk` runs without Python. Source installs require Rust 1.88+, a C compiler and a linker; see [development](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/development.md).
+
+Both install lines work on all three systems. macOS and Windows have the mailbox, pull peers, the MCP tool and OpenCode delivery. Since 0.15.0 macOS also has notices into Codex and Claude Code and `htalk receive`; Windows has neither in 0.15.0, and the catalogue is Linux only. After 0.15.0 the source has a notice into Codex on Windows through its installed command. On both systems all of it was checked on hosted runners, not with real clients: no notice has reached a real Codex or Claude Code on a Mac. [What works on which system](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/platforms.md) has the table.
+
+## Releases and upgrades
+
+Each release has its upgrade note under [docs/releases](https://github.com/jointsome0-lgtm/harness-talk/tree/main/docs/releases). [0.15.0](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/releases/0.15.0.md) brings notices into Codex and Claude Code to macOS, checked on hosted runners against fake clients only. [0.14.0](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/releases/0.14.0.md) adds macOS and Windows and changes nothing on Linux. [0.13.0](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/releases/0.13.0.md) changes error codes, the keys of a successful result and the text of the help, once; the mailbox stays on schema 3 and needs no migration. Stop mailbox writers and receivers before updating the CLI and their matching adapter files.
+
+A mailbox on schema 1 or 2 is backed up and upgraded to schema 3 by the first command that opens it; see [migration and recovery](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/reference.md#database-and-peers). Update every htalk installation that uses the mailbox.
+
+The [roadmap](https://github.com/jointsome0-lgtm/harness-talk/blob/main/ROADMAP.md) tracks the planned releases and their completion criteria.
+
 ## Help and details
 
 ```sh
@@ -130,10 +160,12 @@ htalk peer add --help
 htalk send --help
 ```
 
+Errors carry fixed codes, listed in the [reference](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/reference.md#error-codes). Parse JSON fields and codes, not prose: a file or database failure of the mailbox itself is answered in the system's words.
+
 - [Reference](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/reference.md): message states, recovery, database selection and exit codes.
 - [Codex and Claude adapters](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/adapters.md), including tested versions and discovery limits.
 - [OpenCode setup](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/opencode.md), including how a notification can start a turn in an existing session.
 
-htalk does not launch interactive clients or create sessions. Incoming peer messages do not grant permission to act.
+htalk does not launch interactive clients or create sessions.
 
 Report bugs and suggestions through [GitHub issues](https://github.com/jointsome0-lgtm/harness-talk/issues), with versions, command, expected result and actual result. Remove private conversation text and credentials. See [contributing](https://github.com/jointsome0-lgtm/harness-talk/blob/main/CONTRIBUTING.md), [releases](https://github.com/jointsome0-lgtm/harness-talk/blob/main/docs/releasing.md) and the [MIT license](https://github.com/jointsome0-lgtm/harness-talk/blob/main/LICENSE).

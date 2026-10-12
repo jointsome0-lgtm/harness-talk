@@ -20,7 +20,7 @@ The wheel provides the executable; using it does not require a Rust build.
 
 ## Shared setup
 
-Install htalk following the [main instructions](../README.md#install-and-share-a-database).
+Install htalk following the [main instructions](../README.md#install).
 Obtain the adapter files from the same version's source archive on
 [PyPI](https://pypi.org/project/harness-talk/#files), or check out its `vVERSION`
 Git tag. Set `HTALK_SOURCE` to that extracted archive or checkout. In each
