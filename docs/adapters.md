@@ -1,5 +1,29 @@
 # Client adapters
 
+Checked on 2026-10-23 UTC with the htalk `0.16.0` x86-64 publication wheel,
+commit `ee8d95d2d1355f6186b1bc7f226c4f29cf25bbc0`, SHA-256
+`d1763615d0740832eb1dda3d7b5dd52c966b6d7e2631f6ab5511d1fac13a0327`.
+The [0.16.0 native check](checks/2026-10-23-0.16.0-native.md) records the
+publish-run artifacts, the three client versions, permissions and public file
+checks. The scope is the one of 0.13.0, on Linux only: Codex CLI 0.163.0 with
+GPT-6.1 Sol and Claude Code 2.1.309 with Sonnet 5.5 completed both initiating
+directions as real sessions, and OpenCode 1.18.32 completed one exchange as a
+real server with a deterministic local provider. Every case observed its
+native notice, showed and checked the full message once before a separate ACK,
+and ended with acknowledged rows and empty inboxes. The other eleven clients
+were not checked live for 0.16.0; the 0.12.0 check below is their last one.
+No client ran on macOS or Windows. The notice into Codex on Windows, which
+0.16.0 adds, rests on a hosted runner and a fake client: [what works on which
+system](platforms.md) says what stands behind each part there.
+
+ACK cleanup was literally `unsupported` for Claude, `absent` for Codex and
+`skipped/pull_only` at the OpenCode controller, without notice-removal proof.
+Codex and Claude ended with exit status 0 after their own quit command; the
+OpenCode server ended after SIGTERM. Both core sessions ran the wheel's
+executable by its absolute path. The PyPI files match the checked artifacts
+and the lightweight tag was pushed. See the
+[0.16.0 release notes](releases/0.16.0.md) for what changed.
+
 Checked on 2026-10-10 UTC with the htalk `0.15.0` x86-64 publication wheel,
 commit `45603ee2c2c47afb53b97211a39af073716ef036`, SHA-256
 `1659e5622db5c68ebea39527d67f0d87309971268c78b7dafbb38807138d72da`.
