@@ -785,7 +785,7 @@ The inspected `2.1.267` ordinary-session socket handler has no message-cancellat
 
 ## Codex and Claude Code on macOS and Windows
 
-Through 0.14.0 native delivery, its discovery and `receive` ran on Linux only. Since 0.15.0 they run on macOS too, as [platforms](platforms.md) says. Through 0.15.0 Windows has no port, and after it one route into Codex, [recorded below](#codex-on-windows-through-its-installed-command). This section records what the two clients do on those systems. It was read on 2026-10-08 UTC from what they publish, and nothing was run: Codex from its source at commit [`99aa053`](https://github.com/openai/codex/tree/99aa05341d1564cf4ca2b463c83b607ea5d1bb3e) of 2026-10-08, Claude Code from the text inside its npm packages `2.1.295` for macOS ARM64, Windows x64 and Linux x64.
+Through 0.14.0 native delivery, its discovery and `receive` ran on Linux only. Since 0.15.0 they run on macOS too, as [platforms](platforms.md) says. Through 0.15.0 Windows has no port. Since 0.16.0 it has one route into Codex, [recorded below](#codex-on-windows-through-its-installed-command). This section records what the two clients do on those systems. It was read on 2026-10-08 UTC from what they publish, and nothing was run: Codex from its source at commit [`99aa053`](https://github.com/openai/codex/tree/99aa05341d1564cf4ca2b463c83b607ea5d1bb3e) of 2026-10-08, Claude Code from the text inside its npm packages `2.1.295` for macOS ARM64, Windows x64 and Linux x64.
 
 No real client ran on macOS or Windows. The port to macOS was written from the lines below and checked on a runner against fake clients that behave as those lines say. No notice has reached a real Codex or Claude Code on a Mac, so each line about macOS here still waits for a live check, and another version of a client can differ.
 
@@ -839,7 +839,7 @@ Windows has the first of the four for a command with a time limit, since the por
 
 ### Codex on Windows through its installed command
 
-After 0.15.0, and in no release yet. One route is ported: `codex queue --thread UUID --message TEXT` after the read of `state_5.sqlite`, both as on Linux. The control socket, `codex app-server --stdio` with the removal of a notice, discovery and `receive` are not, and answer `unsupported_on_this_platform`.
+Since 0.16.0. One route is ported: `codex queue --thread UUID --message TEXT` after the read of `state_5.sqlite`, both as on Linux. The control socket, `codex app-server --stdio` with the removal of a notice, discovery and `receive` are not, and answer `unsupported_on_this_platform`.
 
 What it was written from was read on 2026-10-10 UTC in the npm package `@openai/codex` 0.162.1, and nothing was run:
 
